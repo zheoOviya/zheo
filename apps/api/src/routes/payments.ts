@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
+import { rateLimiter } from "../middleware/rateLimiter";
 import { sharedOrderRepo, sharedPaymentRepo } from "../repositories/shared";
 import { PaymentService } from "../services/payments";
 
@@ -18,6 +19,16 @@ const CreateOrderSchema = z.object({
 const paymentService = new PaymentService(sharedPaymentRepo, sharedOrderRepo);
 
 export const paymentsRouter: Router = Router();
+
+const paymentsLimiter = rateLimiter({
+  prefix: "payments",
+  max: 20,
+  windowMs: 60_000,
+  identifier: (req) => req.ip ?? "unknown",
+  failClosed: true,
+});
+
+paymentsRouter.use(paymentsLimiter);
 
 paymentsRouter.post(
   "/create-order",

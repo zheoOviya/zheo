@@ -81,7 +81,7 @@ export function initWebSocketServer(httpServer: Server): WebSocketServer {
   // Subscribe to Redis PubSub for cross-instance broadcasting
   if (config.env !== "test") {
     const sub = getRedis().duplicate();
-    sub.subscribe(PUBSUB_CHANNEL).catch(() => {
+    sub.subscribe(PUBSUB_CHANNEL, () => {}).catch(() => {
       logger.warn({ message: "redis_pubsub_subscribe_failed" });
     });
     sub.on("message", (_channel, message) => {

@@ -167,6 +167,18 @@ export class DrizzleOrderRepository implements OrderRepository {
     return results;
   }
 
+  async getByUserPaginated(
+    userId: string,
+    page: number,
+    limit: number,
+  ): Promise<{ orders: OrderDTO[]; total: number }> {
+    const all = await this.getByUser(userId);
+    const total = all.length;
+    const start = (page - 1) * limit;
+    const sliced = all.slice(start, start + limit);
+    return { orders: sliced, total };
+  }
+
   async getByRestaurant(restaurantId: string): Promise<OrderDTO[]> {
     const rows = (await this.db
       .select()

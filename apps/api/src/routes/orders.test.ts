@@ -272,7 +272,7 @@ describe("Ordering routes", () => {
     expect(res.body.error.code).toBe("FORBIDDEN");
   });
 
-  it("GET /orders returns paginated history with restaurant_name", async () => {
+  it("GET /orders returns cursor-paginated history with restaurant_name", async () => {
     for (let i = 0; i < 3; i++) {
       await request(app)
         .post("/api/v1/orders")
@@ -285,27 +285,23 @@ describe("Ordering routes", () => {
     }
 
     const res = await request(app)
-      .get("/api/v1/orders?page=1&limit=2")
+      .get("/api/v1/orders?limit=2")
       .set(authHeaders())
       .expect(200);
 
-    expect(res.body.data.page).toBe(1);
-    expect(res.body.data.limit).toBe(2);
-    expect(res.body.data.total).toBe(3);
-    expect(res.body.data.pages).toBe(2);
     expect(res.body.data.orders).toHaveLength(2);
+    expect(res.body.data.next_cursor).toBeTruthy();
     for (const order of res.body.data.orders) {
       expect(order.restaurant_name).toBe("Biryani House");
       expect(order.user_id).toBe(TEST_USER_ID);
     }
-    // Newest first.
     const dates = res.body.data.orders.map(
       (o: { created_at: string }) => new Date(o.created_at).getTime(),
     );
     expect(dates[0]).toBeGreaterThanOrEqual(dates[1]);
   });
 
-  it("GET /orders pages forward through the history", async () => {
+  it("GET /orders pages forward with cursor", async () => {
     for (let i = 0; i < 3; i++) {
       await request(app)
         .post("/api/v1/orders")
@@ -317,12 +313,20 @@ describe("Ordering routes", () => {
         .expect(201);
     }
 
+    const page1 = await request(app)
+      .get("/api/v1/orders?limit=2")
+      .set(authHeaders())
+      .expect(200);
+    expect(page1.body.data.orders).toHaveLength(2);
+    expect(page1.body.data.next_cursor).toBeTruthy();
+
+    const cursor = page1.body.data.next_cursor;
     const page2 = await request(app)
-      .get("/api/v1/orders?page=2&limit=2")
+      .get(`/api/v1/orders?limit=2&cursor=${encodeURIComponent(cursor)}`)
       .set(authHeaders())
       .expect(200);
     expect(page2.body.data.orders).toHaveLength(1);
-    expect(page2.body.data.page).toBe(2);
+    expect(page2.body.data.next_cursor).toBeNull();
   });
 
   it("GET /orders is empty for a user with no orders", async () => {
@@ -331,8 +335,7 @@ describe("Ordering routes", () => {
       .set(authHeaders())
       .expect(200);
     expect(res.body.data.orders).toEqual([]);
-    expect(res.body.data.total).toBe(0);
-    expect(res.body.data.pages).toBe(1);
+    expect(res.body.data.next_cursor).toBeNull();
   });
 
   it("GET /orders never leaks another user's orders", async () => {
@@ -350,7 +353,7 @@ describe("Ordering routes", () => {
       .get("/api/v1/orders")
       .set(authHeaders(OTHER_USER))
       .expect(200);
-    expect(res.body.data.total).toBe(0);
+    expect(res.body.data.orders).toEqual([]);
   });
 
   it("GET /orders requires authentication", async () => {
@@ -360,7 +363,7 @@ describe("Ordering routes", () => {
 
   it("GET /orders validates pagination parameters", async () => {
     const res = await request(app)
-      .get("/api/v1/orders?page=0&limit=999")
+      .get("/api/v1/orders?limit=999")
       .set(authHeaders())
       .expect(400);
     expect(res.body.error.code).toBe("VALIDATION_ERROR");

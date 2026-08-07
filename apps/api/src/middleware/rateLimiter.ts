@@ -10,6 +10,11 @@ import { AppError } from "./envelope";
 //   ZREMRANGEBYSCORE key 0 <now - windowMs>
 //   ZCARD key  -> count of requests in the window
 //   PEXPIRE key windowMs (housekeeping)
+//
+// Sprint 6: Added failClosed option. When true, Redis
+// failures reject requests with 503 instead of allowing
+// them through. Used for security-critical routes
+// (auth, payments, OTP, admin write).
 // ============================================
 
 export interface RateLimiterOptions {
@@ -17,12 +22,14 @@ export interface RateLimiterOptions {
   max: number;
   windowMs: number;
   identifier: (req: Request) => string;
+  failClosed?: boolean;
 }
 
 export async function checkRateLimit(
   key: string,
   max: number,
   windowMs: number,
+  failClosed = false,
 ): Promise<{ allowed: boolean; current: number }> {
   const redis = getRedis();
   const now = Date.now();
@@ -36,12 +43,15 @@ export async function checkRateLimit(
 
     return { allowed: current <= max, current };
   } catch (err) {
-    // Resilience (ECS): fail-open when Redis is unavailable rather than
-    // blocking all traffic during an outage.
     logger.warn({
       message: "rate_limit_redis_failure",
       error: err instanceof Error ? err.message : String(err),
+      fail_closed: failClosed,
     });
+
+    if (failClosed) {
+      return { allowed: false, current: -1 };
+    }
     return { allowed: true, current: 0 };
   }
 }
@@ -54,13 +64,17 @@ export function rateLimiter(options: RateLimiterOptions) {
   ): Promise<void> => {
     const identifier = options.identifier(req);
     const key = `rl:${options.prefix}:${identifier}`;
-    const result = await checkRateLimit(key, options.max, options.windowMs);
+    const result = await checkRateLimit(key, options.max, options.windowMs, options.failClosed);
     if (!result.allowed) {
+      const status = result.current === -1 ? 503 : 429;
+      const message = result.current === -1
+        ? "Rate limiting temporarily unavailable"
+        : `Rate limit exceeded: ${result.current}/${options.max} per window`;
       next(
         new AppError(
           "RATE_LIMIT_EXCEEDED",
-          `Rate limit exceeded: ${result.current}/${options.max} per window`,
-          429,
+          message,
+          status,
         ),
       );
       return;

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { resetRedisForTests } from "../lib/redis";
+import { resetRedisForTests, getRedis, setRedisForTests } from "../lib/redis";
 import { checkRateLimit } from "./rateLimiter";
+import type { RedisLike } from "../lib/redis";
 
 describe("Redis sliding-window rate limiter", () => {
   beforeEach(() => {
@@ -38,12 +39,32 @@ describe("Redis sliding-window rate limiter", () => {
 
   it("expires entries older than the window (sliding)", async () => {
     const key = "rl:test:window";
-    // First two entries fall outside the (very short) window
     await checkRateLimit(key, 1, 1);
     await new Promise((r) => setTimeout(r, 5));
     const fresh = await checkRateLimit(key, 1, 1);
-    // old entries pruned, so the newest is allowed
     expect(fresh.allowed).toBe(true);
     expect(fresh.current).toBe(1);
+  });
+
+  describe("fail-closed behaviour (Sprint 6)", () => {
+    it("returns allowed: false and current: -1 when failClosed and Redis fails", async () => {
+      const broken: RedisLike = {
+        ...getRedis(),
+        zremrangebyscore: () => { throw new Error("Redis connection refused"); },
+        zadd: async () => 0,
+        zcard: async () => 0,
+        pexpire: async () => 0,
+      };
+      setRedisForTests(broken);
+
+      const result = await checkRateLimit("rl:fc:test", 3, 60_000, true);
+      expect(result.allowed).toBe(false);
+      expect(result.current).toBe(-1);
+    });
+
+    it("returns allowed: true when failClosed is false and Redis fails", async () => {
+      const result = await checkRateLimit("rl:fo:test", 3, 60_000, false);
+      expect(result.allowed).toBe(true);
+    });
   });
 });

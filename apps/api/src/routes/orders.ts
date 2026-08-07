@@ -36,12 +36,6 @@ const ReorderSchema = z.object({
   old_order_id: z.string().uuid(),
 });
 
-// Sprint 1 (I-03): paginated order history.
-const ListOrdersQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).max(100000).default(1),
-  limit: z.coerce.number().int().min(1).max(50).default(10),
-});
-
 const orderingService = new OrderingService(sharedOrderRepo, getCatalogRepository());
 
 export const ordersRouter: Router = Router();
@@ -67,6 +61,7 @@ ordersRouter.get(
 
     const { limit, cursor } = query.data;
 
+    const catalogRepo = getCatalogRepository();
     const allOrders = await sharedOrderRepo.getByUser(userId);
 
     const startIndex = cursor
@@ -84,68 +79,29 @@ ordersRouter.get(
       ? lastOrder.created_at
       : null;
 
-    ok(res, {
-      orders: page.map((o) => ({
-        id: o.id,
-        restaurant_id: o.restaurant_id,
-        status: o.status,
-        total_amount: o.total_amount,
-        items: o.items.map((i) => ({
-          name: i.name,
-          quantity: i.quantity,
-          base_price: i.base_price,
-        })),
-        created_at: o.created_at,
-      })),
-      next_cursor: nextCursor,
-    });
-  }),
-);
-
-ordersRouter.get(
-  "/",
-  authenticate,
-  asyncHandler(async (req, res) => {
-    const query = ListOrdersQuerySchema.safeParse(req.query);
-    if (!query.success) {
-      throw new AppError(
-        "VALIDATION_ERROR",
-        "Invalid pagination parameters",
-        400,
-        query.error.flatten(),
-      );
-    }
-
-    const userId = res.locals.userId as string;
-    const { page, limit } = query.data;
-    const { orders, total } = await sharedOrderRepo.getByUserPaginated(
-      userId,
-      page,
-      limit,
-    );
-
-    // Join restaurant names so the consumer can render cards without a
-    // second round-trip to the catalog.
-    const catalog = getCatalogRepository();
-    const names = new Map<string, string | null>();
     const enriched = await Promise.all(
-      orders.map(async (order) => {
-        if (!names.has(order.restaurant_id)) {
-          const restaurant = await catalog.getRestaurantById(
-            order.restaurant_id,
-          );
-          names.set(order.restaurant_id, restaurant?.name ?? null);
-        }
-        return { ...order, restaurant_name: names.get(order.restaurant_id)! };
+      page.map(async (o) => {
+        const restaurant = await catalogRepo.getRestaurantById(o.restaurant_id);
+        return {
+          id: o.id,
+          user_id: o.user_id,
+          restaurant_id: o.restaurant_id,
+          restaurant_name: restaurant?.name ?? "Restaurant",
+          status: o.status,
+          total_amount: o.total_amount,
+          items: o.items.map((i) => ({
+            name: i.name,
+            quantity: i.quantity,
+            base_price: i.base_price,
+          })),
+          created_at: o.created_at,
+        };
       }),
     );
 
     ok(res, {
       orders: enriched,
-      page,
-      limit,
-      total,
-      pages: Math.max(1, Math.ceil(total / limit)),
+      next_cursor: nextCursor,
     });
   }),
 );

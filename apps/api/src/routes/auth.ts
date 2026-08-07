@@ -32,6 +32,7 @@ const otpLimiter = rateLimiter({
   max: config.rateLimit.otpMaxPerMinute,
   windowMs: 60_000,
   identifier: (req) => req.body?.phone ?? req.ip ?? "unknown",
+  failClosed: true,
 });
 
 export const authRouter: Router = Router();

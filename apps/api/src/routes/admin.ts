@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { adminReadOnly, adminWrite } from "../middleware/requireRoles";
+import { rateLimiter } from "../middleware/rateLimiter";
 import {
   sharedAuditRepo,
   sharedOrderRepo,
@@ -14,6 +15,14 @@ import type { RestaurantDTO } from "../repositories/catalogRepository";
 import type { KillSwitchDTO } from "../repositories/killSwitchRepository";
 
 const adminRouter: Router = Router();
+
+const adminWriteLimiter = rateLimiter({
+  prefix: "admin-write",
+  max: 30,
+  windowMs: 60_000,
+  identifier: (req) => req.ip ?? "unknown",
+  failClosed: true,
+});
 
 // ============================================
 // Kill Switches (A-03) — Sprint 5.1: DB-persisted
@@ -82,7 +91,7 @@ const ToggleKillSwitchSchema = z.object({
 
 adminRouter.put(
   "/kill-switches/:id",
-  adminWrite,
+  adminWriteLimiter, adminWrite,
   asyncHandler(async (req, res) => {
     const switchName = req.params.id as string;
     const body = ToggleKillSwitchSchema.safeParse(req.body);
@@ -186,7 +195,7 @@ const OverrideOrderSchema = z.object({
 
 adminRouter.post(
   "/orders/:id/override-status",
-  adminWrite,
+  adminWriteLimiter, adminWrite,
   asyncHandler(async (req, res) => {
     const id = req.params.id as string;
     const actorRole = res.locals.userRole as string;
@@ -242,7 +251,7 @@ adminRouter.get(
 
 adminRouter.put(
   "/vendors/:id/suspend",
-  adminWrite,
+  adminWriteLimiter, adminWrite,
   asyncHandler(async (req, res) => {
     const id = req.params.id as string;
     const repo = getCatalogRepository();
@@ -265,7 +274,7 @@ adminRouter.put(
 
 adminRouter.put(
   "/vendors/:id/reactivate",
-  adminWrite,
+  adminWriteLimiter, adminWrite,
   asyncHandler(async (req, res) => {
     const id = req.params.id as string;
     const repo = getCatalogRepository();
@@ -289,7 +298,7 @@ adminRouter.put(
 // Legacy PUT /vendors/:id/status kept for backward compatibility with existing UI
 adminRouter.put(
   "/vendors/:id/status",
-  adminWrite,
+  adminWriteLimiter, adminWrite,
   asyncHandler(async (req, res) => {
     const id = req.params.id as string;
     const body = z.object({ is_active: z.boolean() }).safeParse(req.body);
@@ -373,7 +382,7 @@ adminRouter.get(
 
 adminRouter.put(
   "/users/:id/suspend",
-  adminWrite,
+  adminWriteLimiter, adminWrite,
   asyncHandler(async (req, res) => {
     const id = req.params.id as string;
     const user = await sharedIdentityRepo.getById(id);
@@ -395,7 +404,7 @@ adminRouter.put(
 
 adminRouter.put(
   "/users/:id/reactivate",
-  adminWrite,
+  adminWriteLimiter, adminWrite,
   asyncHandler(async (req, res) => {
     const id = req.params.id as string;
     const user = await sharedIdentityRepo.getById(id);
@@ -422,7 +431,7 @@ const UpdateRoleSchema = z.object({
 
 adminRouter.put(
   "/users/:id/role",
-  adminWrite,
+  adminWriteLimiter, adminWrite,
   asyncHandler(async (req, res) => {
     const id = req.params.id as string;
     const body = UpdateRoleSchema.safeParse(req.body);
@@ -492,7 +501,7 @@ adminRouter.get(
 
 adminRouter.put(
   "/support-tickets/:id",
-  adminWrite,
+  adminWriteLimiter, adminWrite,
   asyncHandler(async (req, res) => {
     const id = req.params.id as string;
     const body = UpdateTicketSchema.safeParse(req.body);

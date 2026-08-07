@@ -24,6 +24,7 @@ export interface OrderDTO {
   id: string;
   user_id: string;
   restaurant_id: string;
+  restaurant_name?: string;
   items: OrderItemDTO[];
   total_amount: number;
   status: OrderStatus;

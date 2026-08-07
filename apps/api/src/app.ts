@@ -26,6 +26,7 @@ import { wearRouter } from "./routes/wear";
 import { supportRouter } from "./routes/support";
 import { registerLoyaltyEventHandlers } from "./services/loyalty";
 import { registerRetentionEventHandlers } from "./services/retention";
+import { initEventSubscriber } from "./lib/eventBus";
 import { metrics, metricsRouter } from "./routes/metrics";
 import { adminRouter } from "./routes/admin";
 import { requireRole } from "./middleware/requireRoles";
@@ -35,6 +36,7 @@ import { requireRole } from "./middleware/requireRoles";
 // credited, and pickup streaks advance when an order is picked up.
 registerLoyaltyEventHandlers();
 registerRetentionEventHandlers();
+void initEventSubscriber();
 
 export const API_PREFIX = "/api/v1";
 

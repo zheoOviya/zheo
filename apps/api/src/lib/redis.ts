@@ -25,7 +25,7 @@ export interface RedisLike {
   on(event: string, listener: (...args: unknown[]) => void): unknown;
   duplicate(): RedisLike;
   publish(channel: string, message: string): Promise<number>;
-  subscribe(channel: string): Promise<void>;
+  subscribe(channel: string, onMessage: (channel: string, message: string) => void): Promise<void>;
   status: string;
 }
 
@@ -117,7 +117,7 @@ export class MemoryRedis implements RedisLike {
     return 0;
   }
 
-  async subscribe(): Promise<void> {
+  async subscribe(_channel: string, _onMessage: (channel: string, message: string) => void): Promise<void> {
     // no-op in memory mode
   }
 }
@@ -152,4 +152,8 @@ export function getRedis(): RedisLike {
 }
 export function resetRedisForTests(): void {
   client = null;
+}
+
+export function setRedisForTests(mock: RedisLike): void {
+  client = mock;
 }

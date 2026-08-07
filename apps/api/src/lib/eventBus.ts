@@ -1,17 +1,25 @@
 import { randomUUID } from "node:crypto";
+import { getRedis } from "./redis";
 import { logger } from "./logger";
 import type { EventName, TypedEventEnvelope } from "@snakzap/types";
 
 // ============================================
-// Event Bus (EOS 1.2) - currently logs events;
-// plugs into Kafka/NATS in production.
+// Event Bus (EOS 1.2) - Redis Pub/Sub for
+// cross-instance event distribution.
+// In-process dispatch runs first for same-process
+// performance; Redis Pub/Sub broadcasts to other
+// instances. Falls back to in-process-only when
+// Redis is unavailable.
 // ============================================
+
+const EVENT_CHANNEL = "snakzap:events";
 
 export type EventHandler = (
   event: TypedEventEnvelope<EventName>,
 ) => Promise<void>;
 
 const handlers = new Map<EventName, EventHandler[]>();
+let subscriberInitialized = false;
 
 export function onEvent(name: EventName, handler: EventHandler): void {
   const list = handlers.get(name) ?? [];
@@ -19,9 +27,7 @@ export function onEvent(name: EventName, handler: EventHandler): void {
   handlers.set(name, list);
 }
 
-export async function emit<K extends EventName>(
-  event: TypedEventEnvelope<K>,
-): Promise<void> {
+async function dispatchToHandlers(event: TypedEventEnvelope<EventName>): Promise<void> {
   logger.info({
     message: "event_emitted",
     event_name: event.event_name,
@@ -40,6 +46,50 @@ export async function emit<K extends EventName>(
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+}
+
+export async function emit<K extends EventName>(
+  event: TypedEventEnvelope<K>,
+): Promise<void> {
+  await dispatchToHandlers(event as TypedEventEnvelope<EventName>);
+
+  try {
+    const redis = getRedis();
+    await redis.publish(EVENT_CHANNEL, JSON.stringify(event));
+  } catch (err) {
+    logger.warn({
+      message: "event_redis_publish_failed",
+      event_name: event.event_name,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+export async function initEventSubscriber(): Promise<void> {
+  if (subscriberInitialized) return;
+  subscriberInitialized = true;
+
+  try {
+    const redis = getRedis();
+    await redis.subscribe(EVENT_CHANNEL, async (channel, message) => {
+      if (channel !== EVENT_CHANNEL) return;
+      try {
+        const event: TypedEventEnvelope<EventName> = JSON.parse(message);
+        await dispatchToHandlers(event);
+      } catch (err) {
+        logger.error({
+          message: "event_subscriber_dispatch_error",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+    logger.info({ message: "event_subscriber_initialized", channel: EVENT_CHANNEL });
+  } catch (err) {
+    logger.warn({
+      message: "event_subscriber_init_failed",
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 

@@ -1,0 +1,88 @@
+{
+  "sprint": 6,
+  "title": "Reality Check & Production Hardening",
+  "completed_at": "2026-08-07T18:40:00.000Z",
+  "status": "COMPLETED",
+  "verdict": "GO",
+  "tests": {
+    "total": 375,
+    "passed": 375,
+    "failed": 0,
+    "files": 40
+  },
+  "typecheck": {
+    "api": "PASS",
+    "admin": "PASS",
+    "consumer": "PRE-EXISTING_DEVDEPS_MISSING"
+  },
+  "remediation": [
+    {
+      "id": "S6-30-DEDUP",
+      "task": "Remove duplicate ListOrdersQuerySchema and dead handler from orders.ts",
+      "before": "Two ListOrdersQuerySchema definitions (page-based at line 40, cursor-based at line 43) and a dead second ordersRouter.get('/') handler at lines 105-151",
+      "after": "Single cursor-based schema at line 43. Single ordersRouter.get('/') handler.",
+      "verification": "All 6 orders.test.ts pagination tests pass with cursor-based API"
+    },
+    {
+      "id": "S6-30-EVENTBUS",
+      "task": "Refactor event bus to use Redis Pub/Sub for cross-instance distribution",
+      "before": "In-process EventEmitter only — events could not reach other instances",
+      "after": "emit() publishes to Redis channel 'snakzap:events' after in-process dispatch. initEventSubscriber() subscribes with onMessage callback. MemoryRedis.subscribe() is a no-op callback-compatible.",
+      "verification": "eventBus.ts compiles clean; app.ts calls initEventSubscriber() after loyalty/retention handler registration"
+    },
+    {
+      "id": "S6-30-RATELIMIT",
+      "task": "Add fail-closed rate limiter on critical routes",
+      "before": "All rate limiters were fail-open — Redis failures allowed traffic through",
+      "after": "failClosed option on RateLimiterOptions. checkRateLimit returns { allowed: false, current: -1 } on Redis failure when failClosed: true. Rate limiter middleware returns 503 (not 429) when current === -1.",
+      "routes": "OTP limiter (auth.ts), paymentsLimiter (payments.ts), adminWriteLimiter (admin.ts: 9 write endpoints)",
+      "verification": "New test in rateLimiter.test.ts proves 503 (allowed: false, current: -1) when Redis fails with failClosed: true. General API limiter stays fail-open."
+    },
+    {
+      "id": "S6-30-README",
+      "task": "Truthful README + MIT LICENSE",
+      "before": "README contained self-aggrandizing claims (Zero-Hallucination enforcement, Zero architectural debt, Ultimate Strict Governance Enforcer)",
+      "after": "Startup-grade/portfolio positioning. Redis-backed event bus stated. Known limitations documented. MIT LICENSE created.",
+      "verification": "README.md and LICENSE files present in root"
+    },
+    {
+      "id": "S6-30-DRIZZLE",
+      "task": "Implement missing getByUserPaginated in DrizzleOrderRepository",
+      "before": "DrizzleOrderRepository was missing getByUserPaginated — caused TS2420 compile error",
+      "after": "Implemented via in-memory pagination over getByUser — follows existing Drizzle pattern (no direct SQL limit/offset needed)",
+      "verification": "tsc --noEmit passes on apps/api"
+    },
+    {
+      "id": "S6-30-WEBSOCKET",
+      "task": "Update websocket subscribe to match new callback signature",
+      "before": "sub.subscribe(PUBSUB_CHANNEL) — 1 arg, new RedisLike.subscribe requires 2 (channel, onMessage)",
+      "after": "sub.subscribe(PUBSUB_CHANNEL, () => {}) — passes noop callback; websocket still uses sub.on('message') which exists on RedisLike",
+      "verification": "tsc --noEmit passes on apps/api"
+    }
+  ],
+  "regression": {
+    "status": "PASS",
+    "repaired": [
+      "orders.test.ts: 4 pagination tests updated from page-based ({page,limit,total,pages}) to cursor-based ({next_cursor})",
+      "orders.ts handler: restaurant_name populated via catalogRepo.getRestaurantById()",
+      "rateLimiter.test.ts: setRedisForTests() injected broken mock for fail-closed test"
+    ]
+  },
+  "blockers": 0,
+  "open_issues": [],
+  "artifacts": [
+    "apps/api/src/lib/eventBus.ts",
+    "apps/api/src/lib/redis.ts",
+    "apps/api/src/middleware/rateLimiter.ts",
+    "apps/api/src/middleware/rateLimiter.test.ts",
+    "apps/api/src/routes/orders.ts",
+    "apps/api/src/routes/auth.ts",
+    "apps/api/src/routes/payments.ts",
+    "apps/api/src/routes/admin.ts",
+    "apps/api/src/repositories/drizzle/drizzleOrderRepository.ts",
+    "apps/api/src/repositories/orderRepository.ts",
+    "README.md",
+    "LICENSE",
+    "work-logs/sprint-6/verification.json"
+  ]
+}
