@@ -36,9 +36,63 @@ const ReorderSchema = z.object({
   old_order_id: z.string().uuid(),
 });
 
+// Sprint 1 (I-03): paginated order history.
+const ListOrdersQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(100000).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+});
+
 const orderingService = new OrderingService(sharedOrderRepo, getCatalogRepository());
 
 export const ordersRouter: Router = Router();
+
+ordersRouter.get(
+  "/",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const query = ListOrdersQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid pagination parameters",
+        400,
+        query.error.flatten(),
+      );
+    }
+
+    const userId = res.locals.userId as string;
+    const { page, limit } = query.data;
+    const { orders, total } = await sharedOrderRepo.getByUserPaginated(
+      userId,
+      page,
+      limit,
+    );
+
+    // Join restaurant names so the consumer can render cards without a
+    // second round-trip to the catalog.
+    const catalog = getCatalogRepository();
+    const names = new Map<string, string | null>();
+    const enriched = await Promise.all(
+      orders.map(async (order) => {
+        if (!names.has(order.restaurant_id)) {
+          const restaurant = await catalog.getRestaurantById(
+            order.restaurant_id,
+          );
+          names.set(order.restaurant_id, restaurant?.name ?? null);
+        }
+        return { ...order, restaurant_name: names.get(order.restaurant_id)! };
+      }),
+    );
+
+    ok(res, {
+      orders: enriched,
+      page,
+      limit,
+      total,
+      pages: Math.max(1, Math.ceil(total / limit)),
+    });
+  }),
+);
 
 ordersRouter.get(
   "/:id",

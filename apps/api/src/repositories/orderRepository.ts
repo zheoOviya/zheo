@@ -56,6 +56,12 @@ export interface OrderRepository {
   getById(orderId: string): Promise<OrderDTO | null>;
   getLatestByUser(userId: string): Promise<OrderDTO | null>;
   getByUser(userId: string): Promise<OrderDTO[]>;
+  /** Sprint 1 (I-03): page/limit slice of a user's orders (newest first). */
+  getByUserPaginated(
+    userId: string,
+    page: number,
+    limit: number,
+  ): Promise<{ orders: OrderDTO[]; total: number }>;
   getByRestaurant(restaurantId: string): Promise<OrderDTO[]>;
   getSettlableOrdersByRestaurant(
     restaurantId: string,
@@ -129,6 +135,24 @@ export class MemoryOrderRepository implements OrderRepository {
         (a, b) =>
           new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
       );
+  }
+
+  async getByUserPaginated(
+    userId: string,
+    page: number,
+    limit: number,
+  ): Promise<{ orders: OrderDTO[]; total: number }> {
+    const all = Array.from(this.orders.values())
+      .filter((o) => o.user_id === userId)
+      .sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      );
+    const start = (page - 1) * limit;
+    return {
+      orders: all.slice(start, start + limit),
+      total: all.length,
+    };
   }
 
   async updateStatus(

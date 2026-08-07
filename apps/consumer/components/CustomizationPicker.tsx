@@ -8,6 +8,9 @@ import { formatINR } from "@/lib/pricing";
 // Live price updates as customizations are toggled. 3-tap flow:
 // 1. Tap item in menu, 2. Pick customizations, 3. Tap Add to Cart.
 // Closes on ESC or backdrop tap; locks body scroll while open.
+// I-07: while the parent is "processing" the add, the confirm button shows a
+// spinner (disabled + aria-busy) then a green checkmark - preventing
+// concurrent duplicate taps.
 
 interface CustomizationPickerProps {
   itemName: string;
@@ -15,6 +18,8 @@ interface CustomizationPickerProps {
   availableCustomizations: CartCustomization[];
   onConfirm: (selected: CartCustomization[]) => void;
   onCancel: () => void;
+  pending?: boolean;
+  success?: boolean;
 }
 
 export function CustomizationPicker({
@@ -23,15 +28,19 @@ export function CustomizationPicker({
   availableCustomizations,
   onConfirm,
   onCancel,
+  pending = false,
+  success = false,
 }: CustomizationPickerProps) {
   const [selected, setSelected] = useState<CartCustomization[]>([]);
 
   const totalPrice =
     basePrice + selected.reduce((sum, c) => sum + c.price_delta, 0);
 
+  const isLocked = pending || success;
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
+      if (e.key === "Escape" && !isLocked) onCancel();
     };
     document.addEventListener("keydown", onKey);
     const prevOverflow = document.body.style.overflow;
@@ -40,9 +49,10 @@ export function CustomizationPicker({
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prevOverflow;
     };
-  }, [onCancel]);
+  }, [isLocked, onCancel]);
 
   function toggle(c: CartCustomization) {
+    if (isLocked) return;
     const exists = selected.find((s) => s.name === c.name);
     if (exists) {
       setSelected((prev) => prev.filter((s) => s.name !== c.name));
@@ -54,7 +64,9 @@ export function CustomizationPicker({
   return (
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/40"
-      onClick={onCancel}
+      onClick={() => {
+        if (!isLocked) onCancel();
+      }}
     >
       <div
         role="dialog"
@@ -83,8 +95,9 @@ export function CustomizationPicker({
                 key={c.name}
                 type="button"
                 aria-pressed={isSelected}
+                disabled={isLocked}
                 onClick={() => toggle(c)}
-                className={`flex w-full items-center justify-between rounded-lg border px-4 py-3 text-sm font-medium transition-colors ${
+                className={`flex w-full items-center justify-between rounded-lg border px-4 py-3 text-sm font-medium transition-colors disabled:opacity-60 ${
                   isSelected
                     ? "border-primary-500 bg-primary-500/10 text-primary-700"
                     : "border-primary-500/20 text-neutral-700 hover:bg-surface-light"
@@ -108,17 +121,66 @@ export function CustomizationPicker({
         <div className="mt-4 flex gap-3">
           <button
             type="button"
-            onClick={onCancel}
-            className="flex-1 rounded-full border border-primary-500/30 py-2.5 text-sm font-medium text-primary-700 hover:bg-surface-light"
+            onClick={() => {
+              if (!isLocked) onCancel();
+            }}
+            disabled={isLocked}
+            className="flex-1 rounded-full border border-primary-500/30 py-2.5 text-sm font-medium text-primary-700 hover:bg-surface-light disabled:cursor-not-allowed disabled:opacity-60"
           >
             Cancel
           </button>
           <button
             type="button"
             onClick={() => onConfirm(selected)}
-            className="flex-1 rounded-full bg-primary-500 py-2.5 text-sm font-medium text-white hover:bg-primary-hover"
+            disabled={isLocked}
+            aria-busy={pending}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-full py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed ${
+              success
+                ? "bg-green-600 hover:bg-green-700"
+                : "bg-primary-500 hover:bg-primary-hover"
+            }`}
           >
-            Add to Cart ({formatINR(totalPrice)})
+            {pending ? (
+              <>
+                <svg
+                  className="h-4 w-4 animate-spin"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4z"
+                  />
+                </svg>
+                Adding...
+              </>
+            ) : success ? (
+              <>
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  aria-hidden="true"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+                Added!
+              </>
+            ) : (
+              `Add to Cart (${formatINR(totalPrice)})`
+            )}
           </button>
         </div>
       </div>

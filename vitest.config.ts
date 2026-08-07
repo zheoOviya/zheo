@@ -3,6 +3,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["apps/**/*.test.ts", "packages/**/*.test.ts"],
+    // Consumer RTL suites run under apps/consumer/vitest.config.ts (jsdom).
+    exclude: ["**/node_modules/**", "apps/consumer/**"],
     environment: "node",
     env: {
       NODE_ENV: "test",

@@ -1,0 +1,20 @@
+import { defineConfig } from "vitest/config";
+import { fileURLToPath } from "node:url";
+
+export default defineConfig({
+  test: {
+    environment: "jsdom",
+    include: ["**/*.test.{ts,tsx}"],
+    exclude: ["node_modules", ".next"],
+    setupFiles: [fileURLToPath(new URL("./vitest.setup.ts", import.meta.url))],
+    globals: false,
+  },
+  esbuild: {
+    jsx: "automatic",
+  },
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL(".", import.meta.url)),
+    },
+  },
+});

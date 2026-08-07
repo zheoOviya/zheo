@@ -282,6 +282,82 @@ export function fetchTrafficEta(
 }
 
 // ============================================
+// Sprint 1 (I-03): Order History + Re-Order
+// ============================================
+
+export interface OrderHistoryItem {
+  id: string;
+  menu_item_id: string;
+  name: string;
+  base_price: number;
+  quantity: number;
+  customizations: unknown[];
+  customization_total: number;
+  item_subtotal: number;
+}
+
+export interface OrderHistoryEntry {
+  id: string;
+  user_id: string;
+  restaurant_id: string;
+  restaurant_name: string | null;
+  status: string;
+  total_amount: number;
+  commission_rate: number;
+  commission_amount: number;
+  pickup_otp: string | null;
+  qr_token: string | null;
+  checked_in: boolean;
+  scheduled_pickup_time: string | null;
+  created_at: string;
+  updated_at: string;
+  items: OrderHistoryItem[];
+}
+
+export interface OrderHistoryPage {
+  orders: OrderHistoryEntry[];
+  page: number;
+  limit: number;
+  total: number;
+  pages: number;
+}
+
+export function fetchOrderHistory(
+  token: string,
+  page = 1,
+  limit = 10,
+): Promise<OrderHistoryPage> {
+  return authedFetcher<OrderHistoryPage>(
+    `/api/v1/orders?page=${page}&limit=${limit}`,
+    token,
+  );
+}
+
+export function fetchOrderById(
+  token: string,
+  orderId: string,
+): Promise<OrderHistoryEntry> {
+  return authedFetcher<OrderHistoryEntry>(
+    `/api/v1/orders/${encodeURIComponent(orderId)}`,
+    token,
+  );
+}
+
+export function reorderOrder(
+  token: string,
+  oldOrderId: string,
+): Promise<{ id: string; status: string; total_amount: number }> {
+  return authedFetcher<{ id: string; status: string; total_amount: number }>(
+    "/api/v1/orders/reorder",
+    token,
+    {
+      method: "POST",
+      body: JSON.stringify({ old_order_id: oldOrderId }),
+    },
+  );
+}
+
+// ============================================
 // Payments (client-side only - requires auth)
 // ============================================
 

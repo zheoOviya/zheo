@@ -268,13 +268,13 @@ function TrackingContent() {
         )}
 
         {/* QR Code + OTP for pickup */}
-        {isReady && order.qr_token && (
+        {isReady && order.qr_token && order.pickup_otp && (
           <div className="rounded-2xl bg-white p-6 shadow-sm">
             <h2 className="mb-4 text-lg font-semibold text-neutral-700">
               Show this at the counter
             </h2>
             <div className="flex flex-col items-center gap-6 sm:flex-row sm:justify-center">
-              <QrCode value={order.qr_token} size={180} />
+              <QrCode orderId={order.id} otp={order.pickup_otp} size={180} />
               <div className="text-center sm:text-left">
                 <p className="text-sm text-neutral-500">Pickup Code</p>
                 <p className="mt-2 text-4xl font-bold tracking-widest text-primary-700">

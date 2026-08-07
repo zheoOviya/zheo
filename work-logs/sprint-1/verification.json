@@ -1,0 +1,60 @@
+{
+  "sprint": 1,
+  "task": 21,
+  "feature": "UX Foundation",
+  "status": "COMPLETE",
+  "date": "2026-08-07",
+  "acceptance_criteria": [
+    {
+      "id": "I-01",
+      "name": "Onboarding carousel",
+      "status": "PASS",
+      "evidence": "app/onboarding/page.tsx: 3 slides (Order Ahead / Real-Time Alerts / No Delivery Fees), swipe + Prev/Next keyboard nav, Skip on all slides, Get Started on final, localStorage flag snakzap_onboarded, redirect to / when set, role=region + aria-roledescription=carousel, motion-reduce:transition-none"
+    },
+    {
+      "id": "I-02",
+      "name": "Real scannable QR code",
+      "status": "PASS",
+      "evidence": "components/QrCode.tsx rewritten with qrcode package; payload JSON.stringify({orderId, otp, v:1}); EC level 'H'; 200x200 SVG; tap-to-enlarge fullscreen modal with Max Brightness, large monospace OTP, Copy OTP; scannability proven by jsQR decode round-trip in lib/qr.test.ts"
+    },
+    {
+      "id": "I-03",
+      "name": "Order History + Re-Order",
+      "status": "PASS",
+      "evidence": "GET /api/v1/orders (page/limit zod-validated, defaults 1/10, total+pages, restaurant_name joined) in apps/api/src/routes/orders.ts; app/orders/page.tsx cards with restaurant/date/items/total/status; Reorder -> POST /api/v1/orders/reorder + cart pre-fill; skeleton loaders aria-busy=true; 6 new API route tests"
+    },
+    {
+      "id": "I-04",
+      "name": "Cross-restaurant cart warning + Undo",
+      "status": "PASS",
+      "evidence": "useCartStore.addItem returns discriminated result with snapshot; warning toast 'Starting a new order from [New]. Your [N] items from [Old] were cleared.' with Undo action restoring via restoreSnapshot()"
+    },
+    {
+      "id": "I-07",
+      "name": "Add-to-cart loading states",
+      "status": "PASS",
+      "evidence": "CustomizationPicker confirm shows spinner, disabled + aria-busy while processing; 300ms green checkmark; ref-guard prevents concurrent duplicate taps; menu row flashes green check"
+    },
+    {
+      "id": "I-10",
+      "name": "Toast system",
+      "status": "PASS",
+      "evidence": "Single Toaster in ToasterHost (components/ToasterHost.tsx): top-center mobile, bottom-right desktop, max 3 visible, role=alert + aria-live=assertive"
+    }
+  ],
+  "tests": {
+    "api_route_tests": { "files": 36, "tests": 298, "status": "PASS" },
+    "consumer_rtl_tests": { "files": 5, "tests": 24, "status": "PASS" },
+    "total_tests": 322,
+    "coverage_notes": "onboarding(8), order-history(6), add-flow/cross-restaurant/I-07(3), QrCode component(4), QR jsQR roundtrip(3); API paginated orders(6)"
+  },
+  "typecheck": { "packages": 5, "result": "PASS" },
+  "live_smoke": {
+    "POST /api/v1/orders": "201 DRAFT, total_amount 485.6",
+    "GET /api/v1/orders?page=1&limit=5": "total=1 pages=1, restaurant_name=Biryani House",
+    "consumer_pages": { "/onboarding": 200, "/orders": 307 (auth redirect), "/": 200 }
+  },
+  "artifacts": [
+    "work-logs/sprint-1/ux-foundation.md"
+  ]
+}

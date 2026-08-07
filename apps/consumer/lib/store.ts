@@ -129,16 +129,35 @@ export interface CartItem {
   quantity: number;
   customizations: CartCustomization[];
   restaurantId: string;
+  restaurantName?: string;
 }
+
+/** Opaque snapshot of the cart used by the cross-restaurant "Undo" action. */
+export interface CartSnapshot {
+  items: CartItem[];
+  restaurantId: string | null;
+  restaurantName: string | null;
+}
+
+export type AddItemResult =
+  | { cleared: false }
+  | {
+      cleared: true;
+      previousRestaurantName: string | null;
+      clearedItemCount: number;
+      snapshot: CartSnapshot;
+    };
 
 interface CartState {
   items: CartItem[];
   restaurantId: string | null;
   restaurantName: string | null;
-  addItem: (item: CartItem) => void;
+  addItem: (item: CartItem) => AddItemResult;
   removeItem: (menuItemId: string) => void;
   updateQuantity: (menuItemId: string, quantity: number) => void;
   clear: () => void;
+  /** I-04: restore a cart snapshot (used by the toast "Undo" action). */
+  restoreSnapshot: (snapshot: CartSnapshot) => void;
   itemCount: () => number;
   subtotal: () => number;
   /** O09: load the server-persisted cart (expired carts come back empty). */
@@ -173,8 +192,27 @@ export const useCartStore = create<CartState>((set, get) => ({
 
   addItem: (item) => {
     const current = get();
+
+    // I-04: crossing into a new restaurant clears the single-restaurant cart.
+    // We snapshot the old cart so the UI can offer an "Undo" toast.
     if (current.restaurantId && current.restaurantId !== item.restaurantId) {
-      set({ items: [], restaurantId: null, restaurantName: null });
+      const snapshot: CartSnapshot = {
+        items: current.items,
+        restaurantId: current.restaurantId,
+        restaurantName: current.restaurantName,
+      };
+      set({
+        items: [item],
+        restaurantId: item.restaurantId,
+        restaurantName: item.restaurantName ?? current.restaurantName,
+      });
+      persistCurrent();
+      return {
+        cleared: true,
+        previousRestaurantName: current.restaurantName,
+        clearedItemCount: current.items.reduce((sum, i) => sum + i.quantity, 0),
+        snapshot,
+      };
     }
 
     const existing = current.items.find((i) => i.menuItemId === item.menuItemId);
@@ -186,14 +224,17 @@ export const useCartStore = create<CartState>((set, get) => ({
             : i,
         ),
         restaurantId: item.restaurantId,
+        restaurantName: item.restaurantName ?? current.restaurantName,
       });
     } else {
       set({
         items: [...current.items, item],
         restaurantId: item.restaurantId,
+        restaurantName: item.restaurantName ?? current.restaurantName,
       });
     }
     persistCurrent();
+    return { cleared: false };
   },
 
   removeItem: (menuItemId) => {
@@ -225,6 +266,15 @@ export const useCartStore = create<CartState>((set, get) => ({
     if (token) {
       clearPersistedCart(token).catch(() => {});
     }
+  },
+
+  restoreSnapshot: (snapshot) => {
+    set({
+      items: snapshot.items,
+      restaurantId: snapshot.restaurantId,
+      restaurantName: snapshot.restaurantName,
+    });
+    persistCurrent();
   },
 
   itemCount: () => get().items.reduce((sum, i) => sum + i.quantity, 0),

@@ -271,4 +271,98 @@ describe("Ordering routes", () => {
       .expect(403);
     expect(res.body.error.code).toBe("FORBIDDEN");
   });
+
+  it("GET /orders returns paginated history with restaurant_name", async () => {
+    for (let i = 0; i < 3; i++) {
+      await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+    }
+
+    const res = await request(app)
+      .get("/api/v1/orders?page=1&limit=2")
+      .set(authHeaders())
+      .expect(200);
+
+    expect(res.body.data.page).toBe(1);
+    expect(res.body.data.limit).toBe(2);
+    expect(res.body.data.total).toBe(3);
+    expect(res.body.data.pages).toBe(2);
+    expect(res.body.data.orders).toHaveLength(2);
+    for (const order of res.body.data.orders) {
+      expect(order.restaurant_name).toBe("Biryani House");
+      expect(order.user_id).toBe(TEST_USER_ID);
+    }
+    // Newest first.
+    const dates = res.body.data.orders.map(
+      (o: { created_at: string }) => new Date(o.created_at).getTime(),
+    );
+    expect(dates[0]).toBeGreaterThanOrEqual(dates[1]);
+  });
+
+  it("GET /orders pages forward through the history", async () => {
+    for (let i = 0; i < 3; i++) {
+      await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+    }
+
+    const page2 = await request(app)
+      .get("/api/v1/orders?page=2&limit=2")
+      .set(authHeaders())
+      .expect(200);
+    expect(page2.body.data.orders).toHaveLength(1);
+    expect(page2.body.data.page).toBe(2);
+  });
+
+  it("GET /orders is empty for a user with no orders", async () => {
+    const res = await request(app)
+      .get("/api/v1/orders")
+      .set(authHeaders())
+      .expect(200);
+    expect(res.body.data.orders).toEqual([]);
+    expect(res.body.data.total).toBe(0);
+    expect(res.body.data.pages).toBe(1);
+  });
+
+  it("GET /orders never leaks another user's orders", async () => {
+    await request(app)
+      .post("/api/v1/orders")
+      .set(authHeaders())
+      .send({
+        restaurant_id: REST_ID,
+        items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+      })
+      .expect(201);
+
+    const OTHER_USER = "u00000000-0000-4000-8000-000000000099";
+    const res = await request(app)
+      .get("/api/v1/orders")
+      .set(authHeaders(OTHER_USER))
+      .expect(200);
+    expect(res.body.data.total).toBe(0);
+  });
+
+  it("GET /orders requires authentication", async () => {
+    const res = await request(app).get("/api/v1/orders").expect(401);
+    expect(res.body.error.code).toBe("UNAUTHORIZED");
+  });
+
+  it("GET /orders validates pagination parameters", async () => {
+    const res = await request(app)
+      .get("/api/v1/orders?page=0&limit=999")
+      .set(authHeaders())
+      .expect(400);
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+  });
 });

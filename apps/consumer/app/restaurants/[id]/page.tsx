@@ -71,7 +71,11 @@ export default async function RestaurantMenuPage({
 
       <section aria-label="Menu">
         <h2 className="mb-3 text-lg font-semibold text-primary-700">Menu</h2>
-        <MenuItemsList restaurantId={restaurant.id} items={menu} />
+        <MenuItemsList
+          restaurantId={restaurant.id}
+          restaurantName={restaurant.name}
+          items={menu}
+        />
       </section>
     </main>
   );

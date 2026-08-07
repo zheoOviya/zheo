@@ -1,9 +1,16 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useCallback, useRef, useState } from "react";
+import toast, { type Toast } from "react-hot-toast";
 import type { MenuItem } from "@/lib/api";
-import { useCartStore, type CartCustomization } from "@/lib/store";
+import {
+  useCartStore,
+  type CartCustomization,
+  type CartItem,
+  type AddItemResult,
+} from "@/lib/store";
 import { computePriceBreakdown, formatINR, itemUnitPrice } from "@/lib/pricing";
+import { ADD_PROCESSING_MS, ADD_SUCCESS_MS } from "@/lib/addFeedback";
 import { CustomizationPicker } from "./CustomizationPicker";
 import { CartDrawer } from "./CartDrawer";
 
@@ -11,6 +18,10 @@ import { CartDrawer } from "./CartDrawer";
 // Menu items client island. Owns the 3-tap flow:
 // 1. Tap an item -> 2. Pick customizations -> 3. Add to cart.
 // A floating "View Cart" bar surfaces the drawer once items exist.
+// Sprint 1:
+// - I-04 cross-restaurant add warns via toast + "Undo" restores the cart.
+// - I-07 confirm button shows spinner (aria-busy) then a green checkmark;
+//   duplicate taps are dropped while an add is in flight.
 // ============================================
 
 const DIETARY_COLORS: Record<string, string> = {
@@ -30,33 +41,90 @@ function toCustomizations(raw: unknown[] | undefined): CartCustomization[] {
     .map((c) => ({ name: c.name, price_delta: c.price_delta }));
 }
 
+/** I-04 warning toast: the old cart was cleared to start a new restaurant. */
+function warnCrossRestaurant(result: Extract<AddItemResult, { cleared: true }>, newName: string) {
+  toast(
+    (t: Toast) => (
+      <div className="flex items-start gap-3">
+        <p className="min-w-0 flex-1 text-sm leading-snug text-neutral-700">
+          Starting a new order from {newName}. Your {result.clearedItemCount}{" "}
+          item{result.clearedItemCount === 1 ? "" : "s"} from{" "}
+          {result.previousRestaurantName ?? "your last restaurant"} were
+          cleared.
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            useCartStore.getState().restoreSnapshot(result.snapshot);
+            toast.dismiss(t.id);
+          }}
+          className="shrink-0 rounded-full bg-primary-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-primary-hover"
+        >
+          Undo
+        </button>
+      </div>
+    ),
+    { duration: 6000 },
+  );
+}
+
 export function MenuItemsList({
   restaurantId,
+  restaurantName,
   items,
 }: {
   restaurantId: string;
+  restaurantName: string;
   items: MenuItem[];
 }) {
-  const { items: cartItems, addItem, itemCount } = useCartStore();
+  const { items: cartItems, addItem, itemCount, restoreSnapshot } = useCartStore();
   const [pickerItem, setPickerItem] = useState<MenuItem | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState(false);
+  const [justAddedId, setJustAddedId] = useState<string | null>(null);
+  const addingRef = useRef(false);
 
   const count = itemCount();
   const breakdown = computePriceBreakdown(cartItems);
 
   const handleAdd = useCallback(
     (item: MenuItem, customizations: CartCustomization[]) => {
-      addItem({
+      if (addingRef.current) return;
+      addingRef.current = true;
+      setAdding(true);
+      setAdded(false);
+
+      const cartItem: CartItem = {
         menuItemId: item.id,
         name: item.name,
         basePrice: item.price,
         quantity: 1,
         customizations,
         restaurantId,
-      });
-      setPickerItem(null);
+        restaurantName,
+      };
+
+      // I-07: minimum visual processing time so the spinner is perceivable,
+      // then a short green checkmark before the picker closes.
+      window.setTimeout(() => {
+        const result = addItem(cartItem);
+        setAdding(false);
+        setAdded(true);
+
+        window.setTimeout(() => {
+          addingRef.current = false;
+          setAdded(false);
+          setPickerItem(null);
+          setJustAddedId(item.id);
+          window.setTimeout(() => setJustAddedId(null), ADD_SUCCESS_MS);
+          if (result.cleared) {
+            warnCrossRestaurant(result, restaurantName);
+          }
+        }, ADD_SUCCESS_MS);
+      }, ADD_PROCESSING_MS);
     },
-    [addItem, restaurantId],
+    [addItem, restaurantId, restaurantName],
   );
 
   const available = items.filter((i) => i.is_available);
@@ -74,6 +142,7 @@ export function MenuItemsList({
           const tags = Object.entries(item.dietary_tags ?? {})
             .filter(([, on]) => on)
             .map(([tag]) => tag);
+          const isJustAdded = justAddedId === item.id;
 
           return (
             <div
@@ -103,9 +172,27 @@ export function MenuItemsList({
               <button
                 type="button"
                 onClick={() => setPickerItem(item)}
-                className="shrink-0 rounded-full bg-primary-500 px-5 py-2 text-sm font-bold text-white hover:bg-primary-hover active:scale-95 transition-transform"
+                aria-label={
+                  isJustAdded ? `Added ${item.name}` : `Add ${item.name}`
+                }
+                className={`shrink-0 rounded-full px-5 py-2 text-sm font-bold text-white transition-transform active:scale-95 ${
+                  isJustAdded ? "bg-green-500" : "bg-primary-500 hover:bg-primary-hover"
+                }`}
               >
-                Add +
+                {isJustAdded ? (
+                  <svg
+                    className="mx-auto h-4 w-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    aria-hidden="true"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : (
+                  "Add +"
+                )}
               </button>
             </div>
           );
@@ -142,8 +229,12 @@ export function MenuItemsList({
           itemName={pickerItem.name}
           basePrice={pickerItem.price}
           availableCustomizations={toCustomizations(pickerItem.customizations)}
+          pending={adding}
+          success={added}
           onConfirm={(selected) => handleAdd(pickerItem, selected)}
-          onCancel={() => setPickerItem(null)}
+          onCancel={() => {
+            if (!addingRef.current) setPickerItem(null);
+          }}
         />
       )}
 
