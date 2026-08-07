@@ -1,0 +1,49 @@
+{
+  "phase": 2,
+  "scope": "SnakZap Phase 2 - V01 Petpooja POS Integration, V08 Customer Insights, stable identity",
+  "date": "2026-08-05",
+  "status": "COMPLETE",
+  "summary": {
+    "tests": "155/155 across 19 files (added 14: 6 insights engine + 8 POS webhook)",
+    "typecheck": "turbo typecheck 5/5 clean (api, db, consumer, vendor, admin)",
+    "previews": "vendor /insights and /pos render 200; API 3001 endpoints verified live"
+  },
+  "features": {
+    "v01_petpooja_pos": {
+      "status": "PASS",
+      "webhook": "POST /api/v1/webhooks/pos/petpooja - HMAC-SHA256 signature via x-petpooja-signature; mock accepts valid_sig_ prefix (mirrors Razorpay seam)",
+      "idempotency": "pos_order_id keyed; PosOrderRepository mapping; retried delivery returns {processed:false, idempotent:true} with no duplicate order (verified live + test)",
+      "order_import": "pre-paid POS orders created directly at CONFIRMED, skipping DRAFT/PAYMENT_PENDING",
+      "item_pricing": "pricing authoritative from synced catalog; unsynced pos_item_id rejected 400 POS_ITEM_NOT_SYNCED",
+      "menu_sync": "POST /api/vendor/pos/sync-menu upserts keyed on (restaurant_id, pos_item_id); running twice converges (verified: 4 -> 4, no duplicates)",
+      "simulate": "POST /api/vendor/pos/simulate-order syncs then imports a sample order end to end",
+      "events": "PosOrderImported + PosMenuSynced added to EOS Layer 1.2 Event Catalog (10 events total)",
+      "audit": "pos_order_received (incl. replays), pos_menu_synced, pos_order_simulated"
+    },
+    "v08_insights": {
+      "status": "PASS",
+      "eligibility": "CONFIRMED/PREPARING/ALMOST_READY/READY_FOR_PICKUP/PICKED_UP/SETTLED only",
+      "aov": "round(total_revenue / order_count, 2)",
+      "repeat_rate": "distinct users >=2 orders / distinct users >=1 (0..1)",
+      "peak_hours": "24 fixed buckets in IST via explicit +5:30 offset (deterministic, not locale formatter)",
+      "ui": "apps/vendor/app/insights/page.tsx - AOV + Repeat Rate cards, pure-div teal bar chart, teal shimmer skeletons, 7/30/90-day selector"
+    },
+    "stable_identity": {
+      "status": "PASS",
+      "evidence": "phone-keyed MemoryIdentityRepository; auth resolveUser now reuses the shared repo (was random UUID per login); verified live: two OTP logins same phone -> same user_id"
+    },
+    "pos_ui": {
+      "status": "PASS",
+      "evidence": "apps/vendor/app/pos/page.tsx - mock Petpooja connect via localStorage, Sync Menu Now + Send Test Order with teal shimmer; VendorNav extended with Insights + POS links"
+    }
+  },
+  "verifications": [
+    "POST /api/vendor/pos/sync-menu -> {success:true, data:{synced:4}}",
+    "POST /api/v1/webhooks/pos/petpooja (valid_sig_live) -> processed:true, order_status CONFIRMED",
+    "POST same pos_order_id retry -> processed:false, idempotent:true, same order_id",
+    "POST tampered signature -> 401 INVALID_WEBHOOK_SIGNATURE",
+    "POST /api/vendor/pos/simulate-order -> menu_synced:4, import processed:true",
+    "GET /api/vendor/insights?days=30 -> order_count/revenue/aov/repeat_rate/peak_hours populated after imports",
+    "vendor preview 3002: /insights 200, /pos 200"
+  ]
+}

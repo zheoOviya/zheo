@@ -1,0 +1,75 @@
+{
+  "phase": 2,
+  "task": "P2-003 Phase 2 Completion - Loyalty & Pickup Enhancements (L05, L01, P15, P04, P13)",
+  "date": "2026-08-05",
+  "status": "COMPLETE",
+  "summary": {
+    "tests": "203/203 across 24 files (added 31: 11 loyalty service + 8 eta service + 9 loyalty routes + 3 fulfillment early-ready)",
+    "typecheck": "turbo typecheck 5/5 clean",
+    "events": "Event catalog 10 -> 13: ReferralClaimed, StampCardRewardUnlocked, EarlyReadyAlert",
+    "previews": "consumer /profile 200; vendor previews unchanged"
+  },
+  "features": {
+    "l05_refer_and_earn": {
+      "status": "PASS",
+      "route": "GET /api/v1/loyalty/referral + POST /api/v1/loyalty/apply-referral (auth)",
+      "bonus": "Rs 50 credited to referrer AND claimant after all gates pass",
+      "gates": [
+        "INVALID_REFERRAL_CODE -> 400",
+        "SELF_REFERRAL -> 400",
+        "REFERRAL_ALREADY_USED -> 400",
+        "same IP already claimed -> 403 FRAUD_DETECTED",
+        "same device fingerprint already claimed -> 403 FRAUD_DETECTED"
+      ],
+      "ip_source": "x-forwarded-for (trust proxy) -> req.ip -> socket.remoteAddress",
+      "device_source": "x-device-fingerprint header (same EOS 2.3 signal as OTP login)",
+      "events": "ReferralClaimed emitted with referrer, claimant, code, bonus, ip, device",
+      "audit": "referral_applied + referral_fraud_blocked (dimension ip|device)",
+      "live": "apply from IP A -> 201 balance 50; different account same IP -> 403 FRAUD_DETECTED; fresh IP -> 201"
+    },
+    "l01_stamp_card": {
+      "status": "PASS",
+      "event_hook": "OrderPickedUp -> LoyaltyService.onOrderPickedUp (registered in app.ts)",
+      "state_machine": "per (user, restaurant) card; 10 stamps -> reward unlock, stamp_count resets to 0, rewards_earned += 1",
+      "events": "StampCardRewardUnlocked at the 10th pickup (stamp_count_before + rewards_earned)",
+      "audit": "stamp_incremented + stamp_card_reward_unlocked",
+      "ui": "StampCardProgress: 10 teal-filling circles + amber FREE ITEM pills",
+      "live": "order picked up end-to-end -> stamp-cards shows stamp_count 1 / total_orders 1"
+    },
+    "p15_otp_fallback": {
+      "status": "PASS",
+      "note": "confirm-pickup accepts pickup_otp or qr_token; OTP generated at CONFIRMED->PREPARING; verified by existing fulfillment tests + live pickup flow"
+    },
+    "p04_traffic_eta": {
+      "status": "PASS",
+      "service": "EtaService.getTrafficETA(origin_lat, origin_lng, dest_lat, dest_lng)",
+      "google_path": "Distance Matrix API with departure_time=now & traffic_model=best_guess when GOOGLE_MAPS_API_KEY set (fetch injectable for tests)",
+      "mock_path": "haversine distance, 25 km/h base, x1.4 IST rush-hour multiplier (08-11, 17-20 IST); source=mock",
+      "route": "GET /api/v1/eta -> { eta_seconds, duration_text, distance_km, source }",
+      "restaurant_coords": "RestaurantDTO.lat/lng + seeds + migration 0005_loyalty_eta.sql",
+      "ui": "Order tracking 'When to leave' card with Live traffic / Estimated badge",
+      "live": "GET /eta -> source mock, 43 mins, 17.8 km"
+    },
+    "p13_early_ready_alert": {
+      "status": "PASS",
+      "hook": "FulfillmentService.advanceOrderStatus -> READY_FOR_PICKUP before scheduled_pickup_time emits EarlyReadyAlert",
+      "route": "vendor PUT /orders/:id/status returns early_ready_alerted + audits early_ready_alerted",
+      "silent": "ready late or no scheduled_pickup_time -> no alert",
+      "live": "advance with +1h scheduled time -> early_ready_alerted: True"
+    },
+    "consumer_ui": {
+      "status": "PASS",
+      "profile": "apps/consumer/app/profile/page.tsx - Refer & Earn (code + Copy Code + apply input + wallet balance) and Stamp Cards sections",
+      "order_tracking": "apps/consumer/app/orders/[id]/page.tsx - 'When to leave' ETA card + stamp card progress",
+      "home": "Profile nav link added"
+    }
+  },
+  "verifications": [
+    "POST /api/v1/loyalty/apply-referral from IP 203.0.113.77 -> 201, balance 50",
+    "POST /api/v1/loyalty/apply-referral same IP different account -> 403 FRAUD_DETECTED",
+    "POST /api/v1/loyalty/apply-referral fresh IP -> 201, balance 50",
+    "GET /api/v1/eta?origin=Colaba&dest=Biryani House -> source mock, 43 mins, 17.8 km",
+    "order + payment CONFIRMED -> READY (early_ready_alerted True) -> confirm-pickup -> stamp card 1/1",
+    "consumer /profile renders 200"
+  ]
+}

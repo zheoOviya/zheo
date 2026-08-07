@@ -1,0 +1,48 @@
+{
+  "name": "@snakzap/api",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1103.0",
+    "@snakzap/config": "workspace:*",
+    "@snakzap/db": "workspace:*",
+    "@snakzap/types": "workspace:*",
+    "compression": "^1.7.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.36.0",
+    "express": "^4.21.0",
+    "helmet": "^8.0.0",
+    "ioredis": "^5.4.0",
+    "jsonwebtoken": "^9.0.0",
+    "multer": "^2.2.0",
+    "pdfkit": "^0.19.1",
+    "winston": "^3.17.0",
+    "ws": "^8.18.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/compression": "^1.7.0",
+    "@types/cookie-parser": "^1.4.8",
+    "@types/cors": "^2.8.0",
+    "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.0",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^22.0.0",
+    "@types/pdfkit": "^0.17.6",
+    "@types/supertest": "^6.0.2",
+    "@types/ws": "^8.5.0",
+    "supertest": "^7.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

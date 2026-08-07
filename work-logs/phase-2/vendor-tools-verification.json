@@ -1,0 +1,57 @@
+{
+  "phase": 2,
+  "task": "P2-002 Vendor Tools Suite - V12 GST Export, V09 Promotions, V14 Bulk Menu Edit",
+  "date": "2026-08-05",
+  "status": "COMPLETE",
+  "summary": {
+    "tests": "172/172 across 21 files (added 17: 9 vendorTools routes + 8 gstExport service)",
+    "typecheck": "turbo typecheck 5/5 clean (api, db, consumer, vendor, admin)",
+    "previews": "vendor /gst, /promotions, /menu/bulk render 200 locally and via preview URL"
+  },
+  "features": {
+    "v12_gst_export": {
+      "status": "PASS",
+      "route": "GET /api/vendor/gst-export?month=YYYY-MM&restaurant_id=",
+      "format": "GSTR-1 CSV: Invoice No, GSTIN, Date, Taxable Value, CGST 2.5%, SGST 2.5%",
+      "eligibility": "only PICKED_UP/SETTLED orders in [month start, next month) UTC window",
+      "invoice": "sequential INV-YYYYMM-NNNN per month",
+      "gstin": "restaurants.gst_number (now on RestaurantDTO) with deterministic mock fallback",
+      "taxable": "food subtotal recomputed from persisted order items; CGST/SGST = taxable * 0.025 each",
+      "csv": "RFC 4180 escaping; streamed text/csv with attachment filename gstr1-YYYY-MM.csv",
+      "audit": "gst_export_downloaded with month + order_count",
+      "live": "header emitted; invalid month -> 400; CONFIRMED (unsettled) orders correctly excluded"
+    },
+    "v09_promotions": {
+      "status": "PASS",
+      "routes": "POST /api/vendor/promotions (201) + GET /api/vendor/promotions (active list)",
+      "schema": "title 1..120, discount_type FLAT|PERCENTAGE, value (PERCENTAGE <= 100), valid_until date",
+      "active": "listActive excludes expired (valid_until >= now) and inactive",
+      "audit": "promotion_created",
+      "live": "created + listed active"
+    },
+    "v14_bulk_menu": {
+      "status": "PASS",
+      "route": "PUT /api/vendor/menu/bulk (registered before /menu/:itemId)",
+      "payload": "{ items: [{ item_id, price?, is_available?, description? }] } 1..200 rows",
+      "transaction": "validate-all then apply-all; Drizzle wrapped in db.transaction(); MenuBulkUpdateError on any invalid/cross-restaurant row",
+      "rollback": "verified live + test: batch with unknown item_id -> 400 and ZERO rows changed (no partial writes, no audit entry)",
+      "description": "menu_items.description text column added (migration 0004_vendor_tools.sql); exposed in GET /menu and single-item PUT",
+      "audit": "menu_bulk_updated with item_count + item_ids"
+    },
+    "vendor_ui": {
+      "status": "PASS",
+      "gst_page": "apps/vendor/app/gst/page.tsx - month picker (defaults to current month) + Download GST Report (CSV)",
+      "promotions_page": "apps/vendor/app/promotions/page.tsx - create form (title/type/value/valid-until) + active promos list with Teal accents",
+      "bulk_page": "apps/vendor/app/menu/bulk/page.tsx - editable grid (price, availability, description) + Save All Changes, Teal-shimmer while loading/saving",
+      "nav": "VendorNav extended with Bulk Menu, Promotions, GST links (max-w-5xl container)"
+    }
+  },
+  "verifications": [
+    "GET /api/vendor/gst-export?month=2026-08 -> text/csv, exact GSTR-1 header, filename gstr1-2026-08.csv",
+    "GET /api/vendor/gst-export?month=bad -> 400 VALIDATION_ERROR",
+    "POST /api/vendor/promotions {Monsoon Special, PERCENTAGE 15} -> 201; GET lists it active",
+    "PUT /api/vendor/menu/bulk [item1->245, item2->185] -> 200, both updated",
+    "PUT /api/vendor/menu/bulk [item1->999, unknown-id->1] -> 400, prices stay 245/185 (rollback)",
+    "vendor preview 3002: /gst 200, /promotions 200, /menu/bulk 200"
+  ]
+}

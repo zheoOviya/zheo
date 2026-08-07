@@ -1,0 +1,25 @@
+{
+  "name": "snakzap",
+  "version": "0.0.0",
+  "private": true,
+  "description": "SnakZap - Pickup-first food ordering platform",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "test": "vitest",
+    "clean": "turbo clean"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "2.1.9",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

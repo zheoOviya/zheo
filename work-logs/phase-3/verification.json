@@ -1,0 +1,95 @@
+{
+  "phase": 3,
+  "scope": "SnakZap Phase 3 Initiation - D07 Personalized Homepage, D17 Trending Now, O02 Group Order (discovery + ordering contexts, consumer UI/UX agent, Vitest coverage)",
+  "date": "2026-08-06",
+  "verdict": "GO",
+  "certifications": {
+    "functional": {
+      "status": "PASS",
+      "evidence": "223/223 tests across 26 files (pnpm vitest run, baseline 203 + 20 new Phase 3 tests); turbo typecheck 5/5; live previews 3000 (consumer) / 3001 (API) serve 200. Live API verification this audit: GET /api/v1/discovery/personalized-homepage anonymous 200 (rule_based, is_cold_start true, 1 ranked pick + 1 surprise restaurant); GET /api/v1/discovery/trending 200 (60-min window, 5 km radius, empty feed far from seed geos); POST /api/v1/orders/group/create 201 minting gc_ token + DRAFT order; second authenticated user POST /group/add 200 (Veg Biryani x2 persisted, total 401.6, single shared order); GET /group/cart 200 live snapshot with contributors Host + ••••8888 (masked). Consumer homepage renders 'Personalized For You' + 'Trending Now' sections (200); /group-cart?token=... 200."
+    },
+    "security": {
+      "status": "PASS",
+      "evidence": "Group create/add require authenticate -> 401 without token (route tests); contributor identity is masked phone ••••XXXX with avatar seed (never the raw number) - live verified ••••8888; group/cart read uses the token as share-key, 404 GROUP_CART_NOT_FOUND on bad token; discovery personalized homepage is optional-auth and falls back to anonymous cold-start on invalid/missing Bearer (optionalUserIdOf try/catch); items validated against catalog (price from server, ITEM_RESTAURANT_MISMATCH 400, ITEM_NOT_FOUND 404, INVALID_QUANTITY 400)."
+    },
+    "performance": {
+      "status": "PASS",
+      "evidence": "D07/D17 scoring is O(active restaurants * menu items) with a single pass; trending aggregation bounded to top-5 within a radius with a strict time cutoff (window filter before ranking); per-token async mutex serializes group cart read-modify-write in O(1) extra work per add (no shared global lock); live group cart polls every 2s (bounded interval, cleared on unmount)."
+    },
+    "resilience": {
+      "status": "PASS",
+      "evidence": "Concurrency contract proven by test: Promise.all of 10 same-millisecond adds -> all 10 lines persist (quantity 10, total correct, 1 merged contributor row with 10 items); distinct-item race -> 3 chicken + 2 veg lines all present (no lost updates). Group cart locked at 409 GROUP_ORDER_LOCKED once the order leaves DRAFT. Anti-filter-bubble: surprise reserved one slot so it can never be a top pick (topCount = min(4, scored.length - 1)); sparse-catalog safe (null surprise on zero restaurants). Emit() for the 4 new events is async with per-handler isolation."
+    }
+  },
+  "compliance": {
+    "d07_rule_based_vs_ml_weighted_cold_start": "PASS",
+    "d07_anti_filter_bubble_surprise_included": "PASS",
+    "d17_trending_time_bounded_window": "PASS",
+    "d17_radius_haversine_km_bound": "PASS",
+    "o02_shareable_group_cart_token": "PASS",
+    "o02_any_authenticated_user_adds_to_single_draft": "PASS",
+    "o02_concurrency_no_lost_updates": "PASS",
+    "o02_masked_contributor_identity": "PASS",
+    "consumer_ui_personalized_tiles_and_trending_carousel_teal": "PASS",
+    "consumer_ui_group_cart_live_view_with_avatars": "PASS",
+    "event_catalog_17_events": "PASS"
+  },
+  "blockers": [],
+  "task16": {
+    "scope": "Phase 3 Completion - P02 Geo-fence Detection, O12 SnakZap Wallet & Cashback, D03 Spice Tolerance Profile, L02 Pickup Streak Badge, O09 Cart Persistence (fulfillment, loyalty, ordering, identity contexts + consumer UI/UX agent + Vitest)",
+    "date": "2026-08-06",
+    "verdict": "GO",
+    "certifications": {
+      "functional": {
+        "status": "PASS",
+        "evidence": "254/254 tests across 31 files (pnpm vitest run, Task 15 baseline 223 + 31 new Task 16 tests across geoFence, retention service, cart persistence service, retention routes, cart routes); turbo typecheck 3/3 (@snakzap/api, consumer, types; 21-event catalog). Live API :3001 verified: OTP login -> order 201 -> payment capture -> READY_FOR_PICKUP -> POST location-update (44 m, within_fence true, auto_checked_in true) -> confirm-pickup -> GET /loyalty/wallet balance 2.43 with pickup_cashback ledger row (1% of Rs 242.80); GET /loyalty/streak current 1, days_to_next_badge 6; PUT /users/profile spice_tolerance 2 -> Biryani House menu filters Chicken Biryani (spice 5), shows Veg Biryani only; POST/GET/DELETE /cart round-trips restaurant + line items. Out-of-fence live check: 2,102 m -> within_fence false, no check-in."
+      },
+      "security": {
+        "status": "PASS",
+        "evidence": "location-update, cart, wallet, streak, profile routes all require authenticate (401 without token - route tests); cart is scoped per user (userId from JWT sub, other users see empty); cart route rejects non-uuid menu_item_id; spice tolerance validated 1-5 (400 outside); wallet ledger records reason + balance_after for audit; no raw phone numbers exposed in wallet/streak payloads."
+      },
+      "performance": {
+        "status": "PASS",
+        "evidence": "Geo-fence is O(1) haversine after a single order lookup; wallet balance kept in sync for O(1) reads with append-only ledger for history; streak is a single day-keyed update (idempotent within a day); cart persistence is one Redis set/get with EX TTL; menu spice filter is a single in-memory pass; consumer cart persists fire-and-forget per mutation (no blocking UI)."
+      },
+      "resilience": {
+        "status": "PASS",
+        "evidence": "Cart expiry is enforced both by Redis EX TTL and a read-time inactivity guard (injected-clock tests: >24h -> expired:true and snapshot deleted, exactly 24h alive); retention handlers subscribe via onEvent with per-handler error isolation alongside the existing loyalty stamp handler on OrderPickedUp; unknown order / unknown user paths return no-op or 404, never throw; redis failures degrade (fire-and-forget persistence catch)."
+      }
+    },
+    "compliance": {
+      "p02_geo_fence_100m_radius_haversine": "PASS",
+      "p02_auto_checkin_on_arrival_reads_location_not_button": "PASS",
+      "p02_outside_fence_no_state_change": "PASS",
+      "o12_wallet_1pct_cashback_ledger": "PASS",
+      "o12_wallet_history_endpoint": "PASS",
+      "d03_spice_tolerance_1_to_5_profile": "PASS",
+      "d03_menu_auto_filters_above_tolerance": "PASS",
+      "l02_streak_7_day_badge_10pct_coupon": "PASS",
+      "o09_cart_persisted_every_add": "PASS",
+      "o09_cart_24h_inactivity_expiry": "PASS",
+      "consumer_ui_spice_slider_chili_icons": "PASS",
+      "consumer_ui_wallet_and_rewards_section": "PASS",
+      "consumer_ui_cart_drawer_hydrates_persisted_cart": "PASS",
+      "event_catalog_21_events": "PASS"
+    },
+    "blockers": [],
+    "notes": [
+      "Geo-fence treats 'arrival' as the server-decided location report, not a button tap: within 100 m AND READY_FOR_PICKUP triggers auto check-in (the P03 handoff hook) and emits UserArrivedAtRestaurant for the notification layer.",
+      "The wallet is a double-entry ledger (WalletTransaction rows with reason + balance_after); referral bonuses and pickup cashback share the same ledger so the history shows every credit source.",
+      "Pickup streak is keyed on UTC YYYY-MM-DD: same-day pickups are idempotent, a gap of more than one day resets to 1, every 7th consecutive day mints a 10% coupon (30-day validity) and emits StreakBadgeUnlocked.",
+      "Cart persistence stores a self-contained snapshot (restaurant + line items with display metadata) under cart:{userId}; the consumer store fire-and-forgets a save on every mutation and the CartDrawer hydrates on mount, clearing if expired.",
+      "Spice tolerance resolution order on the menu endpoint: explicit spice_tolerance query param > authenticated user's profile > unfiltered.",
+      "Task 16 work-log: work-logs/phase-3/geo-wallet-retention.md; Task 15 report: work-logs/phase-3/personalization-and-group-orders.md"
+    ]
+  },
+  "notes": [
+    "Personalization is a deterministic Rule-based V1 with a simulated-ML tier above COLD_START_THRESHOLD=3 past orders; the seam for a feature-store reranker is documented in the Phase 3 work-log.",
+    "Consumer homepage PersonalizedFeed + TrendingCarousel are client islands (optional-auth token for personalization); the group-cart view polls /orders/group/cart every 2s for the live contributors.",
+    "Group cart lines are stored per-contribution (one line per add) so the live cart attributes each item to its contributor avatar; same-user adds merge into one contributor row with all items.",
+    "Trending defaults to the mock P04 consumer origin (Colaba) with geo mocked offline; seed restaurants sit ~18-22 km out, so the default 5 km feed is legitimately empty until orders are placed near the origin.",
+    "The groupOrdersRouter is mounted before ordersRouter in app.ts so 'group' is never captured as /orders/:id.",
+    "Full report: work-logs/phase-3/personalization-and-group-orders.md",
+    "Task 16 added 21 events to the catalog (UserArrivedAtRestaurant, WalletCashbackCredited, StreakBadgeUnlocked, SpiceProfileUpdated) and 31 tests; full report: work-logs/phase-3/geo-wallet-retention.md"
+  ]
+}
