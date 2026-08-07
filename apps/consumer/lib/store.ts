@@ -215,10 +215,11 @@ export const useCartStore = create<CartState>((set, get) => ({
       };
     }
 
-    const existing = current.items.find((i) => i.menuItemId === item.menuItemId);
+    const state = get();
+    const existing = state.items.find((i) => i.menuItemId === item.menuItemId);
     if (existing) {
       set({
-        items: current.items.map((i) =>
+        items: state.items.map((i) =>
           i.menuItemId === item.menuItemId
             ? { ...i, quantity: i.quantity + item.quantity }
             : i,
@@ -228,7 +229,7 @@ export const useCartStore = create<CartState>((set, get) => ({
       });
     } else {
       set({
-        items: [...current.items, item],
+        items: [...state.items, item],
         restaurantId: item.restaurantId,
         restaurantName: item.restaurantName ?? current.restaurantName,
       });

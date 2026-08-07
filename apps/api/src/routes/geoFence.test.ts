@@ -28,6 +28,17 @@ function authHeaders(userId?: string) {
   };
 }
 
+function vendorAuthHeaders(userId?: string, role?: string) {
+  return {
+    Authorization: `Bearer ${jwtService.signAccessToken({
+      sub: userId ?? USER_ID,
+      phone: "+919876543210",
+      role: role ?? "VENDOR_OWNER",
+      device_fingerprint: "fp_test_device_abc1234",
+    })}`,
+  };
+}
+
 async function createReadyOrder(app: Express): Promise<string> {
   const orderRes = await request(app)
     .post("/api/v1/orders")
@@ -39,9 +50,9 @@ async function createReadyOrder(app: Express): Promise<string> {
     .expect(201);
   const orderId = orderRes.body.data.id;
   await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
-  await request(app).put(`/api/vendor/orders/${orderId}/status`).expect(200);
-  await request(app).put(`/api/vendor/orders/${orderId}/status`).expect(200);
-  await request(app).put(`/api/vendor/orders/${orderId}/status`).expect(200);
+  await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
+  await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
+  await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
   return orderId;
 }
 

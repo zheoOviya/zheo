@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
+import { jwtService } from "../services/jwt";
 import { resetCatalogRepository } from "./catalog";
 import {
   sharedAuditRepo,
@@ -20,6 +21,18 @@ const GSTIN = "27AABCB1234A1Z5";
 const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001"; // Chicken Biryani 220
 const MENU_ITEM_2 = "b0000000-0000-4000-8000-000000000002"; // Veg Biryani 180
 const UNKNOWN_ID = "00000000-0000-4000-8000-000000000000";
+const USER_ID = "u00000000-0000-4000-8000-000000000001";
+
+function vendorAuthHeaders(userId?: string, role?: string) {
+  return {
+    Authorization: `Bearer ${jwtService.signAccessToken({
+      sub: userId ?? USER_ID,
+      phone: "+919876543210",
+      role: role ?? "VENDOR_OWNER",
+      device_fingerprint: "fp_test_device_abc1234",
+    })}`,
+  };
+}
 
 function seedOrder(
   id: string,
@@ -79,6 +92,7 @@ describe("Vendor Tools suite", () => {
 
     const res = await request(app)
       .get(`/api/vendor/gst-export?month=2026-08&restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .expect(200);
 
     expect(res.headers["content-type"]).toContain("text/csv");
@@ -111,6 +125,7 @@ describe("Vendor Tools suite", () => {
   it("GET /gst-export returns only the header when the month is empty", async () => {
     const res = await request(app)
       .get(`/api/vendor/gst-export?month=2026-01&restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .expect(200);
     expect(res.text.trim()).toBe(
       "Invoice No,GSTIN,Date,Taxable Value,CGST 2.5%,SGST 2.5%",
@@ -120,6 +135,7 @@ describe("Vendor Tools suite", () => {
   it("GET /gst-export rejects an invalid month", async () => {
     const res = await request(app)
       .get(`/api/vendor/gst-export?month=not-a-month&restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .expect(400);
     expect(res.body.error.code).toBe("VALIDATION_ERROR");
   });
@@ -129,6 +145,7 @@ describe("Vendor Tools suite", () => {
   it("POST /promotions creates a promotion and GET lists it as active", async () => {
     const created = await request(app)
       .post("/api/vendor/promotions")
+      .set(vendorAuthHeaders())
       .send({
         title: "Monsoon Special",
         discount_type: "PERCENTAGE",
@@ -143,6 +160,7 @@ describe("Vendor Tools suite", () => {
 
     const list = await request(app)
       .get("/api/vendor/promotions")
+      .set(vendorAuthHeaders())
       .expect(200);
     expect(list.body.data).toHaveLength(1);
     expect(list.body.data[0].title).toBe("Monsoon Special");
@@ -151,15 +169,18 @@ describe("Vendor Tools suite", () => {
   it("GET /promotions excludes expired promotions", async () => {
     await request(app)
       .post("/api/vendor/promotions")
+      .set(vendorAuthHeaders())
       .send({ title: "Expired Deal", discount_type: "FLAT", value: 50, valid_until: "2020-01-01" })
       .expect(201);
     await request(app)
       .post("/api/vendor/promotions")
+      .set(vendorAuthHeaders())
       .send({ title: "Live Deal", discount_type: "FLAT", value: 40, valid_until: "2027-06-30" })
       .expect(201);
 
     const list = await request(app)
       .get("/api/vendor/promotions")
+      .set(vendorAuthHeaders())
       .expect(200);
     expect(list.body.data).toHaveLength(1);
     expect(list.body.data[0].title).toBe("Live Deal");
@@ -168,6 +189,7 @@ describe("Vendor Tools suite", () => {
   it("POST /promotions rejects PERCENTAGE > 100", async () => {
     const res = await request(app)
       .post("/api/vendor/promotions")
+      .set(vendorAuthHeaders())
       .send({ title: "Free-ish", discount_type: "PERCENTAGE", value: 150, valid_until: "2027-01-01" })
       .expect(400);
     expect(res.body.error.code).toBe("VALIDATION_ERROR");
@@ -178,6 +200,7 @@ describe("Vendor Tools suite", () => {
   it("PUT /menu/bulk updates every row in one call", async () => {
     const res = await request(app)
       .put(`/api/vendor/menu/bulk?restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .send({
         items: [
           { item_id: MENU_ITEM_1, price: 240, description: "Weekend biryani special" },
@@ -194,6 +217,7 @@ describe("Vendor Tools suite", () => {
 
     const menu = await request(app)
       .get(`/api/vendor/menu?restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .expect(200);
     const item1 = menu.body.data.find((m: { id: string }) => m.id === MENU_ITEM_1);
     const item2 = menu.body.data.find((m: { id: string }) => m.id === MENU_ITEM_2);
@@ -210,10 +234,12 @@ describe("Vendor Tools suite", () => {
   it("PUT /menu/bulk rolls back all rows when one item_id is invalid", async () => {
     const before = await request(app)
       .get(`/api/vendor/menu?restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .expect(200);
 
     const res = await request(app)
       .put(`/api/vendor/menu/bulk?restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .send({
         items: [
           { item_id: MENU_ITEM_1, price: 999 },
@@ -228,6 +254,7 @@ describe("Vendor Tools suite", () => {
     // Zero rows changed - the valid row before the invalid one was rolled back.
     const after = await request(app)
       .get(`/api/vendor/menu?restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .expect(200);
     expect(after.body.data).toEqual(before.body.data);
 
@@ -238,6 +265,7 @@ describe("Vendor Tools suite", () => {
   it("PUT /menu/bulk rejects a row that belongs to another restaurant", async () => {
     const res = await request(app)
       .put(`/api/vendor/menu/bulk?restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .send({
         items: [
           { item_id: "b0000000-0000-4000-8000-000000000003", price: 300 }, // Green Bowl item

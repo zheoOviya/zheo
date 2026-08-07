@@ -18,6 +18,7 @@ import { AppError } from "../middleware/envelope";
 
 const REST: RestaurantDTO = {
   id: "a0000000-0000-4000-8000-000000000001",
+  owner_id: "e0000000-0000-4000-a000-000000000001",
   name: "Biryani House",
   gst_number: "27AABCB1234A1Z5",
   commission_rate: 0.08,

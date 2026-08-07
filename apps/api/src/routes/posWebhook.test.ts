@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
+import { jwtService } from "../services/jwt";
 import { getCatalogRepository, resetCatalogRepository } from "./catalog";
 import {
   sharedIdentityRepo,
@@ -15,6 +16,18 @@ import {
 // ============================================
 
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
+const USER_ID = "u00000000-0000-4000-8000-000000000001";
+
+function vendorAuthHeaders(userId?: string, role?: string) {
+  return {
+    Authorization: `Bearer ${jwtService.signAccessToken({
+      sub: userId ?? USER_ID,
+      phone: "+919876543210",
+      role: role ?? "VENDOR_OWNER",
+      device_fingerprint: "fp_test_device_abc1234",
+    })}`,
+  };
+}
 
 const POS_ORDER_ID = "pp-order-20260804-001";
 
@@ -50,6 +63,7 @@ describe("Petpooja POS webhook", () => {
     // Every test starts with a synced POS menu so items resolve.
     await request(app)
       .post(`/api/vendor/pos/sync-menu?restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .expect(200);
   });
 
@@ -167,6 +181,7 @@ describe("Petpooja POS webhook", () => {
 
     await request(app)
       .post(`/api/vendor/pos/sync-menu?restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .expect(200);
     const afterSecond = posItems(await repo.getMenuAll(REST_ID));
 
@@ -177,6 +192,7 @@ describe("Petpooja POS webhook", () => {
   it("simulate-order syncs and imports an order end to end", async () => {
     const res = await request(app)
       .post(`/api/vendor/pos/simulate-order?restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .expect(200);
 
     expect(res.body.data.menu_synced).toBe(4);

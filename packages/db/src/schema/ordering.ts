@@ -48,6 +48,7 @@ export const orders = pgTable(
     is_catering: boolean("is_catering").notNull().default(false),
     headcount: integer("headcount"),
     pickup_otp: text("pickup_otp"),
+    scheduled_pickup_time: timestamp("scheduled_pickup_time", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

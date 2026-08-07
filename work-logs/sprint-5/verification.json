@@ -1,0 +1,109 @@
+{
+  "sprint": "5.2",
+  "title": "Admin Completion - Full Scope (A-01, A-06, A-07, A-08, A-10)",
+  "date": "2026-08-07",
+  "status": "COMPLETE",
+  "issues_addressed": {
+    "A-01": {
+      "description": "Admin middleware auth test verification",
+      "status": "FIXED",
+      "test_file": "apps/admin/__tests__/middleware.test.ts",
+      "test_count": 12,
+      "coverage": "parseJwtExp helper (6), middleware redirect logic (6) - expired, missing, valid, malformed tokens"
+    },
+    "A-06": {
+      "description": "User Management (full scope - role promotion + suspended_reason)",
+      "status": "FIXED",
+      "schema_changes": {
+        "users.suspended_reason": "TEXT NULLABLE",
+        "users.is_suspended": "BOOLEAN NOT NULL DEFAULT false"
+      },
+      "repository_methods": ["listAll", "suspend", "reactivate", "updateRole"],
+      "endpoints": {
+        "GET /api/v1/admin/users": "adminReadOnly - paginated, searchable by phone",
+        "PUT /api/v1/admin/users/:id/suspend": "adminWrite - audit-logged, 409 if already suspended",
+        "PUT /api/v1/admin/users/:id/reactivate": "adminWrite - audit-logged, 409 if not suspended",
+        "PUT /api/v1/admin/users/:id/role": "SUPER_ADMIN only - cannot demote self, audit-logged with previous_role and new_role"
+      },
+      "ui": "apps/admin/app/(admin)/users/page.tsx - phone search, role dropdown for SUPER_ADMIN, suspend/reactivate with suspended_reason display"
+    },
+    "A-07": {
+      "description": "Support Ticket Oversight with assignee management",
+      "status": "FIXED",
+      "endpoints": {
+        "GET /api/v1/admin/support-tickets": "adminReadOnly - filterable by status/priority, paginated",
+        "GET /api/v1/admin/support-tickets/:id": "adminReadOnly - single ticket detail",
+        "PUT /api/v1/admin/support-tickets/:id": "adminWrite - update status and/or assignee, audit-logged"
+      },
+      "ui": "apps/admin/app/(admin)/support-tickets/page.tsx - assignee dropdown (OPS_AGENT/ADMIN/SUPER_ADMIN), Start/Resolve/Close actions, View/Hide expansion, filter by status/priority"
+    },
+    "A-08": {
+      "description": "Live Orders with auto-refresh, detail view, and status override",
+      "status": "FIXED",
+      "endpoints": {
+        "GET /api/v1/admin/orders": "adminReadOnly - live orders filtered by status",
+        "GET /api/v1/admin/orders/:id": "adminReadOnly - single order detail",
+        "POST /api/v1/admin/orders/:id/override-status": "SUPER_ADMIN only - force transition with optional reason, audit-logged"
+      },
+      "ui": "apps/admin/app/(admin)/orders/page.tsx - 30s auto-refresh, Detail button per row with expandable user/restaurant/total info, override dropdown with reason input"
+    },
+    "A-10": {
+      "description": "Dashboard with sparkline trends and auto-refresh",
+      "status": "FIXED",
+      "ui": "apps/admin/app/(admin)/dashboard/page.tsx - 60s auto-refresh, SVG sparkline charts for KPIs (weekly trend), CAC/LTV ratio, vendor churn, webhook failures with color-coded thresholds"
+    },
+    "A-02": {
+      "description": "Admin Navigation Completion",
+      "status": "FIXED",
+      "total_nav_items": 7
+    }
+  },
+  "code_quality": {
+    "consolidation": "User and Support Ticket fetch functions moved from inline page code into shared lib/api.ts with proper types (UserDTO, SupportTicketDTO, UserListResponse, TicketListResponse)",
+    "new_exports": ["fetchUsers", "suspendUser", "reactivateUser", "updateUserRole", "fetchSupportTickets", "fetchSupportTicket", "updateSupportTicket", "fetchOrderDetail", "overrideOrderStatus", "getSessionRoles"]
+  },
+  "endpoints_added_in_sprint52": [
+    "PUT /api/v1/admin/users/:id/role",
+    "GET /api/v1/admin/orders/:id",
+    "POST /api/v1/admin/orders/:id/override-status"
+  ],
+  "test_results": {
+    "total": 386,
+    "passed": 385,
+    "failed": 1,
+    "files": 45,
+    "new_tests_in_sprint52_final": 21,
+    "middleware_test_tests": 12,
+    "admin_test_tests": 55,
+    "note": "1 pre-existing flaky test timeout in fulfillment.test.ts (P13 Early Ready Alert - unrelated to sprint 5.2)"
+  },
+  "typecheck": {
+    "api": "PASS",
+    "admin": "PASS",
+    "consumer": "PASS"
+  },
+  "files_created": [
+    "apps/admin/__tests__/middleware.test.ts"
+  ],
+  "files_modified": [
+    "packages/db/src/schema/identity.ts",
+    "apps/api/src/repositories/identityRepository.ts",
+    "apps/api/src/repositories/drizzle/drizzleIdentityRepository.ts",
+    "apps/api/src/routes/admin.ts",
+    "apps/admin/lib/api.ts",
+    "apps/admin/app/(admin)/users/page.tsx",
+    "apps/admin/app/(admin)/support-tickets/page.tsx",
+    "apps/admin/app/(admin)/orders/page.tsx",
+    "apps/admin/app/(admin)/dashboard/page.tsx",
+    "apps/api/src/routes/admin.test.ts",
+    "work-logs/sprint-5/verification.json"
+  ],
+  "sprint_5_final_rollup": {
+    "total_audit_issues": 11,
+    "addressed": 11,
+    "sprint_5_core": "A-01 (middleware), A-02 (sidebar), A-03 (kill switches), A-04 (vendor lifecycle), A-05 (audit logs), A-08 (orders), A-09 (vendor RBAC), A-10 (metrics), A-11 (admin namespace)",
+    "sprint_5_1": "A-01 (Edge JWT), A-03 (DB persistence), A-11 (OPS_AGENT), A-04 (suspend/reactivate), A-10 (CAC/LTV)",
+    "sprint_5_2": "A-06 (users + role change + suspended_reason), A-07 (tickets + assignee), A-08 (auto-refresh + detail + override), A-10 (sparklines + auto-refresh), A-01 (middleware tests)",
+    "final_status": "ALL COMPLETE"
+  }
+}

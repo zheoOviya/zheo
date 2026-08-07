@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import AuthGuard from "../components/AuthGuard";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,9 +13,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" className="light">
       <body className="min-h-screen bg-surface-light font-sans text-neutral-800 antialiased">
-        {children}
+        <AuthGuard>{children}</AuthGuard>
       </body>
     </html>
   );

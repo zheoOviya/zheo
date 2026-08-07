@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
+import { jwtService } from "../services/jwt";
 import { resetCatalogRepository } from "./catalog";
 import { sharedAuditRepo, sharedOrderRepo } from "../repositories/shared";
 import type { OrderDTO, OrderItemDTO } from "../repositories/orderRepository";
@@ -15,6 +16,18 @@ const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const GREEN_BOWL_ID = "a0000000-0000-4000-8000-000000000002";
 const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001"; // Chicken Biryani
 const MENU_ITEM_2 = "b0000000-0000-4000-8000-000000000002"; // Veg Biryani
+const USER_ID = "u00000000-0000-4000-8000-000000000001";
+
+function vendorAuthHeaders(userId?: string, role?: string) {
+  return {
+    Authorization: `Bearer ${jwtService.signAccessToken({
+      sub: userId ?? USER_ID,
+      phone: "+919876543210",
+      role: role ?? "VENDOR_OWNER",
+      device_fingerprint: "fp_test_device_abc1234",
+    })}`,
+  };
+}
 
 /** UTC day helpers so settlement tests stay valid on any run date. */
 function utcDayOffset(daysBack: number): { ymd: string; noonIso: string } {
@@ -91,6 +104,7 @@ describe("Vendor Ops routes", () => {
 
     const res = await request(app)
       .get(`/api/vendor/settlements/summary?restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .expect(200);
 
     expect(res.body.success).toBe(true);
@@ -104,6 +118,7 @@ describe("Vendor Ops routes", () => {
 
     const res = await request(app)
       .put(`/api/vendor/settlements/today?restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .expect(200);
 
     expect(res.headers["content-type"]).toContain("application/pdf");
@@ -120,13 +135,14 @@ describe("Vendor Ops routes", () => {
   });
 
   it("GET /settlements/summary requires restaurant_id", async () => {
-    const res = await request(app).get("/api/vendor/settlements/summary").expect(400);
+    const res = await request(app).get("/api/vendor/settlements/summary").set(vendorAuthHeaders()).expect(400);
     expect(res.body.error.code).toBe("VALIDATION_ERROR");
   });
 
   it("GET /menu lists items including unavailable ones and image_url", async () => {
     const res = await request(app)
       .get(`/api/vendor/menu?restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
       .expect(200);
     expect(res.body.success).toBe(true);
     expect(res.body.data).toHaveLength(2);
@@ -138,6 +154,7 @@ describe("Vendor Ops routes", () => {
     const res = await request(app)
       .put(`/api/vendor/menu/${MENU_ITEM_1}`)
       .send({ price: 240 })
+      .set(vendorAuthHeaders())
       .expect(200);
     expect(res.body.data.price).toBe(240);
 
@@ -153,6 +170,7 @@ describe("Vendor Ops routes", () => {
     const res = await request(app)
       .put(`/api/vendor/menu/${MENU_ITEM_1}`)
       .send({})
+      .set(vendorAuthHeaders())
       .expect(400);
     expect(res.body.error.code).toBe("VALIDATION_ERROR");
   });
@@ -160,6 +178,7 @@ describe("Vendor Ops routes", () => {
   it("POST /menu/:itemId/upload-photo persists a CDN URL and audits it", async () => {
     const res = await request(app)
       .post(`/api/vendor/menu/${MENU_ITEM_1}/upload-photo`)
+      .set(vendorAuthHeaders())
       .attach("photo", Buffer.from("fake-jpeg-bytes"), {
         filename: "biryani.jpg",
         contentType: "image/jpeg",
@@ -170,7 +189,7 @@ describe("Vendor Ops routes", () => {
     const url: string = res.body.data.image_url;
     expect(url).toMatch(/^https:\/\/cdn\.snakzap\.in\/mock\/menu\/a0000000-0000-4000-8000-000000000001\/b0000000-0000-4000-8000-000000000001\/.+\.jpg$/);
 
-    const menu = await request(app).get(`/api/vendor/menu?restaurant_id=${REST_ID}`);
+    const menu = await request(app).get(`/api/vendor/menu?restaurant_id=${REST_ID}`).set(vendorAuthHeaders());
     const item = menu.body.data.find((m: { id: string }) => m.id === MENU_ITEM_1);
     expect(item.image_url).toBe(url);
 
@@ -185,6 +204,7 @@ describe("Vendor Ops routes", () => {
   it("POST upload-photo rejects non-image files", async () => {
     const res = await request(app)
       .post(`/api/vendor/menu/${MENU_ITEM_1}/upload-photo`)
+      .set(vendorAuthHeaders())
       .attach("photo", Buffer.from("text"), {
         filename: "notes.txt",
         contentType: "text/plain",
@@ -197,6 +217,7 @@ describe("Vendor Ops routes", () => {
   it("POST upload-photo returns 404 for an unknown item", async () => {
     const res = await request(app)
       .post("/api/vendor/menu/99999999-0000-4000-8000-000000000099/upload-photo")
+      .set(vendorAuthHeaders())
       .attach("photo", Buffer.from("fake"), {
         filename: "x.png",
         contentType: "image/png",
@@ -209,6 +230,7 @@ describe("Vendor Ops routes", () => {
     await request(app)
       .put(`/api/vendor/menu/${MENU_ITEM_2}`)
       .send({ is_available: false })
+      .set(vendorAuthHeaders())
       .expect(200);
 
     const res = await request(app)

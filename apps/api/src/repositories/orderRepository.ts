@@ -82,6 +82,8 @@ export interface OrderRepository {
     items: Omit<OrderItemDTO, "id">[],
     breakdown: PriceBreakdown,
   ): Promise<OrderDTO | null>;
+  /** A-08 Admin: list all orders for the ops dashboard. */
+  getAll(): Promise<OrderDTO[]>;
 }
 
 export class MemoryOrderRepository implements OrderRepository {
@@ -255,6 +257,10 @@ export class MemoryOrderRepository implements OrderRepository {
     };
     this.orders.set(orderId, updated);
     return updated;
+  }
+
+  async getAll(): Promise<OrderDTO[]> {
+    return Array.from(this.orders.values());
   }
 
   /** Resets the store between tests. */

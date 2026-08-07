@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { CartPersistenceService, CART_TTL_MS } from "./cartPersistence";
 
-// ============================================
-// O09 Cart Persistence (24h inactivity TTL)
-// ============================================
-
 describe("CartPersistenceService", () => {
   beforeEach(() => {});
 
@@ -19,6 +15,7 @@ describe("CartPersistenceService", () => {
     expect(loaded.items).toHaveLength(1);
     expect(loaded.items[0]).toMatchObject({ quantity: 2 });
     expect(loaded.saved_at).toBe("2026-02-01T10:00:00.000Z");
+    expect(loaded.expires_at).toBe("2026-02-02T10:00:00.000Z");
   });
 
   it("returns empty when nothing was saved", async () => {
@@ -27,25 +24,25 @@ describe("CartPersistenceService", () => {
       items: [],
       expired: false,
       saved_at: null,
+      expires_at: null,
       restaurant_id: null,
       restaurant_name: null,
     });
   });
 
-  it("expires a cart after 24h of inactivity", async () => {
+  it("expires a cart after 24h of inactivity, returns expires_at", async () => {
     const base = new Date("2026-02-01T10:00:00Z");
     const service = new CartPersistenceService(undefined, () => base);
     await service.saveCart("u-1", [
       { menu_item_id: "b0000000-0000-4000-8000-000000000001", quantity: 1 },
     ]);
 
-    // Advance the clock just past 24h.
     service.now = () => new Date(base.getTime() + CART_TTL_MS + 1000);
     const loaded = await service.loadCart("u-1");
     expect(loaded.expired).toBe(true);
     expect(loaded.items).toHaveLength(0);
+    expect(loaded.expires_at).toBe("2026-02-02T10:00:00.000Z");
 
-    // The snapshot was deleted - a later read shows a clean empty cart.
     const again = await service.loadCart("u-1");
     expect(again.expired).toBe(false);
     expect(again.items).toHaveLength(0);
@@ -87,6 +84,7 @@ describe("CartPersistenceService", () => {
       items: [],
       expired: false,
       saved_at: null,
+      expires_at: null,
       restaurant_id: null,
       restaurant_name: null,
     });

@@ -1,6 +1,7 @@
 import type { Config } from "tailwindcss";
 
 export const snakZapPreset: Partial<Config> = {
+  darkMode: "class",
   theme: {
     extend: {
       colors: {

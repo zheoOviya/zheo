@@ -25,6 +25,7 @@
     "jsonwebtoken": "^9.0.0",
     "multer": "^2.2.0",
     "pdfkit": "^0.19.1",
+    "pg": "^8.13.0",
     "winston": "^3.17.0",
     "ws": "^8.18.0",
     "zod": "^3.23.0"
@@ -38,6 +39,7 @@
     "@types/multer": "^2.2.0",
     "@types/node": "^22.0.0",
     "@types/pdfkit": "^0.17.6",
+    "@types/pg": "^8.20.4",
     "@types/supertest": "^6.0.2",
     "@types/ws": "^8.5.0",
     "supertest": "^7.0.0",

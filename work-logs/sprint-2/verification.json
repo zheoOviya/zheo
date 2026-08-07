@@ -1,0 +1,105 @@
+{
+  "sprint": "sprint-2",
+  "theme": "checkout-reliability",
+  "completed_at": "2026-08-07T12:00:00Z",
+  "tasks": [
+    {
+      "id": "I-06",
+      "title": "Pickup Slot Selection",
+      "status": "completed",
+      "files": [
+        "packages/db/drizzle/0007_pickup_slots.sql",
+        "packages/db/src/schema/ordering.ts",
+        "packages/db/drizzle/meta/_journal.json",
+        "apps/api/src/repositories/drizzle/drizzleOrderRepository.ts",
+        "apps/api/src/routes/catalog.ts",
+        "apps/consumer/app/checkout/page.tsx"
+      ],
+      "verification": {
+        "typecheck": "pass",
+        "test_count": 5,
+        "test_file": "apps/api/src/routes/pickupSlots.test.ts",
+        "test_names": [
+          "GET /restaurants/:id/pickup-slots returns 15-minute slots",
+          "each slot has correct shape",
+          "returns 404 for inactive restaurant",
+          "returns 400 for invalid date format",
+          "ordered slots are chronological"
+        ],
+        "manual_checklist": [
+          "Pickup slot selector appears on checkout page between summary and Place Order",
+          "Default ASAP (~15 min) radio button selected",
+          "Schedule for later reveals slot grid with 15-min intervals",
+          "Slots with max capacity show as Full with aria-disabled=true",
+          "role=radiogroup with arrow key navigation (up/down/left/right)",
+          "Selected time shown below the grid"
+        ]
+      }
+    },
+    {
+      "id": "I-08",
+      "title": "Cart Expiry Countdown",
+      "status": "completed",
+      "files": [
+        "apps/api/src/services/cartPersistence.ts",
+        "apps/consumer/components/CartDrawer.tsx"
+      ],
+      "verification": {
+        "typecheck": "pass",
+        "test_count": 6,
+        "test_file": "apps/api/src/services/cartPersistence.test.ts",
+        "test_names": [
+          "round-trips a saved cart (with expires_at)",
+          "returns empty when nothing was saved",
+          "expires a cart after 24h of inactivity, returns expires_at",
+          "keeps a cart alive at exactly 24h",
+          "saveCart refreshes the TTL (last write wins)",
+          "deleteCart clears the snapshot"
+        ],
+        "manual_checklist": [
+          "CartDrawer header shows 'Expires in HH:MM' countdown",
+          "Color transitions: teal (>1h), amber (<1h), red pulsing (<10min)",
+          "aria-live=polite announces time remaining",
+          "On expiry: auto-clears cart, closes drawer, shows toast",
+          "Expiry countdown updates every 30s"
+        ]
+      }
+    },
+    {
+      "id": "I-09",
+      "title": "Enhanced Empty States",
+      "status": "completed",
+      "files": [
+        "packages/ui/src/EmptyState.tsx",
+        "packages/ui/index.ts",
+        "apps/consumer/components/CartDrawer.tsx",
+        "apps/consumer/app/checkout/page.tsx",
+        "apps/consumer/app/orders/page.tsx",
+        "apps/consumer/components/MenuItemsList.tsx"
+      ],
+      "verification": {
+        "typecheck": "pass",
+        "test_count": 0,
+        "manual_checklist": [
+          "Empty Cart: Shopping bag icon, Browse Restaurants CTA",
+          "Empty Order History: Clipboard icon, Start your first order text",
+          "Menu Unavailable: Clock icon, Taking a break text",
+          "Search No Results: Search icon, Try different term, Clear Search CTA (can be added)",
+          "All icons aria-hidden=true",
+          "role=status with title as aria-label",
+          "Teal accent background (primary-500/10) on icon container (80x80dp)"
+        ]
+      }
+    }
+  ],
+  "summary": {
+    "total_sprint_tests": 11,
+    "tests_passing": 11,
+    "overall_tests_passing": 311,
+    "overall_test_files": 38,
+    "typecheck": "pass",
+    "files_created": 5,
+    "files_modified": 12,
+    "db_migrations": 1
+  }
+}

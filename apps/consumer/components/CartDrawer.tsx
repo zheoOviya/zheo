@@ -1,15 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore, useCartStore } from "@/lib/store";
 import { createGroupCart } from "@/lib/api";
 import { computePriceBreakdown, formatINR, itemUnitPrice } from "@/lib/pricing";
 import { PriceBreakdown, type BreakdownItem } from "./PriceBreakdown";
+import { EmptyState } from "@snakzap/ui";
+import toast from "react-hot-toast";
 
-// Cart Drawer - slide-up panel showing all items, quantities,
-// and an itemized price breakdown for transparency (O10).
-// Closes on ESC or backdrop tap; locks body scroll while open.
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  const els = Array.from(
+    container.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  );
+  return els;
+}
 
 export function CartDrawer({
   open,
@@ -21,19 +28,122 @@ export function CartDrawer({
   const router = useRouter();
   const { items, restaurantId, removeItem, updateQuantity, clear, hydrateFromServer } =
     useCartStore();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
   const accessToken = useAuthStore((s) => s.accessToken);
   const [groupError, setGroupError] = useState<string | null>(null);
   const [startingGroup, setStartingGroup] = useState(false);
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
+  const [timeLeft, setTimeLeft] = useState<string | null>(null);
   const breakdown = computePriceBreakdown(items);
   const hydratedRef = useRef(false);
+  const expiryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // O09: on first mount, restore the server-persisted cart so a reload
-  // (or another device) never loses the items. Expired carts clear.
+  const fetchCartExpiry = useCallback(async () => {
+    if (!accessToken) return;
+    try {
+      const res = await fetch("/api/v1/cart", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        credentials: "include",
+      });
+      if (!res.ok) return;
+      const body = await res.json();
+      if (body.data?.expires_at) {
+        setExpiresAt(body.data.expires_at);
+      }
+    } catch {
+      // offline / unreachable - countdown is cosmetic
+    }
+  }, [accessToken]);
+
   useEffect(() => {
     if (!accessToken || hydratedRef.current) return;
     hydratedRef.current = true;
     void hydrateFromServer(accessToken);
-  }, [accessToken, hydrateFromServer]);
+    void fetchCartExpiry();
+  }, [accessToken, hydrateFromServer, fetchCartExpiry]);
+
+  useEffect(() => {
+    if (expiryTimerRef.current) {
+      clearInterval(expiryTimerRef.current);
+      expiryTimerRef.current = null;
+    }
+    if (!expiresAt) {
+      setTimeLeft(null);
+      return;
+    }
+
+    const tick = () => {
+      const diff = new Date(expiresAt).getTime() - Date.now();
+      if (diff <= 0) {
+        setTimeLeft("Expired");
+        clear();
+        onClose();
+        toast("Your cart has expired. Items have been removed.", {
+          duration: 5000,
+          style: { background: "#991b1b", color: "#fecaca" },
+        });
+        if (expiryTimerRef.current) clearInterval(expiryTimerRef.current);
+        return;
+      }
+      const hours = Math.floor(diff / 3600000);
+      const minutes = Math.floor((diff % 3600000) / 60000);
+      setTimeLeft(`${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`);
+    };
+
+    tick();
+    expiryTimerRef.current = setInterval(tick, 30000);
+    return () => {
+      if (expiryTimerRef.current) clearInterval(expiryTimerRef.current);
+    };
+  }, [expiresAt, clear, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    triggerRef.current = document.activeElement as HTMLElement;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusable = getFocusableElements(dialogRef.current);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) return;
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    setTimeout(() => {
+      if (dialogRef.current) {
+        const focusable = getFocusableElements(dialogRef.current);
+        const firstEl = focusable[0];
+        if (firstEl) firstEl.focus();
+      }
+    }, 50);
+
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+      triggerRef.current?.focus();
+      triggerRef.current = null;
+    };
+  }, [open, onClose]);
 
   async function handleStartGroupOrder() {
     if (!restaurantId || items.length === 0) return;
@@ -54,20 +164,14 @@ export function CartDrawer({
     }
   }
 
-  // ESC to close + body scroll lock while the drawer is open.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [open, onClose]);
+  function getExpiryColor(): string {
+    if (!expiresAt) return "";
+    const diff = new Date(expiresAt).getTime() - Date.now();
+    const diffMin = diff / 60000;
+    if (diffMin < 10) return "text-red-500 animate-pulse";
+    if (diffMin < 60) return "text-amber-500";
+    return "text-teal-600";
+  }
 
   if (!open) return null;
 
@@ -82,6 +186,7 @@ export function CartDrawer({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Your cart"
@@ -89,9 +194,19 @@ export function CartDrawer({
         className="flex max-h-[85vh] w-full max-w-sm flex-col overflow-auto rounded-t-2xl bg-white shadow-xl"
       >
         <div className="flex items-center justify-between border-b border-primary-500/20 p-4">
-          <h2 className="text-lg font-semibold text-primary-700">
-            Your Cart ({breakdown.itemCount})
-          </h2>
+          <div>
+            <h2 className="text-lg font-semibold text-primary-700">
+              Your Cart ({breakdown.itemCount})
+            </h2>
+            {timeLeft && (
+              <p
+                aria-live="polite"
+                className={`text-xs font-medium ${getExpiryColor()}`}
+              >
+                Expires in {timeLeft}
+              </p>
+            )}
+          </div>
           <button
             type="button"
             onClick={onClose}
@@ -114,9 +229,35 @@ export function CartDrawer({
         </div>
 
         {items.length === 0 ? (
-          <div className="flex-1 p-8 text-center text-sm text-neutral-400">
-            Your cart is empty.
-          </div>
+          <EmptyState
+            icon={
+              <svg
+                aria-hidden="true"
+                className="h-10 w-10 text-primary-500"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M15.75 10.5V6a3.75 3.75 0 10-7.5 0v4.5m11.356-1.993l1.263 12c.07.665-.45 1.243-1.119 1.243H4.25a1.125 1.125 0 01-1.12-1.243l1.264-12A1.125 1.125 0 015.513 7.5h12.974c.576 0 1.059.435 1.119 1.007zM8.625 10.5a.375.375 0 11-.75 0 .375.375 0 01.75 0zm7.5 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"
+                />
+              </svg>
+            }
+            title="Your cart is empty"
+            description="Add items from a restaurant to get started."
+            cta={
+              <button
+                type="button"
+                onClick={() => { onClose(); router.push("/"); }}
+                className="rounded-full bg-primary-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
+              >
+                Browse Restaurants
+              </button>
+            }
+          />
         ) : (
           <div className="space-y-3 p-4">
             {items.map((item) => (

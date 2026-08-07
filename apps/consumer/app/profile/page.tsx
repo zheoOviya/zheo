@@ -5,6 +5,8 @@ import Link from "next/link";
 import AuthGate from "@/components/AuthGate";
 import StampCardProgress from "@/components/StampCardProgress";
 import { useAuthStore } from "@/lib/store";
+import { useTheme } from "@/components/ThemeProvider";
+import { useI18n } from "@/lib/i18n";
 import {
   applyReferral,
   createSupportTicket,
@@ -85,14 +87,14 @@ function SpiceToleranceCard({
   const active = tolerance ?? 0;
 
   return (
-    <section className="rounded-2xl bg-white p-6 shadow-sm">
+    <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-primary-900/40 dark:shadow-primary-900/20">
       <div className="mb-1 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-primary-700">Spice Profile</h2>
-        <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-bold text-red-600">
+        <h2 className="text-lg font-semibold text-primary-700 dark:text-primary-300">Spice Profile</h2>
+        <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-bold text-red-600 dark:bg-red-900/30 dark:text-red-400">
           {tolerance ? SPICE_LABELS[tolerance - 1] : "Not set"}
         </span>
       </div>
-      <p className="mb-4 text-sm text-neutral-500">
+      <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">
         Set your heat tolerance (1-5). Menus will automatically hide dishes
         spicier than this level.
       </p>
@@ -141,38 +143,38 @@ function WalletRewardsSection({
   const badgesEarned = Math.floor(streak.best_streak / 7);
 
   return (
-    <section className="rounded-2xl bg-white p-6 shadow-sm">
+    <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-primary-900/40 dark:shadow-primary-900/20">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-primary-700">
+        <h2 className="text-lg font-semibold text-primary-700 dark:text-primary-300">
           Wallet &amp; Rewards
         </h2>
-        <span className="rounded-full bg-accent-100 px-3 py-1 text-xs font-bold text-accent-700">
+        <span className="rounded-full bg-accent-100 px-3 py-1 text-xs font-bold text-accent-700 dark:bg-accent-900/30 dark:text-accent-400">
           Rs {wallet.balance} available
         </span>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className="rounded-xl bg-surface-light p-4">
-          <p className="text-xs text-neutral-500">Balance</p>
-          <p className="mt-1 text-lg font-bold text-primary-700">
+        <div className="rounded-xl bg-surface-light p-4 dark:bg-primary-800/30">
+          <p className="text-xs text-neutral-500 dark:text-neutral-400">Balance</p>
+          <p className="mt-1 text-lg font-bold text-primary-700 dark:text-primary-300">
             Rs {wallet.balance}
           </p>
         </div>
-        <div className="rounded-xl bg-surface-light p-4">
-          <p className="text-xs text-neutral-500">Total earned</p>
-          <p className="mt-1 text-lg font-bold text-primary-700">
+        <div className="rounded-xl bg-surface-light p-4 dark:bg-primary-800/30">
+          <p className="text-xs text-neutral-500 dark:text-neutral-400">Total earned</p>
+          <p className="mt-1 text-lg font-bold text-primary-700 dark:text-primary-300">
             Rs {wallet.total_earned}
           </p>
         </div>
-        <div className="rounded-xl bg-surface-light p-4">
-          <p className="text-xs text-neutral-500">Current streak</p>
-          <p className="mt-1 text-lg font-bold text-primary-700">
+        <div className="rounded-xl bg-surface-light p-4 dark:bg-primary-800/30">
+          <p className="text-xs text-neutral-500 dark:text-neutral-400">Current streak</p>
+          <p className="mt-1 text-lg font-bold text-primary-700 dark:text-primary-300">
             {streak.current_streak} day{streak.current_streak === 1 ? "" : "s"}
           </p>
         </div>
-        <div className="rounded-xl bg-surface-light p-4">
-          <p className="text-xs text-neutral-500">Next badge</p>
-          <p className="mt-1 text-lg font-bold text-primary-700">
+        <div className="rounded-xl bg-surface-light p-4 dark:bg-primary-800/30">
+          <p className="text-xs text-neutral-500 dark:text-neutral-400">Next badge</p>
+          <p className="mt-1 text-lg font-bold text-primary-700 dark:text-primary-300">
             in {streak.days_to_next_badge} day
             {streak.days_to_next_badge === 1 ? "" : "s"}
           </p>
@@ -202,8 +204,8 @@ function WalletRewardsSection({
         </p>
       )}
 
-      <div className="mt-5 border-t border-neutral-100 pt-4">
-        <p className="mb-2 text-sm font-semibold text-neutral-700">
+      <div className="mt-5 border-t border-neutral-100 pt-4 dark:border-primary-700/30">
+        <p className="mb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-300">
           Cashback history
         </p>
         {wallet.transactions.length === 0 ? (
@@ -287,18 +289,18 @@ function ReferEarnCard({
   }
 
   return (
-    <section className="rounded-2xl bg-white p-6 shadow-sm">
+    <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-primary-900/40 dark:shadow-primary-900/20">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-primary-700">Refer &amp; Earn</h2>
-        <span className="rounded-full bg-accent-100 px-3 py-1 text-xs font-bold text-accent-700">
+        <h2 className="text-lg font-semibold text-primary-700 dark:text-primary-300">Refer &amp; Earn</h2>
+        <span className="rounded-full bg-accent-100 px-3 py-1 text-xs font-bold text-accent-700 dark:bg-accent-900/30 dark:text-accent-400">
           Earn Rs {profile.bonus_amount} per friend
         </span>
       </div>
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm text-neutral-500">Your referral code</p>
-          <p className="mt-1 text-2xl font-bold tracking-widest text-primary-700">
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">Your referral code</p>
+          <p className="mt-1 text-2xl font-bold tracking-widest text-primary-700 dark:text-primary-300">
             {profile.referral_code}
           </p>
         </div>
@@ -313,21 +315,21 @@ function ReferEarnCard({
         </div>
       </div>
 
-      <div className="mt-4 rounded-xl bg-surface-light p-4">
-        <p className="text-sm text-neutral-600">
+      <div className="mt-4 rounded-xl bg-surface-light p-4 dark:bg-primary-800/30">
+        <p className="text-sm text-neutral-600 dark:text-neutral-300">
           Wallet balance:{" "}
-          <span className="font-bold text-primary-700">
+          <span className="font-bold text-primary-700 dark:text-primary-300">
             Rs {profile.balance}
           </span>
-          <span className="text-neutral-400">
+          <span className="text-neutral-400 dark:text-neutral-500">
             {" "}
             &middot; Rs {profile.total_earned} earned
           </span>
         </p>
       </div>
 
-      <div className="mt-5 border-t border-neutral-100 pt-5">
-        <p className="mb-2 text-sm font-medium text-neutral-600">
+      <div className="mt-5 border-t border-neutral-100 pt-5 dark:border-primary-700/30">
+        <p className="mb-2 text-sm font-medium text-neutral-600 dark:text-neutral-300">
           Have a friend&apos;s code? Apply it
         </p>
         <div className="flex gap-2">
@@ -390,9 +392,9 @@ function StampCardsSection({
 
   if (cards.length === 0) {
     return (
-      <section className="rounded-2xl bg-white p-6 text-center shadow-sm">
-        <h2 className="text-lg font-semibold text-primary-700">Stamp Cards</h2>
-        <p className="mt-3 text-sm text-neutral-500">
+      <section className="rounded-2xl bg-white p-6 text-center shadow-sm dark:bg-primary-900/40 dark:shadow-primary-900/20">
+        <h2 className="text-lg font-semibold text-primary-700 dark:text-primary-300">Stamp Cards</h2>
+        <p className="mt-3 text-sm text-neutral-500 dark:text-neutral-400">
           Pick up 10 orders from the same restaurant and unlock a free item.
           Your stamp cards will appear here.
         </p>
@@ -407,8 +409,8 @@ function StampCardsSection({
   }
 
   return (
-    <section className="rounded-2xl bg-white p-6 shadow-sm">
-      <h2 className="mb-4 text-lg font-semibold text-primary-700">Stamp Cards</h2>
+    <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-primary-900/40 dark:shadow-primary-900/20">
+      <h2 className="mb-4 text-lg font-semibold text-primary-700 dark:text-primary-300">Stamp Cards</h2>
       <div className="space-y-4">
         {cards.map((card) => (
           <div key={card.restaurant_id} className="rounded-xl bg-surface-light p-4">
@@ -465,19 +467,19 @@ function VipSupportCard({
   }
 
   return (
-    <section className="overflow-hidden rounded-2xl bg-white shadow-sm">
+    <section className="overflow-hidden rounded-2xl bg-white shadow-sm dark:bg-primary-900/40 dark:shadow-primary-900/20">
       <div
         className={`flex items-center justify-between px-6 py-4 ${
           vip.is_vip
             ? "bg-gradient-to-r from-primary-700 to-primary-500"
-            : "bg-surface-light"
+            : "bg-surface-light dark:bg-primary-800/30"
         }`}
       >
         <div>
-          <h2 className={`text-lg font-semibold ${vip.is_vip ? "text-white" : "text-primary-700"}`}>
+          <h2 className={`text-lg font-semibold ${vip.is_vip ? "text-white" : "text-primary-700 dark:text-primary-300"}`}>
             VIP Customer Support
           </h2>
-          <p className={`text-sm ${vip.is_vip ? "text-primary-100" : "text-neutral-500"}`}>
+          <p className={`text-sm ${vip.is_vip ? "text-primary-100" : "text-neutral-500 dark:text-neutral-400"}`}>
             {vip.is_vip
               ? "You get HIGH-priority support with a dedicated operations agent."
               : "More orders and spend unlock priority support."}
@@ -581,6 +583,8 @@ function VipSupportCard({
 
 function ProfileContent() {
   const accessToken = useAuthStore((s) => s.accessToken);
+  const { theme, toggleTheme } = useTheme();
+  const { locale, setLocale } = useI18n();
   const [profile, setProfile] = useState<ReferralProfile | null>(null);
   const [cards, setCards] = useState<StampCard[]>([]);
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
@@ -623,18 +627,52 @@ function ProfileContent() {
     <main className="mx-auto max-w-5xl px-4 py-6">
       <header className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-primary-700">My Account</h1>
-          <p className="mt-1 text-sm text-neutral-500">
+          <h1 className="text-2xl font-bold text-primary-700 dark:text-primary-300">My Account</h1>
+          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
             Set your spice level, track cashback and streaks, and refer
             friends.
           </p>
         </div>
-        <Link
-          href="/"
-          className="rounded-full border border-primary-500/30 px-4 py-2 text-sm font-medium text-primary-700 hover:bg-surface-light"
-        >
-          Back to Home
-        </Link>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+            className="rounded-full border border-primary-500/30 p-2 text-primary-700 hover:bg-surface-light dark:text-primary-300 dark:hover:bg-primary-900/30"
+          >
+            {theme === "light" ? (
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="5" />
+                <line x1="12" y1="1" x2="12" y2="3" />
+                <line x1="12" y1="21" x2="12" y2="23" />
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                <line x1="1" y1="12" x2="3" y2="12" />
+                <line x1="21" y1="12" x2="23" y2="12" />
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+              </svg>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setLocale(locale === "en" ? "hi" : "en")}
+            aria-label={`Switch language to ${locale === "en" ? "Hindi" : "English"}`}
+            className="rounded-full border border-primary-500/30 px-3 py-1.5 text-xs font-bold text-primary-700 hover:bg-surface-light dark:text-primary-300 dark:hover:bg-primary-900/30 uppercase"
+          >
+            {locale === "en" ? "hi" : "en"}
+          </button>
+          <Link
+            href="/"
+            className="rounded-full border border-primary-500/30 px-4 py-2 text-sm font-medium text-primary-700 hover:bg-surface-light dark:text-primary-300 dark:hover:bg-primary-900/30"
+          >
+            Back to Home
+          </Link>
+        </div>
       </header>
 
       <div className="space-y-6">

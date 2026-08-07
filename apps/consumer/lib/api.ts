@@ -12,6 +12,7 @@ export interface MenuItem {
   restaurant_id: string;
   name: string;
   price: number;
+  image_url: string | null;
   dietary_tags: Record<string, boolean>;
   customizations: unknown[];
   is_available: boolean;

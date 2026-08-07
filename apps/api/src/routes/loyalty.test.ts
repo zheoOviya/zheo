@@ -32,6 +32,17 @@ function auth(userId: string, deviceFp = "fp_test_device_abc1234") {
   };
 }
 
+function vendorAuthHeaders(userId?: string, role?: string) {
+  return {
+    Authorization: `Bearer ${jwtService.signAccessToken({
+      sub: userId ?? "00000000-0000-4000-8000-0000000000a1",
+      phone: "+919876543210",
+      role: role ?? "VENDOR_OWNER",
+      device_fingerprint: "fp_test_device_abc1234",
+    })}`,
+  };
+}
+
 describe("Loyalty routes", () => {
   let app: Express;
 
@@ -167,9 +178,9 @@ describe("Loyalty routes", () => {
       const orderId = orderRes.body.data.id;
       await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
 
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).expect(200);
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).expect(200);
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).expect(200);
+      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
+      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
+      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
 
       const ready = await sharedOrderRepo.getById(orderId);
       await request(app)

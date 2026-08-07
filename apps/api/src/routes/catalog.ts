@@ -79,6 +79,7 @@ const MenuItemResponseSchema = z.object({
   customizations: z.array(z.unknown()),
   is_available: z.boolean(),
   spice_level: z.number().int().min(1).max(5),
+  image_url: z.string().nullable(),
 });
 const SearchResultResponseSchema = z.object({
   type: z.enum(["restaurant", "dish"]),
@@ -95,9 +96,9 @@ const FilterResponseSchema = z.array(MenuItemResponseSchema);
 // Seeded fixture data for the offline/memory repository.
 // lat/lng are the P04 traffic-ETA pickup origins (Mumbai, IN).
 const SEED_RESTAURANTS: RestaurantDTO[] = [
-  { id: "a0000000-0000-4000-8000-000000000001", name: "Biryani House", gst_number: "27AABCB1234A1Z5", commission_rate: 0.08, is_active: true, lat: 19.076, lng: 72.8777 },
-  { id: "a0000000-0000-4000-8000-000000000002", name: "Green Bowl", gst_number: "27AACCG5678B1Z3", commission_rate: 0.08, is_active: true, lat: 19.1136, lng: 72.8697 },
-  { id: "a0000000-0000-4000-8000-000000000003", name: "Closed Kitchen", gst_number: "27AADDH9012C1Z7", commission_rate: 0.05, is_active: false, lat: 18.9647, lng: 72.8258 },
+  { id: "a0000000-0000-4000-8000-000000000001", name: "Biryani House", gst_number: "27AABCB1234A1Z5", owner_id: "e0000000-0000-4000-a000-000000000001", commission_rate: 0.08, is_active: true, lat: 19.076, lng: 72.8777 },
+  { id: "a0000000-0000-4000-8000-000000000002", name: "Green Bowl", gst_number: "27AACCG5678B1Z3", owner_id: "e0000000-0000-4000-a000-000000000002", commission_rate: 0.08, is_active: true, lat: 19.1136, lng: 72.8697 },
+  { id: "a0000000-0000-4000-8000-000000000003", name: "Closed Kitchen", gst_number: "27AADDH9012C1Z7", owner_id: "e0000000-0000-4000-a000-000000000003", commission_rate: 0.05, is_active: false, lat: 18.9647, lng: 72.8258 },
 ];
 
 const SEED_MENU: MenuItemDTO[] = [
@@ -109,7 +110,7 @@ const SEED_MENU: MenuItemDTO[] = [
     description: "Hyderabadi-style chicken biryani with saffron rice.",
     dietary_tags: { NON_VEG: true },
     customizations: [],
-    image_url: null,
+    image_url: "https://picsum.photos/seed/chicken-biryani/400/300",
     pos_item_id: null,
     spice_level: 5,
     is_available: true,
@@ -122,7 +123,7 @@ const SEED_MENU: MenuItemDTO[] = [
     description: "Seasonal vegetables slow-cooked with basmati rice.",
     dietary_tags: { VEG: true, JAIN: true },
     customizations: [],
-    image_url: null,
+    image_url: "https://picsum.photos/seed/veg-biryani/400/300",
     pos_item_id: null,
     spice_level: 2,
     is_available: true,
@@ -135,7 +136,7 @@ const SEED_MENU: MenuItemDTO[] = [
     description: "Paneer tikka wrapped in a warm whole-wheat roti.",
     dietary_tags: { VEG: true },
     customizations: [],
-    image_url: null,
+    image_url: "https://picsum.photos/seed/paneer-wrap/400/300",
     pos_item_id: null,
     spice_level: 1,
     is_available: true,
@@ -148,7 +149,7 @@ const SEED_MENU: MenuItemDTO[] = [
     description: "Halal chicken shawarma with garlic sauce.",
     dietary_tags: { HALAL: true, NON_VEG: true },
     customizations: [],
-    image_url: null,
+    image_url: "https://picsum.photos/seed/halal-shawarma/400/300",
     pos_item_id: null,
     spice_level: 3,
     is_available: true,
@@ -161,7 +162,7 @@ const SEED_MENU: MenuItemDTO[] = [
     description: null,
     dietary_tags: { VEG: true },
     customizations: [],
-    image_url: null,
+    image_url: "https://picsum.photos/seed/unavailable-dish/400/300",
     pos_item_id: null,
     spice_level: 1,
     is_available: false,
@@ -232,6 +233,61 @@ catalogRouter.get(
       correlation_id: res.locals.correlationId,
     });
     ok(res, filtered);
+  }),
+);
+
+const PickupSlotsQuerySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
+});
+
+function generatePickupSlots(forDate: string) {
+  const slots: Array<{
+    time: string;
+    label: string;
+    available: boolean;
+    current_orders: number;
+    max_capacity: number;
+  }> = [];
+  const today = new Date().toISOString().slice(0, 10);
+  const startHour = forDate === today ? Math.max(new Date().getHours() + 1, 8) : 8;
+  const endHour = 23;
+
+  for (let hour = startHour; hour < endHour; hour++) {
+    for (const minute of [0, 15, 30, 45]) {
+      const t = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+      const currentOrders = Math.floor(Math.random() * 6);
+      slots.push({
+        time: t,
+        label: t,
+        available: currentOrders < 10,
+        current_orders: currentOrders,
+        max_capacity: 10,
+      });
+    }
+  }
+  return slots;
+}
+
+catalogRouter.get(
+  "/restaurants/:id/pickup-slots",
+  asyncHandler(async (req, res) => {
+    const params = MenuParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      throw new AppError("VALIDATION_ERROR", "Invalid restaurant id", 400, params.error.flatten());
+    }
+    const query = PickupSlotsQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      throw new AppError("VALIDATION_ERROR", "Invalid date", 400, query.error.flatten());
+    }
+
+    const repo = getCatalogRepository();
+    const restaurant = await repo.getRestaurantById(params.data.id);
+    if (!restaurant || !restaurant.is_active) {
+      throw new AppError("RESTAURANT_NOT_FOUND", "Restaurant not found or inactive", 404);
+    }
+
+    const slots = generatePickupSlots(query.data.date);
+    ok(res, { restaurant_id: params.data.id, date: query.data.date, slots });
   }),
 );
 

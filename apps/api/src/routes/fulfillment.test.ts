@@ -22,6 +22,17 @@ function authHeaders(userId?: string) {
   };
 }
 
+function vendorAuthHeaders(userId?: string, role?: string) {
+  return {
+    Authorization: `Bearer ${jwtService.signAccessToken({
+      sub: userId ?? USER_ID,
+      phone: "+919876543210",
+      role: role ?? "VENDOR_OWNER",
+      device_fingerprint: "fp_test_device_abc1234",
+    })}`,
+  };
+}
+
 async function createConfirmedOrder(app: Express): Promise<{ orderId: string; otp: string; qrToken: string }> {
   // Create order
   const orderRes = await request(app)
@@ -40,17 +51,20 @@ async function createConfirmedOrder(app: Express): Promise<{ orderId: string; ot
   await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
 
   // Advance through state machine to READY_FOR_PICKUP
-  await request(app)
-    .put(`/api/vendor/orders/${orderId}/status`)
-    .expect(200); // CONFIRMED -> PREPARING (generates OTP/QR)
+      await request(app)
+        .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
+        .expect(200); // CONFIRMED -> PREPARING (generates OTP/QR)
 
-  await request(app)
-    .put(`/api/vendor/orders/${orderId}/status`)
-    .expect(200); // PREPARING -> ALMOST_READY
+      await request(app)
+        .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
+        .expect(200); // PREPARING -> ALMOST_READY
 
-  await request(app)
-    .put(`/api/vendor/orders/${orderId}/status`)
-    .expect(200); // ALMOST_READY -> READY_FOR_PICKUP
+      await request(app)
+        .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
+        .expect(200); // ALMOST_READY -> READY_FOR_PICKUP
 
   const finalOrder = await sharedOrderRepo.getById(orderId);
   return {
@@ -87,6 +101,7 @@ describe("Fulfillment routes", () => {
 
       const res = await request(app)
         .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
         .expect(200);
 
       expect(res.body.data.status).toBe("PREPARING");
@@ -116,6 +131,7 @@ describe("Fulfillment routes", () => {
       // Skip PREPARING: advance once to PREPARING
       await request(app)
         .put(`/api/vendor/orders/${orderRes.body.data.id}/status`)
+        .set(vendorAuthHeaders())
         .expect(200); // CONFIRMED -> PREPARING
 
       // Now trying to skip ALMOST_READY should fail because next allowed is ALMOST_READY only
@@ -135,6 +151,7 @@ describe("Fulfillment routes", () => {
       // First advance is CONFIRMED -> PREPARING (allowed)
       const ok1 = await request(app)
         .put(`/api/vendor/orders/${order2.body.data.id}/status`)
+        .set(vendorAuthHeaders())
         .expect(200);
       expect(ok1.body.data.status).toBe("PREPARING");
 
@@ -145,6 +162,7 @@ describe("Fulfillment routes", () => {
       // This advances to ALMOST_READY, not READY_FOR_PICKUP
       const res2 = await request(app)
         .put(`/api/vendor/orders/${order2.body.data.id}/status`)
+        .set(vendorAuthHeaders())
         .expect(200);
       expect(res2.body.data.status).toBe("ALMOST_READY");
     });
@@ -159,6 +177,7 @@ describe("Fulfillment routes", () => {
 
       const res = await request(app)
         .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
         .expect(400);
 
       expect(res.body.error.code).toBe("INVALID_TRANSITION");
@@ -167,6 +186,7 @@ describe("Fulfillment routes", () => {
     it("returns 404 for nonexistent order", async () => {
       const res = await request(app)
         .put("/api/vendor/orders/00000000-0000-4000-8000-000000000099/status")
+        .set(vendorAuthHeaders())
         .expect(404);
 
       expect(res.body.error.code).toBe("ORDER_NOT_FOUND");
@@ -336,11 +356,12 @@ describe("Fulfillment routes", () => {
 
       const orderId = orderRes.body.data.id;
       await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).expect(200);
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).expect(200);
+      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
+      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
 
       const res = await request(app)
         .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
         .expect(200);
 
       expect(res.body.data.status).toBe("READY_FOR_PICKUP");
@@ -368,11 +389,12 @@ describe("Fulfillment routes", () => {
 
       const orderId = orderRes.body.data.id;
       await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).expect(200);
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).expect(200);
+      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
+      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
 
       const res = await request(app)
         .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
         .expect(200);
 
       expect(res.body.data.early_ready_alerted).toBe(false);
@@ -393,11 +415,12 @@ describe("Fulfillment routes", () => {
 
       const orderId = orderRes.body.data.id;
       await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).expect(200);
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).expect(200);
+      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
+      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
 
       const res = await request(app)
         .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
         .expect(200);
 
       expect(res.body.data.early_ready_alerted).toBe(false);
@@ -419,6 +442,7 @@ describe("Fulfillment routes", () => {
 
       const res = await request(app)
         .get(`/api/vendor/orders?restaurant_id=${REST_ID}`)
+        .set(vendorAuthHeaders())
         .expect(200);
 
       expect(res.body.data).toHaveLength(1);

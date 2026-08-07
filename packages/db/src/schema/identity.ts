@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -27,6 +28,8 @@ export const users = pgTable(
     phone: text("phone").notNull(),
     spice_tolerance: integer("spice_tolerance").notNull().default(3),
     role: userRoleEnum("role").notNull().default("CONSUMER"),
+    is_suspended: boolean("is_suspended").notNull().default(false),
+    suspended_reason: text("suspended_reason"),
     created_at: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

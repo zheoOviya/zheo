@@ -1,12 +1,21 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import AuthGate from "@/components/AuthGate";
-import { OrderTracker } from "@/components/OrderTracker";
-import { QrCode } from "@/components/QrCode";
 import StampCardProgress from "@/components/StampCardProgress";
 import { useAuthStore } from "@/lib/store";
+
+const OrderTracker = dynamic(
+  () => import("@/components/OrderTracker").then((m) => ({ default: m.OrderTracker })),
+  { ssr: false, loading: () => <div className="h-16 animate-skeleton-teal rounded-xl bg-primary-200" /> },
+);
+
+const QrCode = dynamic(
+  () => import("@/components/QrCode").then((m) => ({ default: m.QrCode })),
+  { ssr: false, loading: () => <div className="h-40 animate-skeleton-teal rounded-xl bg-primary-200" /> },
+);
 import {
   fetchRestaurants,
   fetchStampCard,

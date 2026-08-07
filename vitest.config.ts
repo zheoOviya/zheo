@@ -1,6 +1,15 @@
 import { defineConfig } from "vitest/config";
+import path from "path";
 
 export default defineConfig({
+  esbuild: {
+    jsx: "automatic",
+  },
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "apps/consumer"),
+    },
+  },
   test: {
     include: ["apps/**/*.test.ts", "packages/**/*.test.ts"],
     // Consumer RTL suites run under apps/consumer/vitest.config.ts (jsdom).

@@ -15,6 +15,48 @@
       "when": 1785892365032,
       "tag": "0001_overconfident_starjammers",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790000000000,
+      "tag": "0002_vendor_ops",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790000001000,
+      "tag": "0003_pos_sync",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790000002000,
+      "tag": "0004_vendor_tools",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790000003000,
+      "tag": "0005_loyalty_eta",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790000004000,
+      "tag": "0006_chain_catering",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792550000000,
+      "tag": "0007_pickup_slots",
+      "breakpoints": true
     }
   ]
 }

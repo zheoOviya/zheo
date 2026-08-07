@@ -27,6 +27,8 @@ import { supportRouter } from "./routes/support";
 import { registerLoyaltyEventHandlers } from "./services/loyalty";
 import { registerRetentionEventHandlers } from "./services/retention";
 import { metrics, metricsRouter } from "./routes/metrics";
+import { adminRouter } from "./routes/admin";
+import { requireRole } from "./middleware/requireRoles";
 
 // EOS Layer 1 wiring: loyalty + retention contexts subscribe to
 // OrderPickedUp so stamp cards fill themselves, wallet cashback is
@@ -98,9 +100,11 @@ export function createApp(): Express {
   app.use(API_PREFIX, etaRouter);
   app.use(API_PREFIX, usersRouter);
   app.use(`${API_PREFIX}/webhooks/pos`, posWebhookRouter);
-  app.use("/api/vendor", vendorRouter);
-  app.use("/api/vendor", vendorOpsRouter);
+  // A-01: Vendor routes gated behind VENDOR/ADMIN role.
+  app.use("/api/vendor", requireRole("VENDOR_OWNER", "VENDOR_STAFF", "ADMIN", "SUPER_ADMIN"), vendorRouter);
+  app.use("/api/vendor", requireRole("VENDOR_OWNER", "VENDOR_STAFF", "ADMIN", "SUPER_ADMIN"), vendorOpsRouter);
   app.use("/api/vendor", chainsRouter);
+  app.use(`${API_PREFIX}/admin`, adminRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

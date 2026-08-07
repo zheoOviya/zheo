@@ -36,6 +36,7 @@ export interface CartLoadResult {
   items: CartItemInput[];
   expired: boolean;
   saved_at: string | null;
+  expires_at: string | null;
   restaurant_id: string | null;
   restaurant_name: string | null;
 }
@@ -86,25 +87,27 @@ export class CartPersistenceService {
    */
   async loadCart(userId: string): Promise<CartLoadResult> {
     const raw = await this.redis.get(this.keyOf(userId));
-    if (!raw) return { items: [], expired: false, saved_at: null, restaurant_id: null, restaurant_name: null };
+    if (!raw) return { items: [], expired: false, saved_at: null, expires_at: null, restaurant_id: null, restaurant_name: null };
 
     let snapshot: CartSnapshot;
     try {
       snapshot = JSON.parse(raw) as CartSnapshot;
     } catch {
       await this.redis.del(this.keyOf(userId));
-      return { items: [], expired: false, saved_at: null, restaurant_id: null, restaurant_name: null };
+      return { items: [], expired: false, saved_at: null, expires_at: null, restaurant_id: null, restaurant_name: null };
     }
 
     const ageMs = this.now().getTime() - Date.parse(snapshot.saved_at);
+    const expiresAt = new Date(Date.parse(snapshot.saved_at) + CART_TTL_MS).toISOString();
     if (ageMs > CART_TTL_MS) {
       await this.redis.del(this.keyOf(userId));
-      return { items: [], expired: true, saved_at: snapshot.saved_at, restaurant_id: null, restaurant_name: null };
+      return { items: [], expired: true, saved_at: snapshot.saved_at, expires_at: expiresAt, restaurant_id: null, restaurant_name: null };
     }
     return {
       items: snapshot.items,
       expired: false,
       saved_at: snapshot.saved_at,
+      expires_at: expiresAt,
       restaurant_id: snapshot.restaurant_id ?? null,
       restaurant_name: snapshot.restaurant_name ?? null,
     };

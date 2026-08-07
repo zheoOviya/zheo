@@ -46,6 +46,62 @@ const orderingService = new OrderingService(sharedOrderRepo, getCatalogRepositor
 
 export const ordersRouter: Router = Router();
 
+const ListOrdersQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+  cursor: z.string().optional(),
+});
+
+ordersRouter.get(
+  "/",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const query = ListOrdersQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      throw new AppError("VALIDATION_ERROR", "Invalid query params", 400, query.error.flatten());
+    }
+
+    const userId = res.locals.userId as string;
+    if (!userId) {
+      throw new AppError("UNAUTHORIZED", "User identity missing from token", 401);
+    }
+
+    const { limit, cursor } = query.data;
+
+    const allOrders = await sharedOrderRepo.getByUser(userId);
+
+    const startIndex = cursor
+      ? allOrders.findIndex((o) => o.created_at < cursor)
+      : 0;
+
+    if (startIndex === -1) {
+      ok(res, { orders: [], next_cursor: null });
+      return;
+    }
+
+    const page = allOrders.slice(startIndex, startIndex + limit);
+    const lastOrder = page[page.length - 1];
+    const nextCursor = page.length === limit && startIndex + limit < allOrders.length && lastOrder
+      ? lastOrder.created_at
+      : null;
+
+    ok(res, {
+      orders: page.map((o) => ({
+        id: o.id,
+        restaurant_id: o.restaurant_id,
+        status: o.status,
+        total_amount: o.total_amount,
+        items: o.items.map((i) => ({
+          name: i.name,
+          quantity: i.quantity,
+          base_price: i.base_price,
+        })),
+        created_at: o.created_at,
+      })),
+      next_cursor: nextCursor,
+    });
+  }),
+);
+
 ordersRouter.get(
   "/",
   authenticate,

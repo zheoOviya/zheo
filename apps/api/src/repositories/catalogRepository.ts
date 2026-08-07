@@ -15,6 +15,7 @@ export interface RestaurantDTO {
   id: string;
   name: string;
   gst_number: string | null;
+  owner_id: string;
   commission_rate: number;
   is_active: boolean;
   /** P04 traffic ETA uses the restaurant location as the pickup origin. */
@@ -101,6 +102,10 @@ export interface CatalogRepository {
     restaurantId: string,
     items: PosMenuInput[],
   ): Promise<MenuItemDTO[]>;
+  /** A-04 Admin: list all restaurants (active and inactive). */
+  getAllRestaurants(): Promise<RestaurantDTO[]>;
+  /** A-04 Admin: toggle restaurant active status. */
+  updateRestaurantStatus(id: string, isActive: boolean): Promise<RestaurantDTO | null>;
 }
 
 // Allowed dietary tags (validated upstream via Zod enum)
@@ -125,23 +130,7 @@ export function dietaryFilterCondition(tags: string[]): SQL<unknown> {
 // Drizzle implementation (production, Postgres 16)
 // ============================================
 
-export type DrizzleDb = {
-  select: () => {
-    from: (table: unknown) => {
-      where: (cond: SQL<unknown> | undefined) => Promise<unknown[]>;
-    };
-  };
-  update: (table: unknown) => {
-    set: (values: Record<string, unknown>) => {
-      where: (cond: SQL<unknown> | undefined) => Promise<unknown[]>;
-    };
-  };
-  insert: (table: unknown) => {
-    values: (values: Record<string, unknown>) => Promise<unknown[]>;
-  };
-  /** Postgres transaction scope for the V14 atomic bulk update. */
-  transaction: <T>(fn: (tx: DrizzleDb) => Promise<T>) => Promise<T>;
-};
+import type { DrizzleDb } from "../lib/dbType";
 
 export class DrizzleCatalogRepository implements CatalogRepository {
   constructor(private readonly db: DrizzleDb) {}
@@ -155,6 +144,7 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       id: r.id,
       name: r.name,
       gst_number: r.gst_number ?? null,
+      owner_id: r.owner_id,
       commission_rate: Number(r.commission_rate),
       is_active: r.is_active,
       lat: r.lat ?? null,
@@ -173,6 +163,7 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       id: r.id,
       name: r.name,
       gst_number: r.gst_number ?? null,
+      owner_id: r.owner_id,
       commission_rate: Number(r.commission_rate),
       is_active: r.is_active,
       lat: r.lat ?? null,
@@ -410,6 +401,31 @@ export class DrizzleCatalogRepository implements CatalogRepository {
     }
     return upserted;
   }
+
+  async getAllRestaurants(): Promise<RestaurantDTO[]> {
+    const rows = (await this.db
+      .select()
+      .from(restaurants)
+      .where(undefined!)) as RestaurantDTO[];
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      gst_number: r.gst_number ?? null,
+      owner_id: r.owner_id,
+      commission_rate: Number(r.commission_rate),
+      is_active: r.is_active,
+      lat: r.lat ?? null,
+      lng: r.lng ?? null,
+    }));
+  }
+
+  async updateRestaurantStatus(id: string, isActive: boolean): Promise<RestaurantDTO | null> {
+    await this.db
+      .update(restaurants)
+      .set({ is_active: isActive })
+      .where(eq(restaurants.id, id));
+    return this.getRestaurantById(id);
+  }
 }
 
 // ============================================
@@ -581,5 +597,16 @@ export class MemoryCatalogRepository implements CatalogRepository {
       }
     }
     return upserted;
+  }
+
+  async getAllRestaurants(): Promise<RestaurantDTO[]> {
+    return [...this.restaurantsData];
+  }
+
+  async updateRestaurantStatus(id: string, isActive: boolean): Promise<RestaurantDTO | null> {
+    const rest = this.restaurantsData.find((x: RestaurantDTO) => x.id === id);
+    if (!rest) return null;
+    rest.is_active = isActive;
+    return { ...rest };
   }
 }
