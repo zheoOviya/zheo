@@ -8,6 +8,10 @@
     outline-style: solid;
   }
 
+  body {
+    @apply bg-surface-light text-neutral-800 antialiased;
+  }
+
   .dark body {
     @apply bg-surface-dark text-neutral-200;
   }
@@ -35,5 +39,18 @@
     width: auto;
     height: auto;
     clip: auto;
+  }
+
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 }

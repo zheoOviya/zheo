@@ -14,6 +14,7 @@
     "@snakzap/config": "workspace:*",
     "@snakzap/types": "workspace:*",
     "@snakzap/ui": "workspace:*",
+    "framer-motion": "^13.0.0",
     "next": "^15.1.0",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",

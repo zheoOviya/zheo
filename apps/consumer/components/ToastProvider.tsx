@@ -1,6 +1,7 @@
 "use client";
 
 import { Toaster, toast } from "react-hot-toast";
+import type { Toast as ToastType } from "react-hot-toast";
 import { useEffect, useRef } from "react";
 import { useCartStore, type CartItem } from "@/lib/store";
 
@@ -22,7 +23,7 @@ function CartToastListener() {
       ) {
         const oldItems = [...prevState.items];
         toast(
-          (t) => (
+          (t: ToastType) => (
             <div className="flex items-center gap-3">
               <p className="text-sm">
                 Cart cleared &mdash; you switched restaurants.

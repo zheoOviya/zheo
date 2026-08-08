@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import VendorNav from "@/components/VendorNav";
+import { VendorLayoutClient } from "@/components/VendorLayoutClient";
 
 export const metadata: Metadata = {
-  title: "SnakZap Vendor - Kitchen Dashboard",
-  description: "Real-time order management, settlements and menu for restaurant staff.",
+  title: "SnakZap Kitchen - Dashboard",
+  description: "Real-time order management for restaurant staff.",
 };
 
 export default function RootLayout({
@@ -13,10 +13,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen font-sans antialiased">
-        <VendorNav />
-        {children}
+    <html lang="en" className="dark">
+      <body className="min-h-screen bg-neutral-950 font-sans antialiased">
+        <VendorLayoutClient>{children}</VendorLayoutClient>
       </body>
     </html>
   );

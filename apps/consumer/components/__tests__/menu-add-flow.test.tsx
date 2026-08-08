@@ -15,6 +15,7 @@ const GREEN_BOWL_ITEMS: MenuItem[] = [
     restaurant_id: "restB",
     name: "Veg Bowl",
     price: 220,
+    image_url: null,
     dietary_tags: { VEG: true },
     customizations: [],
     is_available: true,

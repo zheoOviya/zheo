@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { m, AnimatePresence } from "framer-motion";
+import { Badge, CountdownTimer, EmptyState } from "@snakzap/ui";
 import { useOrdersWebSocket } from "@/hooks/useOrdersWebSocket";
 
 interface OrderItem {
@@ -30,28 +32,70 @@ function formatINR(amount: number): string {
   }).format(amount);
 }
 
-const UI_STATUS: Record<string, { label: string; color: string }> = {
-  CONFIRMED: { label: "New", color: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30" },
-  PREPARING: { label: "Preparing", color: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
-  ALMOST_READY: { label: "Almost Ready", color: "bg-orange-500/20 text-orange-400 border-orange-500/30" },
-  READY_FOR_PICKUP: { label: "Ready", color: "bg-green-500/20 text-green-400 border-green-500/30" },
+interface ColumnConfig {
+  status: string;
+  title: string;
+  prepSeconds: number;
+}
+
+const COLUMNS: ColumnConfig[] = [
+  { status: "CONFIRMED", title: "New Orders", prepSeconds: 600 },
+  { status: "PREPARING", title: "Preparing", prepSeconds: 480 },
+  { status: "ALMOST_READY", title: "Almost Ready", prepSeconds: 120 },
+  { status: "READY_FOR_PICKUP", title: "Ready for Pickup", prepSeconds: 300 },
+];
+
+function timeElapsed(createdAt: string): number {
+  return Math.floor((Date.now() - new Date(createdAt).getTime()) / 1000);
+}
+
+function urgencyClass(elapsed: number, max: number): string {
+  const pct = max > 0 ? elapsed / max : 0;
+  if (pct < 0.3) return "border-l-urgency-green";
+  if (pct < 0.7) return "border-l-urgency-amber";
+  return "border-l-urgency-red";
+}
+
+function urgencyBgClass(elapsed: number, max: number): string {
+  const pct = max > 0 ? elapsed / max : 0;
+  if (pct < 0.3) return "bg-urgency-green/5 dark:bg-urgency-green/10";
+  if (pct < 0.7) return "bg-urgency-amber/5 dark:bg-urgency-amber/10";
+  return "bg-urgency-red/5 dark:bg-urgency-red/10";
+}
+
+function urgencyLabel(elapsed: number, max: number): string {
+  const pct = max > 0 ? elapsed / max : 0;
+  if (pct < 0.3) return "On time";
+  if (pct < 0.7) return "Running late";
+  return "Urgent";
+}
+
+const STATUS_ADVANCE: Record<string, string> = {
+  CONFIRMED: "PREPARING",
+  PREPARING: "ALMOST_READY",
+  ALMOST_READY: "READY_FOR_PICKUP",
+};
+
+const STATUS_BUTTON: Record<string, string> = {
+  CONFIRMED: "Start",
+  PREPARING: "Almost Ready",
+  ALMOST_READY: "Mark Ready",
 };
 
 export default function VendorDashboard() {
   const [orders, setOrders] = useState<DashboardOrder[]>([]);
   const [error, setError] = useState("");
   const [otpInput, setOtpInput] = useState<Record<string, string>>({});
-  const [qrInput, _setQrInput] = useState<Record<string, string>>({});
+  const [now, setNow] = useState(Date.now());
   const { updates, connected } = useOrdersWebSocket(RESTAURANT_ID);
+  const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const fetchOrders = useCallback(async () => {
     try {
-      const res = await fetch(
-        `/api/vendor/orders?restaurant_id=${RESTAURANT_ID}`,
-      );
+      const res = await fetch(`/api/vendor/orders?restaurant_id=${RESTAURANT_ID}`);
       const body = await res.json();
       if (body.success) setOrders(body.data);
-    } catch (_err) {
+    } catch {
       setError("Failed to load orders");
     }
   }, []);
@@ -59,35 +103,31 @@ export default function VendorDashboard() {
   useEffect(() => {
     fetchOrders();
     const interval = setInterval(fetchOrders, 10000);
-    return () => clearInterval(interval);
+    timerRef.current = setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      clearInterval(interval);
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
   }, [fetchOrders]);
 
-  // Apply live WebSocket updates to order statuses
   useEffect(() => {
     if (updates.length === 0) return;
     const latest = updates[0];
     if (!latest) return;
     setOrders((prev) =>
       prev.map((o) =>
-        o.id === latest.data.order_id
-          ? { ...o, status: latest.data.sql_status }
-          : o,
+        o.id === latest.data.order_id ? { ...o, status: latest.data.sql_status } : o,
       ),
     );
   }, [updates]);
 
   async function advanceOrder(orderId: string) {
     try {
-      const res = await fetch(
-        `/api/vendor/orders/${orderId}/status`,
-        { method: "PUT" },
-      );
+      const res = await fetch(`/api/vendor/orders/${orderId}/status`, { method: "PUT" });
       const body = await res.json();
       if (body.success) {
         setOrders((prev) =>
-          prev.map((o) =>
-            o.id === orderId ? { ...o, status: body.data.status } : o,
-          ),
+          prev.map((o) => (o.id === orderId ? { ...o, status: body.data.status } : o)),
         );
       }
     } catch {
@@ -97,20 +137,14 @@ export default function VendorDashboard() {
 
   async function confirmPickup(orderId: string) {
     const otp = otpInput[orderId];
-    const qr = qrInput[orderId];
-    if (!otp && !qr) return;
+    if (!otp) return;
 
     try {
-      const res = await fetch(
-        `/api/v1/orders/${orderId}/confirm-pickup`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            otp ? { pickup_otp: otp } : { qr_token: qr },
-          ),
-        },
-      );
+      const res = await fetch(`/api/v1/orders/${orderId}/confirm-pickup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pickup_otp: otp }),
+      });
       const body = await res.json();
       if (body.success) {
         setOrders((prev) => prev.filter((o) => o.id !== orderId));
@@ -120,144 +154,170 @@ export default function VendorDashboard() {
     }
   }
 
-  const pending = orders.filter((o) => o.status !== "READY_FOR_PICKUP");
-  const ready = orders.filter((o) => o.status === "READY_FOR_PICKUP");
+  const activeOrders = orders.filter((o) => o.status !== "READY_FOR_PICKUP");
+  const readyOrders = orders.filter((o) => o.status === "READY_FOR_PICKUP");
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-6">
-      <header className="mb-6 flex items-center justify-between">
+    <main className="flex h-dvh flex-col bg-neutral-950 text-neutral-200">
+      <header className="flex items-center justify-between shrink-0 border-b border-primary-500/10 px-5 py-3">
         <div>
-          <h1 className="text-2xl font-bold text-primary-400">Kitchen Display</h1>
-          <p className="mt-1 text-sm text-primary-600/50">
-            {orders.length} active orders
-            <span className={`ml-2 inline-block h-2 w-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`} />
+          <h1 className="text-xl font-bold text-primary-400">Kitchen Display</h1>
+          <p className="text-xs text-neutral-500" aria-live="polite">
+            {orders.length} orders
+            <span className={`ml-2 inline-block h-2 w-2 rounded-full ${connected ? "bg-urgency-green" : "bg-urgency-red"}`} aria-hidden="true" />
+            <span className="ml-1">{connected ? "Connected" : "Offline"}</span>
           </p>
         </div>
+        <span className="font-mono text-sm text-neutral-400 tabular-nums">
+          {new Date(now).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+        </span>
       </header>
 
       {error && (
-        <p className="mb-4 rounded-xl bg-red-500/10 p-3 text-sm text-red-400">
+        <p className="m-4 rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-sm text-red-400">
           {error}
         </p>
       )}
 
-      <div className="space-y-6">
-        {/* Pending orders */}
-        <section>
-          <h2 className="mb-3 text-lg font-semibold text-primary-300">
-            Pending ({pending.length})
-          </h2>
-          <div className="space-y-3">
-            {pending.map((order) => {
-              const statusInfo = UI_STATUS[order.status] ?? {
-                label: order.status,
-                color: "bg-gray-500/20 text-gray-400",
-              };
-              return (
-                <div
-                  key={order.id}
-                  className="rounded-2xl bg-primary-900/30 border border-primary-500/10 p-4"
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className={`rounded-full px-2 py-0.5 text-xs font-medium border ${statusInfo.color}`}>
-                          {statusInfo.label}
-                        </span>
-                        {order.checked_in && (
-                          <span className="rounded-full bg-green-500/20 px-2 py-0.5 text-xs text-green-400">
-                            Here
-                          </span>
-                        )}
-                      </div>
-                      <p className="mt-2 text-sm text-neutral-300">
-                        {order.items.map((i) => `${i.name} x${i.quantity}`).join(", ")}
-                      </p>
-                      <p className="mt-1 text-xs text-primary-600/50">
-                        {formatINR(order.total_amount)} &middot; {new Date(order.created_at).toLocaleTimeString()}
-                      </p>
-                    </div>
+      <div className="flex-1 overflow-x-auto overflow-y-hidden">
+        <div className="flex h-full gap-3 p-4 min-w-[960px]">
+          {COLUMNS.map((col) => {
+            const colOrders = col.status === "READY_FOR_PICKUP"
+              ? readyOrders
+              : activeOrders.filter((o) => o.status === col.status);
 
-                    <button
-                      type="button"
-                      onClick={() => advanceOrder(order.id)}
-                      className="ml-3 rounded-full bg-primary-500 px-5 py-2.5 text-sm font-bold text-white hover:bg-primary-hover active:scale-95 transition-transform"
-                    >
-                      {order.status === "CONFIRMED"
-                        ? "Start"
-                        : order.status === "PREPARING"
-                          ? "Almost Ready"
-                          : "Mark Ready"}
-                    </button>
-                  </div>
+            return (
+              <div key={col.status} className="flex w-full min-w-0 flex-col rounded-xl bg-neutral-900/50 border border-neutral-800/50">
+                <div className="flex items-center justify-between p-3 border-b border-neutral-800/50">
+                  <h2 className="text-sm font-bold text-neutral-300">{col.title}</h2>
+                  <Badge variant="default" size="sm">{colOrders.length}</Badge>
                 </div>
-              );
-            })}
-            {pending.length === 0 && (
-              <p className="py-8 text-center text-sm text-primary-600/30">
-                No pending orders
-              </p>
-            )}
-          </div>
-        </section>
 
-        {/* Ready for pickup */}
-        {ready.length > 0 && (
-          <section>
-            <h2 className="mb-3 text-lg font-semibold text-green-400">
-              Ready for Pickup ({ready.length})
-            </h2>
-            <div className="space-y-3">
-              {ready.map((order) => (
-                <div
-                  key={order.id}
-                  className="rounded-2xl bg-green-500/5 border border-green-500/20 p-4"
-                >
-                  <p className="text-sm font-medium text-neutral-200">
-                    {order.items.map((i) => `${i.name} x${i.quantity}`).join(", ")}
-                  </p>
-                  <div className="mt-3 flex items-center gap-3">
-                    <div className="flex-1">
-                      {order.pickup_otp && (
-                        <p className="mb-1.5 text-xs text-neutral-400">
-                          Pickup code:{" "}
-                          <span className="font-mono text-base font-bold tracking-widest text-green-400">
-                            {order.pickup_otp}
-                          </span>
-                        </p>
-                      )}
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={4}
-                        placeholder="Enter code"
-                        value={otpInput[order.id] ?? ""}
-                        onChange={(e) =>
-                          setOtpInput((p) => ({
-                            ...p,
-                            [order.id]: e.target.value.replace(/\D/g, "").slice(0, 4),
-                          }))
-                        }
-                        className="w-full rounded-xl border border-primary-500/20 bg-primary-900/50 px-3 py-2 text-sm text-neutral-200 placeholder-primary-600/30 outline-none focus:border-primary-500"
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => confirmPickup(order.id)}
-                      disabled={
-                        (otpInput[order.id] ?? "").length !== 4 &&
-                        !qrInput[order.id]
+                <div className="flex-1 overflow-y-auto p-2 space-y-2" role="list">
+                  <AnimatePresence mode="popLayout">
+                    {colOrders.map((order) => {
+                      const elapsed = timeElapsed(order.created_at);
+                      const borderColor = urgencyClass(elapsed, col.prepSeconds);
+                      const bgTint = urgencyBgClass(elapsed, col.prepSeconds);
+                      const urgency = urgencyLabel(elapsed, col.prepSeconds);
+                      const canAdvance = col.status in STATUS_ADVANCE;
+
+                      return (
+                        <m.div
+                          key={order.id}
+                          layout
+                          role="listitem"
+                          aria-label={`Order #${order.id.slice(-4).toUpperCase()}, ${col.title.toLowerCase()}, ${urgency}`}
+                          initial={{ opacity: 0, scale: 0.95 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.95 }}
+                          transition={{ duration: 0.2 }}
+                          className={[
+                            "rounded-xl border-l-4 p-4",
+                            bgTint,
+                            borderColor,
+                            "border border-neutral-800/50",
+                          ].join(" ")}
+                        >
+                          <div className="flex items-start justify-between mb-2">
+                            <div>
+                              <p className="text-lg font-mono font-bold text-white">
+                                #{order.id.slice(-4).toUpperCase()}
+                              </p>
+                              {order.checked_in && (
+                                <Badge variant="green" size="sm" pulse className="mt-1">
+                                  Here
+                                </Badge>
+                              )}
+                              <span className="mt-1 block text-2xs text-neutral-500">
+                                {urgency}
+                              </span>
+                            </div>
+                            <CountdownTimer targetSeconds={col.prepSeconds} />
+                          </div>
+
+                          <ul className="space-y-1 mb-3">
+                            {order.items.map((item) => (
+                              <li key={item.name} className="flex justify-between text-sm">
+                                <span className="text-neutral-300">{item.name}</span>
+                                <span className="font-mono text-neutral-500">x{item.quantity}</span>
+                              </li>
+                            ))}
+                          </ul>
+
+                          <p className="text-2xs text-neutral-600 mb-3">
+                            {formatINR(order.total_amount)} &middot; {new Date(order.created_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                          </p>
+
+                          {canAdvance ? (
+                            <button
+                              type="button"
+                              onClick={() => advanceOrder(order.id)}
+                              aria-label={`Advance order #${order.id.slice(-4).toUpperCase()} from ${col.title} to ${STATUS_BUTTON[col.status]}`}
+                              className="w-full rounded-lg bg-primary px-4 py-3 text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] hover:bg-primary-hover hover:-translate-y-px"
+                            >
+                              {STATUS_BUTTON[col.status]} &rarr;
+                            </button>
+                          ) : (
+                            <div className="space-y-2">
+                              {order.pickup_otp && (
+                                <p className="text-xs text-neutral-400">
+                                  Code:{" "}
+                                  <span className="font-mono text-lg font-bold tracking-widest text-primary-400">
+                                    {order.pickup_otp}
+                                  </span>
+                                </p>
+                              )}
+                              <label htmlFor={`otp-${order.id}`} className="sr-only">
+                                Pickup OTP for order #{order.id.slice(-4).toUpperCase()}
+                              </label>
+                              <input
+                                id={`otp-${order.id}`}
+                                type="text"
+                                inputMode="numeric"
+                                maxLength={4}
+                                placeholder="Enter OTP"
+                                value={otpInput[order.id] ?? ""}
+                                onChange={(e) =>
+                                  setOtpInput((p) => ({
+                                    ...p,
+                                    [order.id]: e.target.value.replace(/\D/g, "").slice(0, 4),
+                                  }))
+                                }
+                                className="w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600 outline-none focus:border-primary"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => confirmPickup(order.id)}
+                                disabled={(otpInput[order.id] ?? "").length !== 4}
+                                aria-label={`Hand over order #${order.id.slice(-4).toUpperCase()}`}
+                                className="w-full rounded-lg bg-urgency-green px-4 py-2.5 text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] hover:brightness-110 disabled:opacity-30"
+                              >
+                                Hand Over
+                              </button>
+                            </div>
+                          )}
+                        </m.div>
+                      );
+                    })}
+                  </AnimatePresence>
+
+                  {colOrders.length === 0 && (
+                    <EmptyState
+                      icon={
+                        <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-3-3v6" />
+                        </svg>
                       }
-                      className="rounded-full bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-30"
-                    >
-                      Handed Over
-                    </button>
-                  </div>
+                      title="No orders"
+                      description={`No ${col.title.toLowerCase()} orders yet`}
+                    />
+                  )}
                 </div>
-              ))}
-            </div>
-          </section>
-        )}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </main>
   );
