@@ -2,6 +2,7 @@ export * from "./src/Skeleton";
 export * from "./src/EmptyState";
 export * from "./src/Button";
 export * from "./src/Card";
+export * from "./src/Container";
 export * from "./src/BottomNav";
 export * from "./src/ActiveOrderBar";
 export * from "./src/Sheet";

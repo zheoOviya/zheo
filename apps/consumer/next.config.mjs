@@ -21,7 +21,7 @@ const nextConfig = {
       hostname,
     })),
   },
-  allowedHosts: [".monkeycode-ai.live"],
+  allowedDevOrigins: ["*.monkeycode-ai.live"],
   async rewrites() {
     return [
       {

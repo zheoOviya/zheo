@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { LazyMotion, domAnimation } from "framer-motion";
+import { Container } from "@snakzap/ui";
 import VendorNav from "./VendorNav";
 
 export function VendorLayoutClient({ children }: { children: ReactNode }) {
@@ -16,7 +17,7 @@ export function VendorLayoutClient({ children }: { children: ReactNode }) {
       ) : (
         <>
           <VendorNav />
-          {children}
+          <Container>{children}</Container>
         </>
       )}
     </LazyMotion>

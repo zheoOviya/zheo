@@ -114,7 +114,7 @@ function SpiceToleranceCard({
             >
               <FlameIcon filled={filled} />
               <span
-                className={`text-[10px] font-medium ${filled ? "text-red-500" : "text-neutral-400"}`}
+                className={`text-2xs font-medium ${filled ? "text-red-500" : "text-neutral-400"}`}
               >
                 {level}
               </span>
@@ -308,7 +308,7 @@ function ReferEarnCard({
           <button
             type="button"
             onClick={copyCode}
-            className="rounded-full bg-primary-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
+            className="min-h-[44px] rounded-full bg-primary-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
           >
             {copied ? "Copied!" : "Copy Code"}
           </button>
@@ -345,7 +345,7 @@ function ReferEarnCard({
             type="button"
             onClick={handleApply}
             disabled={!code.trim() || submitting}
-            className="rounded-full bg-primary-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-50"
+            className="min-h-[44px] rounded-full bg-primary-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-50"
           >
             {submitting ? "Applying..." : "Apply"}
           </button>
@@ -400,7 +400,7 @@ function StampCardsSection({
         </p>
         <Link
           href="/"
-          className="mt-4 inline-block rounded-full bg-primary-500 px-6 py-2 text-sm font-semibold text-white hover:bg-primary-hover"
+          className="mt-4 inline-block min-h-[44px] rounded-full bg-primary-500 px-6 py-2 text-sm font-semibold text-white hover:bg-primary-hover"
         >
           Start ordering
         </Link>
@@ -504,7 +504,7 @@ function VipSupportCard({
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-neutral-100">
                 <div
-                  className="h-full rounded-full bg-primary-500 transition-all"
+                  className="h-full min-h-[44px] rounded-full bg-primary-500 transition-all"
                   style={{ width: `${orderPct}%` }}
                 />
               </div>
@@ -516,7 +516,7 @@ function VipSupportCard({
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-neutral-100">
                 <div
-                  className="h-full rounded-full bg-primary-500 transition-all"
+                  className="h-full min-h-[44px] rounded-full bg-primary-500 transition-all"
                   style={{ width: `${spendPct}%` }}
                 />
               </div>
@@ -536,7 +536,7 @@ function VipSupportCard({
             <button
               type="button"
               onClick={() => setOpen((v) => !v)}
-              className="rounded-full bg-primary-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
+              className="min-h-[44px] rounded-full bg-primary-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
             >
               {open ? "Cancel" : "Priority Support"}
             </button>
@@ -563,7 +563,7 @@ function VipSupportCard({
                   type="button"
                   onClick={handleSubmit}
                   disabled={!subject.trim() || !description.trim() || submitting}
-                  className="rounded-full bg-primary-600 px-5 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-50"
+                  className="min-h-[44px] rounded-full bg-primary-600 px-5 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-50"
                 >
                   {submitting ? "Submitting…" : "Submit Ticket"}
                 </button>
@@ -624,7 +624,7 @@ function ProfileContent() {
   }, [accessToken]);
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-6">
+    <main className="py-6">
       <header className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-primary-700 dark:text-primary-300">My Account</h1>

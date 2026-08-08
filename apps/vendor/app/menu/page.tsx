@@ -95,7 +95,7 @@ export default function MenuPage() {
   }
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-6">
+    <main className="mx-auto max-w-3xl py-6">
       <header className="mb-6">
         <h1 className="text-2xl font-bold text-primary-400">Menu Management</h1>
         <p className="mt-1 text-sm text-primary-600/50">
@@ -149,7 +149,7 @@ export default function MenuPage() {
                       .map(([tag, info]) => (
                         <span
                           key={tag}
-                          className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${info.className}`}
+                          className={`rounded border px-1.5 py-0.5 text-2xs font-semibold ${info.className}`}
                         >
                           {info.label}
                         </span>

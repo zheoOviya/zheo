@@ -146,7 +146,7 @@ export default function CateringPage() {
   );
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-6">
+    <main className="mx-auto max-w-3xl py-6">
       <header className="mb-6">
         <h1 className="text-2xl font-bold text-primary-400">
           B2B Catering Request
@@ -207,7 +207,7 @@ export default function CateringPage() {
               setInstructions("");
               setBudget("");
             }}
-            className="mt-5 rounded-full bg-primary-500 px-5 py-2.5 text-sm font-bold text-white hover:bg-primary-hover active:scale-95 transition-transform"
+            className="mt-5 min-h-[44px] rounded-full bg-primary-500 px-5 py-2.5 text-sm font-bold text-white hover:bg-primary-hover active:scale-95 transition-transform"
           >
             New catering request
           </button>
@@ -395,7 +395,7 @@ export default function CateringPage() {
               !eventDate ||
               headcount < 50
             }
-            className="w-full rounded-full bg-primary-500 px-5 py-3 text-sm font-bold text-white hover:bg-primary-hover active:scale-95 transition-transform disabled:opacity-30"
+            className="w-full min-h-[44px] rounded-full bg-primary-500 px-5 py-3 text-sm font-bold text-white hover:bg-primary-hover active:scale-95 transition-transform disabled:opacity-30"
           >
             {submitting ? "Submitting..." : "Request catering"}
           </button>

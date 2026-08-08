@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  allowedHosts: [".monkeycode-ai.live"],
+  allowedDevOrigins: ["*.monkeycode-ai.live"],
   async rewrites() {
     return [
       {

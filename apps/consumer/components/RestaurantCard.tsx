@@ -83,7 +83,7 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
               src={`https://picsum.photos/seed/${restaurant.id}/400/400`}
               alt={restaurant.name}
               fill
-              sizes="(max-width: 640px) 50vw, 33vw"
+              sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
               loading="lazy"
               className="object-cover"
             />

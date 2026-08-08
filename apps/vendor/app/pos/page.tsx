@@ -104,7 +104,7 @@ export default function PosPage() {
   }
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-6">
+    <main className="mx-auto max-w-3xl py-6">
       <header className="mb-6">
         <h1 className="text-2xl font-bold text-primary-400">Petpooja POS</h1>
         <p className="mt-1 text-sm text-primary-600/60">

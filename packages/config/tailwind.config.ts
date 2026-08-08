@@ -66,9 +66,13 @@ export const snakZapPreset: Partial<Config> = {
         "4xl": ["2.25rem", { lineHeight: "2.75rem", letterSpacing: "-0.03em" }],
       },
       spacing: {
-        18: "4.5rem",
-        88: "22rem",
-        128: "32rem",
+        "space-2xs": "0.25rem",
+        "space-xs": "0.5rem",
+        "space-sm": "1rem",
+        "space-md": "1.5rem",
+        "space-lg": "2rem",
+        "space-xl": "3rem",
+        "space-2xl": "4rem",
       },
       borderRadius: {
         sm: "6px",

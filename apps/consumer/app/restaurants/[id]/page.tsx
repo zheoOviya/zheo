@@ -33,7 +33,7 @@ export default async function RestaurantMenuPage({
 
   if (loadError) {
     return (
-      <main className="mx-auto max-w-5xl px-4 py-6">
+      <main className="py-6">
         <div className="rounded-2xl bg-white p-10 text-center shadow-sm">
           <p
             role="alert"
@@ -54,7 +54,7 @@ export default async function RestaurantMenuPage({
 
   if (!restaurant) {
     return (
-      <main className="mx-auto max-w-5xl px-4 py-6">
+      <main className="py-6">
         <div className="rounded-2xl bg-white p-10 text-center shadow-sm">
           <h1 className="text-lg font-semibold text-neutral-700">
             Restaurant not found
@@ -76,7 +76,7 @@ export default async function RestaurantMenuPage({
       : { label: "Closed", color: "bg-red-500/15 text-red-700" };
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-6 pb-28">
+    <main className="py-6 pb-28">
       <header className="mb-6">
         <Link
           href="/"

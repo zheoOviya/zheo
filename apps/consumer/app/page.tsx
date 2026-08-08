@@ -15,7 +15,7 @@ export default async function HomePage() {
   }
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-4">
+    <main className="py-4">
       <header className="mb-4">
         <h1 className="text-2xl font-bold text-primary-700 dark:text-primary-300">
           SnakZap

@@ -121,7 +121,7 @@ export default function ChainOverviewPage() {
   );
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-6">
+    <main className="mx-auto max-w-3xl py-6">
       <header className="mb-6">
         <h1 className="text-2xl font-bold text-primary-400">Chain Overview</h1>
         <p className="mt-1 text-sm text-primary-600/60">
@@ -266,7 +266,7 @@ export default function ChainOverviewPage() {
                         style={{ width: `${width}%` }}
                       />
                     </div>
-                    <p className="mt-0.5 text-[11px] text-primary-600/50">
+                    <p className="mt-0.5 text-xs text-primary-600/50">
                       {outlet.order_count} orders &middot; AOV{" "}
                       {formatINR(outlet.aov)}
                     </p>

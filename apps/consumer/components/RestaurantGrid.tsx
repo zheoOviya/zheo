@@ -22,7 +22,7 @@ export function RestaurantGrid({ restaurants }: RestaurantGridProps) {
   }
 
   return (
-    <section aria-label="Restaurants" className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+    <section aria-label="Restaurants" className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {restaurants.map((restaurant, index) => (
         <RestaurantCard key={restaurant.id} restaurant={restaurant} index={index} />
       ))}

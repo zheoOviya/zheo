@@ -4,7 +4,7 @@ import { Skeleton } from "@snakzap/ui";
 // Mirrors the RestaurantGrid layout 1:1 to guarantee zero layout shift.
 export default function Loading() {
   return (
-    <div className="mx-auto max-w-5xl px-4 py-6">
+    <div className="py-6">
       <Skeleton className="mb-6 h-8 w-32" />
       <Skeleton className="mb-8 h-12 w-full rounded-full" />
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">

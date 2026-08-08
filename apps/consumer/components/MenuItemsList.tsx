@@ -157,7 +157,7 @@ export function MenuItemsList({
                   {tags.map((tag) => (
                     <span
                       key={tag}
-                      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ring-1 ${
+                      className={`shrink-0 rounded px-1.5 py-0.5 text-2xs font-bold uppercase ring-1 ${
                         DIETARY_COLORS[tag] ?? "bg-neutral-500/10 text-neutral-600"
                       }`}
                     >

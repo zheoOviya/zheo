@@ -145,7 +145,7 @@ function OrderHistoryContent() {
     });
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-6 pb-28">
+    <main className="py-6 pb-28">
       <header className="mb-6">
         <Link
           href="/"

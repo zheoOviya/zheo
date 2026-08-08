@@ -67,6 +67,7 @@ export function Sheet({ open, onClose, children, title, className = "" }: SheetP
           </div>
         )}
         <div className="max-h-[70vh] overflow-y-auto px-4 pb-8">{children}</div>
+        <div className="pb-safe" aria-hidden="true" />
       </div>
     </div>
   );

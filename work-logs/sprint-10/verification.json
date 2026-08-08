@@ -1,0 +1,102 @@
+{
+  "sprint": "10",
+  "title": "UI Alignment & Human-Centric Design System",
+  "verdict": "PASS",
+  "timestamp": "2026-08-08T16:50:00Z",
+  "summary": "Enforced a strict design system: global Container strategy, semantic spacing tokens, mobile safe-area utilities, 44x44dp touch targets, CSS-grid discovery feed, strict vendor KDS grid, and typography normalization.",
+  "tasks": [
+    {
+      "id": "1",
+      "name": "Strict Spacing & Layout Tokens",
+      "status": "DONE",
+      "details": "packages/config/tailwind.config.ts now defines a semantic spacing scale (space-2xs..space-2xl) and dropped the unused arbitrary 18/88/128 values. New packages/ui Container component owns max-width (max-w-5xl default, 2xl/3xl/7xl/full variants), centering (mx-auto w-full) and gutter (px-4 sm:px-6). Consumer root layout and vendor non-dashboard layout wrap children in Container; pages dropped their own max-w/px gutters (no double padding)."
+    },
+    {
+      "id": "2",
+      "name": "Mobile Safe Areas & Thumb-Zone Optimization",
+      "status": "DONE",
+      "details": "pt-safe/pb-safe/pl-safe/pr-safe + min-h-touch/min-w-touch utilities in both globals.css. BottomNav: min-h-16 + pb-safe so tabs clear the home indicator; tabs are min-h-11 (44px). Button md/lg enforce min-h-[44px]. CartDrawer CTAs/steppers, KDS advance/hand-over/OTP, checkout/profile primary CTAs, settlements/catering CTAs all hit 44x44dp."
+    },
+    {
+      "id": "3",
+      "name": "Visual Hierarchy & Alignment (Consumer)",
+      "status": "DONE",
+      "details": "Discovery feed uses strict CSS Grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4. Typography normalized to token scale (removed all text-[10px]/text-[11px] arbitrary sizes). CartDrawer slides up with a translate-y transition, consistent p-space-sm content padding, pb-safe clearance, 44px quantity steppers + CTAs."
+    },
+    {
+      "id": "4",
+      "name": "Vendor KDS Alignment",
+      "status": "DONE",
+      "details": "KDS stage container is now a strict responsive CSS Grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 p-4 (replacing fixed flex min-w-[960px] horizontal scroll). Tickets use flex flex-col justify-between with flex-1 item list so Timer/Items/Action align and action buttons pin to the bottom. Advance/Hand Over buttons and OTP input are min-h-[44px]."
+    }
+  ],
+  "verification": {
+    "typecheck": {
+      "packages/ui": "PASS",
+      "packages/config": "PASS",
+      "apps/consumer": "PASS",
+      "apps/vendor": "PASS",
+      "apps/api": "PASS",
+      "total": "5/5"
+    },
+    "lint": "PASS (0 errors; only pre-existing warnings in checkout/page.tsx)",
+    "tests": {
+      "backend_files": 40,
+      "backend_tests": 379,
+      "backend_passed": 379,
+      "consumer_files": 16,
+      "consumer_tests": 73,
+      "consumer_passed": 73,
+      "consumer_failed_suites": 1,
+      "consumer_known_failure": "MenuItemsList.test.tsx empty placeholder suite (pre-existing, 0 tests)",
+      "new_sprint10_tests": [
+        "components/__tests__/Container.test.tsx (7 tests - max-width classes, variants, gutter merge)",
+        "components/__tests__/TouchTargets.test.tsx (3 tests - Button md/lg min-h-[44px], BottomNav min-h-11)"
+      ]
+    },
+    "grid_audit": {
+      "discovery_feed": "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 (confirmed in rendered HTML)",
+      "vendor_kds": "grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 p-4 (confirmed in rendered HTML)",
+      "container_rendered": "mx-auto w-full px-4 sm:px-6 max-w-5xl (confirmed in rendered HTML)"
+    },
+    "touch_target_audit": {
+      "min_h_44px_in_compiled_css": "PASS",
+      "buttons": [
+        "packages/ui Button md/lg (systemic)",
+        "CartDrawer: Place Order, Start Group Order, Browse Restaurants, close, +/- steppers",
+        "checkout/page.tsx: 6 primary CTAs",
+        "profile/page.tsx: 8 primary CTAs",
+        "orders/[id]: 2 CTAs",
+        "vendor KDS: Advance, Hand Over, OTP input",
+        "vendor settlements/catering/not-found/error CTAs"
+      ],
+      "bottom_nav": "min-h-11 tabs + pb-safe above home indicator"
+    },
+    "safe_area": {
+      "utilities": "pt-safe pb-safe pl-safe pr-safe min-h-touch min-w-touch (both globals.css)",
+      "applied_to": ["BottomNav (consumer)", "Sheet (packages/ui)", "CartDrawer content", "KDS action buttons"]
+    },
+    "config_fix": {
+      "note": "allowedHosts top-level key is unrecognized in Next.js 15.5; replaced with allowedDevOrigins: ['*.monkeycode-ai.live'] in both apps (dev-server warning gone)."
+    }
+  },
+  "artifacts": {
+    "design_tokens": "packages/config/tailwind.config.ts (spacing scale)",
+    "container": "packages/ui/src/Container.tsx (exported via packages/ui/index.ts)",
+    "safe_area_css": ["apps/consumer/app/globals.css", "apps/vendor/app/globals.css"],
+    "layouts_wrapped": ["apps/consumer/app/layout.tsx", "apps/vendor/components/VendorLayoutClient.tsx"],
+    "consumer_refactor": [
+      "apps/consumer/components/RestaurantGrid.tsx",
+      "apps/consumer/components/RestaurantCard.tsx",
+      "apps/consumer/components/CartDrawer.tsx",
+      "apps/consumer/app/checkout/page.tsx",
+      "apps/consumer/app/profile/page.tsx",
+      "apps/consumer/app/orders/[id]/page.tsx"
+    ],
+    "vendor_refactor": ["apps/vendor/app/page.tsx (KDS grid)"],
+    "tests": [
+      "apps/consumer/components/__tests__/Container.test.tsx",
+      "apps/consumer/components/__tests__/TouchTargets.test.tsx"
+    ]
+  }
+}

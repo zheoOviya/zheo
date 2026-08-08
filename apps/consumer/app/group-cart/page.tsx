@@ -13,7 +13,7 @@ export default async function GroupCartPage({
   const { token } = await searchParams;
 
   return (
-    <main className="mx-auto max-w-2xl px-4 py-6">
+    <main className="mx-auto max-w-2xl py-6">
       <header className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-primary-700">Group Order</h1>

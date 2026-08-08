@@ -179,21 +179,21 @@ export default function VendorDashboard() {
         </p>
       )}
 
-      <div className="flex-1 overflow-x-auto overflow-y-hidden">
-        <div className="flex h-full gap-3 p-4 min-w-[960px]">
+      <div className="flex-1 overflow-y-auto">
+        <div className="grid h-full grid-cols-2 gap-3 p-4 md:grid-cols-3 xl:grid-cols-4">
           {COLUMNS.map((col) => {
             const colOrders = col.status === "READY_FOR_PICKUP"
               ? readyOrders
               : activeOrders.filter((o) => o.status === col.status);
 
             return (
-              <div key={col.status} className="flex w-full min-w-0 flex-col rounded-xl bg-neutral-900/50 border border-neutral-800/50">
+              <div key={col.status} className="flex min-h-0 min-w-0 flex-col rounded-xl bg-neutral-900/50 border border-neutral-800/50">
                 <div className="flex items-center justify-between p-3 border-b border-neutral-800/50">
                   <h2 className="text-sm font-bold text-neutral-300">{col.title}</h2>
                   <Badge variant="default" size="sm">{colOrders.length}</Badge>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-2 space-y-2" role="list">
+                <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2" role="list">
                   <AnimatePresence mode="popLayout">
                     {colOrders.map((order) => {
                       const elapsed = timeElapsed(order.created_at);
@@ -217,9 +217,10 @@ export default function VendorDashboard() {
                             bgTint,
                             borderColor,
                             "border border-neutral-800/50",
+                            "flex flex-col justify-between",
                           ].join(" ")}
                         >
-                          <div className="flex items-start justify-between mb-2">
+                          <div className="flex items-start justify-between">
                             <div>
                               <p className="text-lg font-mono font-bold text-white">
                                 #{order.id.slice(-4).toUpperCase()}
@@ -236,7 +237,7 @@ export default function VendorDashboard() {
                             <CountdownTimer targetSeconds={col.prepSeconds} />
                           </div>
 
-                          <ul className="space-y-1 mb-3">
+                          <ul className="flex-1 space-y-1 pt-3">
                             {order.items.map((item) => (
                               <li key={item.name} className="flex justify-between text-sm">
                                 <span className="text-neutral-300">{item.name}</span>
@@ -245,7 +246,7 @@ export default function VendorDashboard() {
                             ))}
                           </ul>
 
-                          <p className="text-2xs text-neutral-600 mb-3">
+                          <p className="text-2xs text-neutral-600 mt-3">
                             {formatINR(order.total_amount)} &middot; {new Date(order.created_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
                           </p>
 
@@ -254,7 +255,7 @@ export default function VendorDashboard() {
                               type="button"
                               onClick={() => advanceOrder(order.id)}
                               aria-label={`Advance order #${order.id.slice(-4).toUpperCase()} from ${col.title} to ${STATUS_BUTTON[col.status]}`}
-                              className="w-full rounded-lg bg-primary px-4 py-3 text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] hover:bg-primary-hover hover:-translate-y-px"
+                              className="min-h-[44px] w-full rounded-lg bg-primary px-4 py-3 text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] hover:bg-primary-hover hover:-translate-y-px"
                             >
                               {STATUS_BUTTON[col.status]} &rarr;
                             </button>
@@ -284,14 +285,14 @@ export default function VendorDashboard() {
                                     [order.id]: e.target.value.replace(/\D/g, "").slice(0, 4),
                                   }))
                                 }
-                                className="w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600 outline-none focus:border-primary"
+                                className="min-h-[44px] w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600 outline-none focus:border-primary"
                               />
                               <button
                                 type="button"
                                 onClick={() => confirmPickup(order.id)}
                                 disabled={(otpInput[order.id] ?? "").length !== 4}
                                 aria-label={`Hand over order #${order.id.slice(-4).toUpperCase()}`}
-                                className="w-full rounded-lg bg-urgency-green px-4 py-2.5 text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] hover:brightness-110 disabled:opacity-30"
+                                className="min-h-[44px] w-full rounded-lg bg-urgency-green px-4 py-2.5 text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] hover:brightness-110 disabled:opacity-30"
                               >
                                 Hand Over
                               </button>

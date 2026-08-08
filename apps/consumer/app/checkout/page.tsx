@@ -173,7 +173,7 @@ function PickupSlotSelector({
                       >
                         <div>{slot.label}</div>
                         {!slot.available && (
-                          <div className="mt-0.5 text-[10px]">Full</div>
+                          <div className="mt-0.5 text-2xs">Full</div>
                         )}
                       </button>
                     );
@@ -278,7 +278,7 @@ function CheckoutContent() {
 
   if (step === "success") {
     return (
-      <main className="mx-auto max-w-5xl px-4 py-6">
+      <main className="py-6">
         <header className="mb-6">
           <h1 className="text-2xl font-bold text-primary-700">Checkout</h1>
         </header>
@@ -298,7 +298,7 @@ function CheckoutContent() {
           <button
             type="button"
             onClick={() => router.push("/")}
-            className="mt-6 rounded-full bg-primary-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
+            className="mt-6 min-h-[44px] rounded-full bg-primary-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
           >
             Back to Home
           </button>
@@ -309,7 +309,7 @@ function CheckoutContent() {
 
   if (step === "failed") {
     return (
-      <main className="mx-auto max-w-5xl px-4 py-6">
+      <main className="py-6">
         <header className="mb-6">
           <h1 className="text-2xl font-bold text-primary-700">Checkout</h1>
         </header>
@@ -326,7 +326,7 @@ function CheckoutContent() {
           <button
             type="button"
             onClick={() => setStep("payment")}
-            className="mt-6 rounded-full bg-primary-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
+            className="mt-6 min-h-[44px] rounded-full bg-primary-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
           >
             Try Again
           </button>
@@ -376,7 +376,7 @@ function CheckoutContent() {
     }, [rpOrderId]);
 
     return (
-      <main className="mx-auto max-w-5xl px-4 py-6">
+      <main className="py-6">
         <header className="mb-6">
           <h1 className="text-2xl font-bold text-primary-700">Checkout</h1>
         </header>
@@ -394,7 +394,7 @@ function CheckoutContent() {
               <button
                 type="button"
                 onClick={() => { setError(""); }}
-                className="w-full rounded-full bg-primary-500 py-3 text-sm font-semibold text-white hover:bg-primary-hover"
+                className="w-full min-h-[44px] rounded-full bg-primary-500 py-3 text-sm font-semibold text-white hover:bg-primary-hover"
               >
                 Try Again
               </button>
@@ -406,7 +406,7 @@ function CheckoutContent() {
   }
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-6">
+    <main className="py-6">
       <header className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-primary-700">Checkout</h1>
@@ -450,7 +450,7 @@ function CheckoutContent() {
             <button
               type="button"
               onClick={() => router.push("/")}
-              className="rounded-full bg-primary-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
+              className="min-h-[44px] rounded-full bg-primary-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
             >
               Browse Restaurants
             </button>
@@ -531,7 +531,7 @@ function CheckoutContent() {
             type="button"
             onClick={handlePlaceOrder}
             disabled={step === "creating"}
-            className="w-full rounded-full bg-primary-500 py-3.5 text-base font-semibold text-white hover:bg-primary-hover disabled:opacity-50"
+            className="w-full min-h-[44px] rounded-full bg-primary-500 py-3.5 text-base font-semibold text-white hover:bg-primary-hover disabled:opacity-50"
           >
             {step === "creating"
               ? "Creating Order..."

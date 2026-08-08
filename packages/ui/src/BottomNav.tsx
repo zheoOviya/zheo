@@ -20,13 +20,13 @@ export function BottomNav({ items, activeHref, onNavigate, className = "" }: Bot
   return (
     <nav
       className={[
-        "fixed bottom-0 left-0 right-0 z-50 h-16",
+        "fixed bottom-0 left-0 right-0 z-50 min-h-16 pb-safe",
         "bg-white/80 dark:bg-neutral-950/80 backdrop-blur-xl",
         "border-t border-neutral-200/60 dark:border-neutral-800/60",
         className,
       ].join(" ")}
     >
-      <div className="mx-auto flex h-full max-w-lg items-center justify-around px-2">
+      <div className="mx-auto flex h-16 max-w-lg items-center justify-around px-2">
         {items.map((item) => {
           const isActive = activeHref
             ? activeHref === item.href || (item.href !== "/" && activeHref.startsWith(item.href))
@@ -43,7 +43,7 @@ export function BottomNav({ items, activeHref, onNavigate, className = "" }: Bot
               href={item.href}
               onClick={onNavigate ? handleClick : undefined}
               className={[
-                "relative flex flex-col items-center justify-center gap-0.5 min-w-0 flex-1 h-full",
+                "relative flex min-h-11 flex-col items-center justify-center gap-0.5 min-w-0 flex-1",
                 "transition-colors duration-200",
                 isActive
                   ? "text-primary"

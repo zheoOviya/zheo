@@ -85,7 +85,7 @@ export default function SettlementsPage() {
     : "";
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-6">
+    <main className="mx-auto max-w-3xl py-6">
       <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-primary-400">Daily Settlements</h1>
@@ -99,7 +99,7 @@ export default function SettlementsPage() {
           type="button"
           onClick={downloadPdf}
           disabled={downloading || !summary}
-          className="rounded-full bg-primary-500 px-5 py-2.5 text-sm font-bold text-white hover:bg-primary-hover disabled:opacity-40 active:scale-95 transition-transform"
+          className="min-h-[44px] rounded-full bg-primary-500 px-5 py-2.5 text-sm font-bold text-white hover:bg-primary-hover disabled:opacity-40 active:scale-95 transition-transform"
         >
           {downloading ? "Generating..." : "Download PDF Report"}
         </button>

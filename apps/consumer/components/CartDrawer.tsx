@@ -35,6 +35,8 @@ export function CartDrawer({
   const [startingGroup, setStartingGroup] = useState(false);
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+  const [animating, setAnimating] = useState(false);
   const breakdown = computePriceBreakdown(items);
   const hydratedRef = useRef(false);
   const expiryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -145,6 +147,17 @@ export function CartDrawer({
     };
   }, [open, onClose]);
 
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      const raf = requestAnimationFrame(() => setAnimating(true));
+      return () => cancelAnimationFrame(raf);
+    }
+    setAnimating(false);
+    const timer = setTimeout(() => setMounted(false), 250);
+    return () => clearTimeout(timer);
+  }, [open]);
+
   async function handleStartGroupOrder() {
     if (!restaurantId || items.length === 0) return;
     if (!accessToken) {
@@ -173,7 +186,7 @@ export function CartDrawer({
     return "text-teal-600";
   }
 
-  if (!open) return null;
+  if (!mounted) return null;
 
   const itemBreakdowns: BreakdownItem[] = items.map((item) => ({
     label: `${item.name} x${item.quantity}`,
@@ -182,16 +195,28 @@ export function CartDrawer({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40"
+      className="fixed inset-0 z-50 flex items-end justify-center"
       onClick={onClose}
     >
+      <div
+        aria-hidden="true"
+        className={[
+          "absolute inset-0 bg-black/40 transition-opacity duration-250",
+          animating ? "opacity-100" : "opacity-0",
+        ].join(" ")}
+        onClick={onClose}
+      />
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Your cart"
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[85vh] w-full max-w-sm flex-col overflow-auto rounded-t-2xl bg-white shadow-xl"
+        className={[
+          "flex max-h-[85vh] w-full max-w-sm flex-col overflow-auto rounded-t-2xl bg-white shadow-xl",
+          "transition-transform duration-250 ease-out",
+          animating ? "translate-y-0" : "translate-y-full",
+        ].join(" ")}
       >
         <div className="flex items-center justify-between border-b border-primary-500/20 p-4">
           <div>
@@ -211,7 +236,7 @@ export function CartDrawer({
             type="button"
             onClick={onClose}
             aria-label="Close cart"
-            className="rounded-full p-1 text-neutral-400 hover:text-primary-700"
+            className="flex min-h-11 min-w-11 items-center justify-center rounded-full p-1 text-neutral-400 hover:text-primary-700"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -252,18 +277,18 @@ export function CartDrawer({
               <button
                 type="button"
                 onClick={() => { onClose(); router.push("/"); }}
-                className="rounded-full bg-primary-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
+                className="min-h-[44px] rounded-full bg-primary-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
               >
                 Browse Restaurants
               </button>
             }
           />
         ) : (
-          <div className="space-y-3 p-4">
+          <div className="space-y-3 p-space-sm">
             {items.map((item) => (
               <div
                 key={item.menuItemId}
-                className="flex items-start justify-between rounded-lg border border-primary-500/10 p-3"
+                className="flex items-start justify-between rounded-lg border border-primary-500/10 p-space-xs"
               >
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-neutral-700">
@@ -278,14 +303,14 @@ export function CartDrawer({
                     {formatINR(itemUnitPrice(item))} each
                   </p>
                 </div>
-                <div className="ml-3 flex items-center gap-2">
+                <div className="ml-3 flex items-center gap-1.5">
                   <button
                     type="button"
                     aria-label="Decrease quantity"
                     onClick={() =>
                       updateQuantity(item.menuItemId, item.quantity - 1)
                     }
-                    className="flex h-7 w-7 items-center justify-center rounded-full bg-surface-light text-sm text-primary-700 hover:bg-primary-500/20"
+                    className="flex h-11 w-11 items-center justify-center rounded-full bg-surface-light text-base text-primary-700 hover:bg-primary-500/20"
                   >
                     -
                   </button>
@@ -298,7 +323,7 @@ export function CartDrawer({
                     onClick={() =>
                       updateQuantity(item.menuItemId, item.quantity + 1)
                     }
-                    className="flex h-7 w-7 items-center justify-center rounded-full bg-surface-light text-sm text-primary-700 hover:bg-primary-500/20"
+                    className="flex h-11 w-11 items-center justify-center rounded-full bg-surface-light text-base text-primary-700 hover:bg-primary-500/20"
                   >
                     +
                   </button>
@@ -327,7 +352,7 @@ export function CartDrawer({
               type="button"
               disabled={items.length === 0}
               onClick={() => router.push("/checkout")}
-              className="w-full rounded-full bg-primary-500 py-3 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-50"
+              className="min-h-[44px] w-full rounded-full bg-primary-500 py-3 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-50"
             >
               Place Order ({formatINR(breakdown.total)})
             </button>
@@ -336,7 +361,7 @@ export function CartDrawer({
               type="button"
               disabled={items.length === 0 || startingGroup}
               onClick={handleStartGroupOrder}
-              className="w-full rounded-full border-2 border-primary-500 py-3 text-sm font-semibold text-primary-700 hover:bg-surface-light disabled:opacity-50"
+              className="min-h-[44px] w-full rounded-full border-2 border-primary-500 py-3 text-sm font-semibold text-primary-700 hover:bg-surface-light disabled:opacity-50"
             >
               {startingGroup ? "Starting Group Order..." : "Start Group Order"}
             </button>
@@ -353,6 +378,7 @@ export function CartDrawer({
             >
               Clear Cart
             </button>
+            <div className="pb-safe" aria-hidden="true" />
           </div>
         )}
       </div>

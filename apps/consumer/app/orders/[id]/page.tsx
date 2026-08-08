@@ -147,13 +147,13 @@ function TrackingContent() {
 
   if (error) {
     return (
-      <main className="mx-auto max-w-5xl px-4 py-6">
+      <main className="py-6">
         <div className="rounded-2xl bg-white p-8 text-center shadow-sm">
           <p className="text-red-500">{error}</p>
           <button
             type="button"
             onClick={() => router.push("/")}
-            className="mt-4 rounded-full bg-primary-500 px-6 py-2 text-sm font-semibold text-white"
+            className="mt-4 min-h-[44px] rounded-full bg-primary-500 px-6 py-2 text-sm font-semibold text-white"
           >
             Back to Home
           </button>
@@ -164,7 +164,7 @@ function TrackingContent() {
 
   if (!order) {
     return (
-      <main className="mx-auto max-w-5xl px-4 py-6">
+      <main className="py-6">
         <div className="rounded-2xl bg-white p-8 text-center shadow-sm">
           <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
           <p className="mt-4 text-sm text-neutral-400">Loading order...</p>
@@ -177,7 +177,7 @@ function TrackingContent() {
   const isPickedUp = order.status === "PICKED_UP";
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-6">
+    <main className="py-6">
       <header className="mb-6">
         <button
           type="button"
@@ -268,7 +268,7 @@ function TrackingContent() {
               <button
                 type="button"
                 onClick={handleCheckIn}
-                className="w-full rounded-full bg-primary-500 py-3 text-sm font-semibold text-white hover:bg-primary-hover"
+                className="w-full min-h-[44px] rounded-full bg-primary-500 py-3 text-sm font-semibold text-white hover:bg-primary-hover"
               >
                 I am Here (Check In)
               </button>
