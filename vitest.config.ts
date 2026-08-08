@@ -12,8 +12,9 @@ export default defineConfig({
   },
   test: {
     include: ["apps/**/*.test.ts", "packages/**/*.test.ts"],
-    // Consumer RTL suites run under apps/consumer/vitest.config.ts (jsdom).
-    exclude: ["**/node_modules/**", "apps/consumer/**"],
+    // Frontend RTL suites run under their app-scoped vitest configs (jsdom):
+    // consumer, vendor. Admin tests run under apps/admin/vitest.config.ts.
+    exclude: ["**/node_modules/**", "apps/consumer/**", "apps/vendor/**", "apps/admin/**"],
     environment: "node",
     env: {
       NODE_ENV: "test",

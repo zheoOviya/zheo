@@ -39,3 +39,22 @@ export function clearSession(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(ROLE_KEY);
 }
+
+// Server-side sign out. The admin login stores the JWT in localStorage AND the
+// API sets an httpOnly refresh-token cookie (path /api/v1/auth). Signing out
+// must (a) call POST /api/v1/auth/logout so the refresh-token JTI is
+// blacklisted and the cookie is cleared, and (b) drop the local session.
+// The server call is best-effort: the local session is always cleared even if
+// the network fails (e.g. the API is unreachable).
+export async function logout(): Promise<void> {
+  try {
+    await fetch("/api/v1/auth/logout", {
+      method: "POST",
+      credentials: "include",
+    });
+  } catch {
+    // Best-effort server-side logout; local session cleared below.
+  } finally {
+    clearSession();
+  }
+}

@@ -6,6 +6,7 @@ import { createApp } from "../app";
 import { getRedis, resetRedisForTests } from "../lib/redis";
 
 const PHONE = "+919876543210";
+const LOGOUT_PHONE = "+919876000099";
 const FP_A = "fp-device-a-1234567890";
 const FP_B = "fp-device-b-1234567890";
 
@@ -78,6 +79,52 @@ describe("Auth routes (integration)", () => {
       .send({ device_fingerprint: FP_A })
       .expect(200);
     expect(refresh2.body.data.access_token).toBeTruthy();
+  });
+
+  it("logout blacklists the refresh token and clears the cookie", async () => {
+    await requestOtp(LOGOUT_PHONE);
+    const otp = await readStoredOtp(LOGOUT_PHONE);
+
+    const agent = request.agent(app);
+    const verifyRes = await agent
+      .post("/api/v1/auth/verify-otp")
+      .send({ phone: LOGOUT_PHONE, otp, device_fingerprint: FP_A })
+      .expect(200);
+    const setCookie = verifyRes.headers["set-cookie"] as string[] | undefined;
+    expect(setCookie).toBeDefined();
+    const refreshCookie = setCookie?.[0] ?? "";
+
+    const logoutRes = await agent
+      .post("/api/v1/auth/logout")
+      .expect(200);
+    expect(logoutRes.body.success).toBe(true);
+    expect(logoutRes.body.data.logged_out).toBe(true);
+
+    // Server must clear the httpOnly refresh cookie (Max-Age=0 / epoch expiry).
+    const cleared = logoutRes.headers["set-cookie"] as string[] | undefined;
+    expect(cleared).toBeDefined();
+    const clearedHeader = cleared?.[0] ?? "";
+    expect(clearedHeader).toContain("snakzap_refresh=;");
+    expect(
+      clearedHeader.includes("Max-Age=0") ||
+        clearedHeader.includes("Expires=Thu, 01 Jan 1970"),
+    ).toBe(true);
+
+    // The refresh token was blacklisted server-side -> reuse must fail.
+    const reused = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Cookie", refreshCookie)
+      .send({ device_fingerprint: FP_A });
+    expect(reused.status).toBe(401);
+    expect(reused.body.error.code).toBe("REFRESH_TOKEN_REUSED");
+  });
+
+  it("logout is idempotent when no refresh cookie is present", async () => {
+    const res = await request(app)
+      .post("/api/v1/auth/logout")
+      .expect(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.logged_out).toBe(true);
   });
 
   it("rejects refresh on device mismatch (step-up auth required)", async () => {

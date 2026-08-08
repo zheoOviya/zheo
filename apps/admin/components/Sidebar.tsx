@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { clearSession, getUserRole } from "../lib/auth";
+import { getUserRole, logout } from "../lib/auth";
 
 const navItems = [
   {
@@ -112,8 +112,10 @@ export default function Sidebar({
           Signed in as <span className="font-mono font-semibold">{role}</span>
         </div>
         <button
-          onClick={() => {
-            clearSession();
+          onClick={async () => {
+            // Blacklist the refresh token + clear the cookie server-side, then
+            // drop the local session and bounce to the login page.
+            await logout();
             window.location.href = "/login";
           }}
           className="flex items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400 hover:text-red-500 transition-colors"

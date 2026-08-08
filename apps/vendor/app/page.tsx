@@ -4,6 +4,11 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { m, AnimatePresence } from "framer-motion";
 import { Badge, CountdownTimer, EmptyState } from "@snakzap/ui";
 import { useOrdersWebSocket } from "@/hooks/useOrdersWebSocket";
+import {
+  isPickupOtpComplete,
+  pickupFailureMessage,
+  sanitizePickupOtp,
+} from "@/lib/kds";
 
 interface OrderItem {
   name: string;
@@ -86,6 +91,8 @@ export default function VendorDashboard() {
   const [orders, setOrders] = useState<DashboardOrder[]>([]);
   const [error, setError] = useState("");
   const [otpInput, setOtpInput] = useState<Record<string, string>>({});
+  const [otpError, setOtpError] = useState<Record<string, string>>({});
+  const [handingOver, setHandingOver] = useState<Record<string, boolean>>({});
   const [now, setNow] = useState(Date.now());
   const { updates, connected } = useOrdersWebSocket(RESTAURANT_ID);
   const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
@@ -129,16 +136,20 @@ export default function VendorDashboard() {
         setOrders((prev) =>
           prev.map((o) => (o.id === orderId ? { ...o, status: body.data.status } : o)),
         );
+      } else {
+        setError(body.error?.message ?? "Could not advance the order.");
       }
     } catch {
-      // ignore
+      setError("Could not reach the server. Check your connection and try again.");
     }
   }
 
   async function confirmPickup(orderId: string) {
     const otp = otpInput[orderId];
-    if (!otp) return;
+    if (!isPickupOtpComplete(otp)) return;
 
+    setHandingOver((p) => ({ ...p, [orderId]: true }));
+    setOtpError((p) => ({ ...p, [orderId]: "" }));
     try {
       const res = await fetch(`/api/v1/orders/${orderId}/confirm-pickup`, {
         method: "POST",
@@ -148,9 +159,32 @@ export default function VendorDashboard() {
       const body = await res.json();
       if (body.success) {
         setOrders((prev) => prev.filter((o) => o.id !== orderId));
+        setOtpInput((p) => {
+          const next = { ...p };
+          delete next[orderId];
+          return next;
+        });
+      } else {
+        // Fallback for failed/expired OTP (INVALID_OTP), already picked up,
+        // or order no longer ready. Keep the order card, surface the error,
+        // and clear the input so staff can re-enter the code.
+        setOtpError((p) => ({
+          ...p,
+          [orderId]: pickupFailureMessage(body.error?.code, body.error?.message),
+        }));
+        setOtpInput((p) => ({ ...p, [orderId]: "" }));
       }
     } catch {
-      // ignore
+      setOtpError((p) => ({
+        ...p,
+        [orderId]: pickupFailureMessage(undefined),
+      }));
+    } finally {
+      setHandingOver((p) => {
+        const next = { ...p };
+        delete next[orderId];
+        return next;
+      });
     }
   }
 
@@ -279,22 +313,33 @@ export default function VendorDashboard() {
                                 maxLength={4}
                                 placeholder="Enter OTP"
                                 value={otpInput[order.id] ?? ""}
-                                onChange={(e) =>
-                                  setOtpInput((p) => ({
-                                    ...p,
-                                    [order.id]: e.target.value.replace(/\D/g, "").slice(0, 4),
-                                  }))
-                                }
+                                onChange={(e) => {
+                                  const value = sanitizePickupOtp(e.target.value);
+                                  setOtpInput((p) => ({ ...p, [order.id]: value }));
+                                  if (otpError[order.id]) {
+                                    setOtpError((p) => ({ ...p, [order.id]: "" }));
+                                  }
+                                }}
                                 className="min-h-[44px] w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600 outline-none focus:border-primary"
                               />
+                              {otpError[order.id] && (
+                                <p role="alert" className="text-xs text-red-400">
+                                  {otpError[order.id]}
+                                </p>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => confirmPickup(order.id)}
-                                disabled={(otpInput[order.id] ?? "").length !== 4}
+                                disabled={
+                                  !isPickupOtpComplete(otpInput[order.id]) ||
+                                  handingOver[order.id] === true
+                                }
                                 aria-label={`Hand over order #${order.id.slice(-4).toUpperCase()}`}
                                 className="min-h-[44px] w-full rounded-lg bg-urgency-green px-4 py-2.5 text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] hover:brightness-110 disabled:opacity-30"
                               >
-                                Hand Over
+                                {handingOver[order.id]
+                                  ? "Handing over..."
+                                  : "Hand Over"}
                               </button>
                             </div>
                           )}
