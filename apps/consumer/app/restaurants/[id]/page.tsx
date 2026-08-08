@@ -16,11 +16,41 @@ export default async function RestaurantMenuPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [restaurants, menu] = await Promise.all([
-    fetchRestaurants(),
-    fetchRestaurantMenu(id),
-  ]);
+  let restaurants: Awaited<ReturnType<typeof fetchRestaurants>> = [];
+  let menu: Awaited<ReturnType<typeof fetchRestaurantMenu>> = [];
+  let loadError = "";
+
+  try {
+    [restaurants, menu] = await Promise.all([
+      fetchRestaurants(),
+      fetchRestaurantMenu(id),
+    ]);
+  } catch (err) {
+    loadError = err instanceof Error ? err.message : "Failed to load menu";
+  }
+
   const restaurant = restaurants.find((r) => r.id === id);
+
+  if (loadError) {
+    return (
+      <main className="mx-auto max-w-5xl px-4 py-6">
+        <div className="rounded-2xl bg-white p-10 text-center shadow-sm">
+          <p
+            role="alert"
+            className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-600"
+          >
+            {loadError}. Please try again later.
+          </p>
+          <Link
+            href="/"
+            className="mt-4 inline-block rounded-full bg-primary-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
+          >
+            Back to Home
+          </Link>
+        </div>
+      </main>
+    );
+  }
 
   if (!restaurant) {
     return (
