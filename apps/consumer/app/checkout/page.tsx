@@ -207,6 +207,53 @@ function CheckoutContent() {
   const [error, setError] = useState("");
   const [processing, setProcessing] = useState(false);
   const [pickupSlot, setPickupSlot] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+
+  useEffect(() => {
+    if (step !== "payment" || !rpOrderId) return;
+
+    const openRazorpay = async () => {
+      const loaded = await loadRazorpayScript();
+      if (!loaded) {
+        setError("Failed to load payment gateway");
+        setStep("cart");
+        return;
+      }
+
+      const rzp = createRazorpayInstance({
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "rzp_test_placeholder",
+        amount: amount * 100,
+        currency: "INR",
+        name: "SnakZap",
+        description: `Order #${orderId}`,
+        order_id: rpOrderId,
+        prefill: { contact: user?.phone || "" },
+        theme: { color: "#0D9488" },
+        handler: async (response) => {
+          setProcessing(true);
+          try {
+            await simulatePaymentWebhook(rpOrderId, amount, true);
+            clear();
+            setStep("success");
+          } catch (err) {
+            setError(err instanceof Error ? err.message : "Payment verification failed");
+            setStep("payment");
+          } finally {
+            setProcessing(false);
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            setError("Payment was cancelled. You can try again.");
+            setStep("payment");
+          },
+        },
+      });
+      rzp.open();
+    };
+
+    openRazorpay();
+  }, [step, rpOrderId, amount, orderId, user?.phone, clear, retryCount]);
 
   async function handlePlaceOrder() {
     if (!accessToken) return;
@@ -336,45 +383,6 @@ function CheckoutContent() {
   }
 
   if (step === "payment" && rpOrderId) {
-    useEffect(() => {
-      const openRazorpay = async () => {
-        const loaded = await loadRazorpayScript();
-        if (!loaded) { setError("Failed to load payment gateway"); setStep("cart"); return; }
-
-        const rzp = createRazorpayInstance({
-          key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "rzp_test_placeholder",
-          amount: amount * 100,
-          currency: "INR",
-          name: "SnakZap",
-          description: `Order #${orderId}`,
-          order_id: rpOrderId,
-          prefill: { contact: user?.phone || "" },
-          theme: { color: "#0D9488" },
-          handler: async (response) => {
-            setProcessing(true);
-            try {
-              await simulatePaymentWebhook(rpOrderId, amount, true);
-              clear();
-              setStep("success");
-            } catch (err) {
-              setError(err instanceof Error ? err.message : "Payment verification failed");
-              setStep("payment");
-            } finally {
-              setProcessing(false);
-            }
-          },
-          modal: {
-            ondismiss: () => {
-              setError("Payment was cancelled. You can try again.");
-              setStep("payment");
-            },
-          },
-        });
-        rzp.open();
-      };
-      openRazorpay();
-    }, [rpOrderId]);
-
     return (
       <main className="py-6">
         <header className="mb-6">
@@ -393,7 +401,10 @@ function CheckoutContent() {
               <p className="rounded-xl bg-red-50 p-3 text-center text-sm text-red-600">{error}</p>
               <button
                 type="button"
-                onClick={() => { setError(""); }}
+                onClick={() => {
+                  setError("");
+                  setRetryCount((count) => count + 1);
+                }}
                 className="w-full min-h-[44px] rounded-full bg-primary-500 py-3 text-sm font-semibold text-white hover:bg-primary-hover"
               >
                 Try Again

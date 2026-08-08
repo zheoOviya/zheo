@@ -124,8 +124,15 @@ async function adminFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return body.data;
 }
 
-export function fetchHeatmap(): Promise<HeatmapResult> {
-  return adminFetch<HeatmapResult>("/api/v1/discovery/heatmap");
+export async function fetchHeatmap(): Promise<HeatmapResult> {
+  // The heatmap lives on the public discovery router (`/api/v1/discovery/heatmap`),
+  // not under the `/api/v1/admin` prefix used by `adminFetch`.
+  const res = await fetch("/api/v1/discovery/heatmap");
+  const body = await res.json();
+  if (!body.success) {
+    throw new Error(body.error?.message ?? "Request failed");
+  }
+  return body.data;
 }
 
 export function fetchDashboardMetrics(): Promise<DashboardMetrics> {

@@ -70,12 +70,18 @@ const navItems = [
   },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({
+  className = "hidden md:flex md:flex-col md:w-64 md:fixed md:inset-y-0 bg-white dark:bg-neutral-950 border-r border-neutral-200 dark:border-neutral-800 z-30",
+  onNavigate,
+}: {
+  className?: string;
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
   const role = getUserRole() ?? "ADMIN";
 
   return (
-    <aside className="hidden md:flex md:flex-col md:w-64 md:fixed md:inset-y-0 bg-white dark:bg-neutral-950 border-r border-neutral-200 dark:border-neutral-800 z-30">
+    <aside className={className}>
       <div className="flex h-16 items-center px-6 border-b border-neutral-200 dark:border-neutral-800">
         <Link href="/dashboard" className="text-lg font-bold text-primary-500">
           SnakZap Ops
@@ -88,6 +94,7 @@ export default function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              onClick={onNavigate}
               className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
                 active
                   ? "bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400"

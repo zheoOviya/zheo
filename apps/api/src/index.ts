@@ -1,12 +1,10 @@
 import "dotenv/config";
 import { createServer } from "node:http";
 import { config } from "./config";
-import { createApp } from "./app";
-import { closeDb } from "./lib/db";
+import { closeDb, probePostgres } from "./lib/db";
 import { getRedis } from "./lib/redis";
 import { logger } from "./lib/logger";
 import { initWebSocketServer } from "./lib/websocket";
-import { seedPhase4DemoData } from "./seed/phase4Demo";
 
 // Resilience: never let an unhandled async failure take the process down.
 process.on("unhandledRejection", (reason) => {
@@ -19,70 +17,95 @@ process.on("uncaughtException", (err) => {
   logger.error({ message: "uncaught_exception", error: err.message, stack: err.stack });
 });
 
-const app = createApp();
-const server = createServer(app);
+async function main() {
+  // Probe PostgreSQL before any repository module loads. Pool construction is
+  // lazy (never opens a socket), so a live database must be verified with a
+  // real query. When unreachable (e.g. preview without Postgres), fall back to
+  // in-memory repositories so the whole API keeps working. In production we
+  // intentionally do NOT fall back - a silent memory DB would hide data loss.
+  if (config.env !== "production") {
+    const dbUp = await probePostgres();
+    if (!dbUp) {
+      logger.warn({
+        message:
+          "postgres_unreachable: falling back to in-memory repositories",
+      });
+      process.env.USE_MEMORY_REPOS = "true";
+    }
+  }
 
-const DEFAULT_ACCESS_SECRET = "dev-access-secret-change-in-production";
-const DEFAULT_REFRESH_SECRET = "dev-refresh-secret-change-in-production";
+  const { createApp } = await import("./app");
+  const app = createApp();
+  const server = createServer(app);
 
-if (
-  config.env === "production" &&
-  (config.jwt.accessSecret === DEFAULT_ACCESS_SECRET ||
-    config.jwt.refreshSecret === DEFAULT_REFRESH_SECRET)
-) {
-  logger.error({
-    message:
-      "jwt_default_secret_in_production: JWT secrets are using dev defaults. " +
-      "Set JWT_SECRET and JWT_REFRESH_SECRET before going live.",
+  const DEFAULT_ACCESS_SECRET = "dev-access-secret-change-in-production";
+  const DEFAULT_REFRESH_SECRET = "dev-refresh-secret-change-in-production";
+
+  if (
+    config.env === "production" &&
+    (config.jwt.accessSecret === DEFAULT_ACCESS_SECRET ||
+      config.jwt.refreshSecret === DEFAULT_REFRESH_SECRET)
+  ) {
+    logger.error({
+      message:
+        "jwt_default_secret_in_production: JWT secrets are using dev defaults. " +
+        "Set JWT_SECRET and JWT_REFRESH_SECRET before going live.",
+    });
+  } else if (
+    config.jwt.accessSecret === DEFAULT_ACCESS_SECRET ||
+    config.jwt.refreshSecret === DEFAULT_REFRESH_SECRET
+  ) {
+    logger.warn({
+      message:
+        "jwt_default_secret_in_use: JWT secrets fall back to dev defaults. " +
+        "Set JWT_SECRET and JWT_REFRESH_SECRET in non-development environments.",
+    });
+  }
+
+  // Phase 4 demo data (dev only): Chain Owner + "SnakZap Mumbai Chain".
+  const { seedPhase4DemoData } = await import("./seed/phase4Demo");
+  seedPhase4DemoData();
+
+  // WebSocket upgrade handling on the same HTTP server (EOS Layer 1, P05)
+  initWebSocketServer(server);
+
+  server.listen(config.port, () => {
+    logger.info({
+      message: "server_started",
+      port: config.port,
+      env: config.env,
+    });
   });
-} else if (
-  config.jwt.accessSecret === DEFAULT_ACCESS_SECRET ||
-  config.jwt.refreshSecret === DEFAULT_REFRESH_SECRET
-) {
-  logger.warn({
-    message:
-      "jwt_default_secret_in_use: JWT secrets fall back to dev defaults. " +
-      "Set JWT_SECRET and JWT_REFRESH_SECRET in non-development environments.",
-  });
+
+  let shuttingDown = false;
+  function shutdown(signal: string) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info({ message: "shutdown_initiated", signal });
+    server.close(async () => {
+      logger.info({ message: "http_server_closed" });
+      try {
+        await getRedis().quit();
+        logger.info({ message: "redis_disconnected" });
+      } catch {
+        // ignore
+      }
+      try {
+        await closeDb();
+        logger.info({ message: "postgres_pool_closed" });
+      } catch {
+        // ignore
+      }
+      process.exit(0);
+    });
+    setTimeout(() => {
+      logger.error({ message: "shutdown_timeout", signal });
+      process.exit(1);
+    }, 10_000).unref();
+  }
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
-// Phase 4 demo data (dev only): Chain Owner + "SnakZap Mumbai Chain".
-seedPhase4DemoData();
-
-// WebSocket upgrade handling on the same HTTP server (EOS Layer 1, P05)
-initWebSocketServer(server);
-
-server.listen(config.port, () => {
-  logger.info({
-    message: "server_started",
-    port: config.port,
-    env: config.env,
-  });
-});
-
-function shutdown(signal: string) {
-  logger.info({ message: "shutdown_initiated", signal });
-  server.close(async () => {
-    logger.info({ message: "http_server_closed" });
-    try {
-      await getRedis().quit();
-      logger.info({ message: "redis_disconnected" });
-    } catch {
-      // ignore
-    }
-    try {
-      await closeDb();
-      logger.info({ message: "postgres_pool_closed" });
-    } catch {
-      // ignore
-    }
-    process.exit(0);
-  });
-  setTimeout(() => {
-    logger.error({ message: "shutdown_timeout", signal });
-    process.exit(1);
-  }, 10_000).unref();
-}
-
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+main();

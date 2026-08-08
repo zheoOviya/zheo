@@ -38,3 +38,25 @@ export async function closeDb(): Promise<void> {
     db = null;
   }
 }
+
+/**
+ * Probes whether PostgreSQL is actually reachable before the app boots.
+ * Pool construction is lazy (it never opens a socket), so `createDb()`
+ * succeeding does not mean queries will work. This probe issues a real
+ * `SELECT 1` so the caller can fall back to in-memory repositories when
+ * the database is down (e.g. in preview environments without Postgres).
+ */
+export async function probePostgres(timeoutMs = 2000): Promise<boolean> {
+  const probe = new Pool({
+    connectionString: config.database.url,
+    connectionTimeoutMillis: timeoutMs,
+  });
+  try {
+    await probe.query("SELECT 1");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await probe.end();
+  }
+}

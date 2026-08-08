@@ -23,6 +23,7 @@ export function errorHandler(
   logger.error({
     message: "unhandled_error",
     error: message,
+    stack: err instanceof Error ? err.stack : undefined,
     correlation_id: getCorrelationId(res),
   });
   fail(res, "INTERNAL_ERROR", "Internal server error", 500);
