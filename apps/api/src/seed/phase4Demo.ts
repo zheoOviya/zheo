@@ -14,7 +14,10 @@ const BIRYANI_HOUSE = "a0000000-0000-4000-8000-000000000001";
 const GREEN_BOWL = "a0000000-0000-4000-8000-000000000002";
 
 export function seedPhase4DemoData(): void {
-  if (process.env.NODE_ENV === "test") return;
+  // Dev/demo only: never seed in test or production.
+  const env = process.env.NODE_ENV;
+  if (env === "test" || env === "production") return;
+  if (process.env.SEED_DEMO_DATA === "false") return;
 
   sharedIdentityRepo._seed({
     id: CHAIN_OWNER_ID,

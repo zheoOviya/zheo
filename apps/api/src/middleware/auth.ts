@@ -11,7 +11,7 @@ import { AppError } from "./envelope";
 
 export function authenticate(
   req: Request,
-  _res: Response,
+  res: Response,
   next: NextFunction,
 ): void {
   const header = req.headers.authorization;
@@ -29,7 +29,7 @@ export function authenticate(
   const token = header.slice(7);
   try {
     const claims = jwtService.verifyAccessToken(token);
-    _res.locals.userId = claims.sub;
+    res.locals.userId = claims.sub;
     next();
   } catch (err) {
     if (err instanceof AppError) {

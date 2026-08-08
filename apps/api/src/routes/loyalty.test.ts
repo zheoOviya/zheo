@@ -20,6 +20,7 @@ const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001";
 const REFERRER_ID = "00000000-0000-4000-8000-0000000000a1";
 const CLAIMANT_A = "00000000-0000-4000-8000-0000000000b1";
 const CLAIMANT_B = "00000000-0000-4000-8000-0000000000b2";
+const OWNER_ID = "e0000000-0000-4000-a000-000000000001"; // Biryani House owner
 
 function auth(userId: string, deviceFp = "fp_test_device_abc1234") {
   return {
@@ -35,7 +36,7 @@ function auth(userId: string, deviceFp = "fp_test_device_abc1234") {
 function vendorAuthHeaders(userId?: string, role?: string) {
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? "00000000-0000-4000-8000-0000000000a1",
+      sub: userId ?? OWNER_ID,
       phone: "+919876543210",
       role: role ?? "VENDOR_OWNER",
       device_fingerprint: "fp_test_device_abc1234",

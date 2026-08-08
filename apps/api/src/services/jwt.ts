@@ -24,13 +24,33 @@ export interface AuthClaims {
 const REFRESH_BLACKLIST_PREFIX = "jwt:blacklist:";
 
 function toAuthClaims(payload: JwtPayload): AuthClaims {
+  const { sub, phone, role, device_fingerprint, type, jti } = payload;
+  if (
+    typeof sub !== "string" ||
+    sub.length === 0 ||
+    typeof phone !== "string" ||
+    phone.length === 0 ||
+    typeof role !== "string" ||
+    role.length === 0 ||
+    typeof device_fingerprint !== "string" ||
+    typeof type !== "string"
+  ) {
+    throw new AppError(
+      "INVALID_TOKEN",
+      "Token is missing required claims",
+      401,
+    );
+  }
+  if (type !== "access" && type !== "refresh") {
+    throw new AppError("INVALID_TOKEN", "Invalid token type claim", 401);
+  }
   return {
-    sub: payload.sub as string,
-    phone: payload.phone as string,
-    role: payload.role as string,
-    device_fingerprint: payload.device_fingerprint as string,
-    type: payload.type as "access" | "refresh",
-    jti: payload.jti as string | undefined,
+    sub,
+    phone,
+    role,
+    device_fingerprint,
+    type,
+    jti: typeof jti === "string" ? jti : undefined,
   };
 }
 

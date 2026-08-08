@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
+import { assertRestaurantAccess } from "../middleware/vendorAccess";
 import { sharedAuditRepo, sharedOrderRepo } from "../repositories/shared";
 import { FulfillmentService } from "../services/fulfillment";
 import { GeoFenceService } from "../services/geoFence";
@@ -88,6 +89,12 @@ export const vendorRouter: Router = Router();
 vendorRouter.put(
   "/orders/:id/status",
   asyncHandler(async (req, res) => {
+    const order = await sharedOrderRepo.getById(orderId(req.params.id));
+    if (!order) {
+      throw new AppError("ORDER_NOT_FOUND", "Order not found", 404);
+    }
+    await assertRestaurantAccess(res, order.restaurant_id);
+
     const result = await fulfillmentService.advanceOrderStatus(orderId(req.params.id));
 
     // P13: audit the early-ready alert so the push/SMS producer has a trail.
@@ -116,6 +123,7 @@ vendorRouter.get(
     if (!restaurantId) {
       throw new AppError("VALIDATION_ERROR", "restaurant_id query param required", 400);
     }
+    await assertRestaurantAccess(res, restaurantId);
     const orders = await sharedOrderRepo.getByRestaurant(restaurantId);
     const filtered = orders.filter(
       (o) => !["PICKED_UP", "CANCELLED", "PAYMENT_FAILED", "DRAFT", "PAYMENT_PENDING"].includes(o.status),

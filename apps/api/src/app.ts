@@ -54,9 +54,24 @@ export function createApp(): Express {
 
   app.set("trust proxy", 1);
   app.use(helmet());
-  app.use(cors({ origin: ["http://localhost:3000", "http://localhost:3002", "http://localhost:3003"], credentials: true }));
+  app.use(
+    cors({
+      origin: config.cors.origins
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean),
+      credentials: true,
+    }),
+  );
   app.use(compression());
-  app.use(express.json({ limit: "1mb" }));
+  app.use(
+    express.json({
+      limit: "1mb",
+      verify: (req, _res, buf) => {
+        (req as express.Request).rawBody = buf;
+      },
+    }),
+  );
   app.use(cookieParser());
   app.use(correlationIdMiddleware);
 

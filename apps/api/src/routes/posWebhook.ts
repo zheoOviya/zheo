@@ -13,9 +13,9 @@ import { PetpoojaPosService } from "../services/posPetpooja";
 // POS webhook routes - /api/v1/webhooks/pos
 // Petpooja order push (PRD Phase 2, V01).
 //
-// NOTE: mirroring the Razorpay seam, the signature is verified
-// over JSON.stringify(req.body). Production should mount a
-// raw-body parser so HMAC covers the exact inbound bytes.
+// The signature is verified over the exact inbound bytes captured by the
+// JSON parser (req.rawBody), so HMAC covers the original payload — not a
+// re-serialization that could silently change bytes and break the MAC.
 // ============================================
 
 const petpoojaPosService = new PetpoojaPosService(
@@ -41,7 +41,10 @@ posWebhookRouter.post(
       );
     }
 
-    const rawBody = JSON.stringify(req.body);
+    const rawBody =
+      typeof req.rawBody === "string"
+        ? req.rawBody
+        : req.rawBody?.toString("utf8") ?? JSON.stringify(req.body);
     const result = await petpoojaPosService.processOrderWebhook(
       rawBody,
       signature,

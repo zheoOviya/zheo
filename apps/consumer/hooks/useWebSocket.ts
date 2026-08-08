@@ -19,10 +19,16 @@ const WS_URL =
     ? `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/api/v1/ws`
     : "ws://localhost:3001/api/v1/ws");
 
+const BASE_RETRY_MS = 500;
+const MAX_RETRY_MS = 30_000;
+const MAX_RETRIES = 10;
+
 export function useWebSocket(orderId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const retryRef = useRef<number>(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const connect = useCallback(() => {
     if (!orderId || wsRef.current) return;
@@ -31,6 +37,7 @@ export function useWebSocket(orderId: string | null) {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      retryRef.current = 0;
       setConnected(true);
       ws.send(JSON.stringify({ type: "subscribe", order_id: orderId }));
     };
@@ -52,6 +59,18 @@ export function useWebSocket(orderId: string | null) {
     ws.onclose = () => {
       setConnected(false);
       wsRef.current = null;
+
+      // Exponential backoff reconnect with a cap on attempts.
+      if (retryRef.current < MAX_RETRIES) {
+        const delay = Math.min(
+          BASE_RETRY_MS * 2 ** retryRef.current,
+          MAX_RETRY_MS,
+        );
+        retryRef.current += 1;
+        timerRef.current = setTimeout(() => {
+          connect();
+        }, delay);
+      }
     };
 
     ws.onerror = () => {
@@ -62,6 +81,8 @@ export function useWebSocket(orderId: string | null) {
   useEffect(() => {
     connect();
     return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      retryRef.current = MAX_RETRIES;
       wsRef.current?.close();
       wsRef.current = null;
     };

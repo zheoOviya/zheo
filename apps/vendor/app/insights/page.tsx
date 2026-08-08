@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import TealSkeleton from "@/components/TealSkeleton";
+import { Skeleton } from "@snakzap/ui";
 import { formatINR } from "@/lib/format";
 
 interface PeakHour {
@@ -132,12 +132,12 @@ export default function InsightsPage() {
       {loading ? (
         <div className="grid gap-4">
           <div className="grid grid-cols-2 gap-4">
-            <TealSkeleton className="h-24" />
-            <TealSkeleton className="h-24" />
-            <TealSkeleton className="h-24" />
-            <TealSkeleton className="h-24" />
+            <Skeleton className="h-24" />
+            <Skeleton className="h-24" />
+            <Skeleton className="h-24" />
+            <Skeleton className="h-24" />
           </div>
-          <TealSkeleton className="h-64" />
+          <Skeleton className="h-64" />
         </div>
       ) : error ? (
         <p className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">

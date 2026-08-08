@@ -34,10 +34,15 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ??
   (typeof window === "undefined" ? "http://localhost:3001" : "");
 
-async function fetcher<T>(path: string, signal?: AbortSignal): Promise<T> {
+async function fetcher<T>(
+  path: string,
+  signal?: AbortSignal,
+  headers?: Record<string, string>,
+): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     signal,
     cache: "no-store",
+    headers,
   });
   const body: {
     success: boolean;
@@ -455,17 +460,11 @@ export interface PersonalizedHomepage {
 export function fetchPersonalizedHomepage(
   token?: string,
 ): Promise<PersonalizedHomepage> {
-  return fetch(`${API_BASE}/api/v1/discovery/personalized-homepage`, {
-    cache: "no-store",
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  })
-    .then((res) => res.json())
-    .then((body: { success: boolean; data: PersonalizedHomepage | null; error: { message: string } | null }) => {
-      if (!body.success || body.data === null) {
-        throw new Error(body.error?.message ?? "Failed to load personalized feed");
-      }
-      return body.data;
-    });
+  return fetcher<PersonalizedHomepage>(
+    "/api/v1/discovery/personalized-homepage",
+    undefined,
+    token ? { Authorization: `Bearer ${token}` } : undefined,
+  );
 }
 
 export interface TrendingDish {

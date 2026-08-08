@@ -55,12 +55,10 @@ export interface IdentityRepository {
 
 export class MemoryIdentityRepository implements IdentityRepository {
   private readonly users = new Map<string, IdentityUser>();
+  private readonly usersById = new Map<string, IdentityUser>();
 
   async getById(id: string): Promise<IdentityUser | null> {
-    for (const user of this.users.values()) {
-      if (user.id === id) return user;
-    }
-    return null;
+    return this.usersById.get(id) ?? null;
   }
 
   async getByPhone(phone: string): Promise<IdentityUser | null> {
@@ -81,28 +79,25 @@ export class MemoryIdentityRepository implements IdentityRepository {
       created_at: new Date().toISOString(),
     };
     this.users.set(phone, user);
+    this.usersById.set(user.id, user);
     return user;
   }
 
   _seed(user: IdentityUser): void {
     this.users.set(user.phone, user);
+    this.usersById.set(user.id, user);
   }
 
   async updateSpiceTolerance(
     userId: string,
     tolerance: number,
   ): Promise<IdentityUser | null> {
-    for (const [phone, user] of this.users.entries()) {
-      if (user.id === userId) {
-        const updated: IdentityUser = {
-          ...user,
-          spice_tolerance: tolerance,
-        };
-        this.users.set(phone, updated);
-        return updated;
-      }
-    }
-    return null;
+    const user = this.usersById.get(userId);
+    if (!user) return null;
+    const updated: IdentityUser = { ...user, spice_tolerance: tolerance };
+    this.users.set(user.phone, updated);
+    this.usersById.set(userId, updated);
+    return updated;
   }
 
   async listAll(page: number, limit: number, searchPhone?: string): Promise<{ items: IdentityUser[]; total: number }> {
@@ -118,39 +113,34 @@ export class MemoryIdentityRepository implements IdentityRepository {
   }
 
   async suspend(userId: string): Promise<IdentityUser | null> {
-    for (const [phone, user] of this.users.entries()) {
-      if (user.id === userId) {
-        const updated: IdentityUser = { ...user, is_suspended: true };
-        this.users.set(phone, updated);
-        return updated;
-      }
-    }
-    return null;
+    const user = this.usersById.get(userId);
+    if (!user) return null;
+    const updated: IdentityUser = { ...user, is_suspended: true };
+    this.users.set(user.phone, updated);
+    this.usersById.set(userId, updated);
+    return updated;
   }
 
   async reactivate(userId: string): Promise<IdentityUser | null> {
-    for (const [phone, user] of this.users.entries()) {
-      if (user.id === userId) {
-        const updated: IdentityUser = { ...user, is_suspended: false };
-        this.users.set(phone, updated);
-        return updated;
-      }
-    }
-    return null;
+    const user = this.usersById.get(userId);
+    if (!user) return null;
+    const updated: IdentityUser = { ...user, is_suspended: false };
+    this.users.set(user.phone, updated);
+    this.usersById.set(userId, updated);
+    return updated;
   }
 
   async updateRole(userId: string, role: IdentityUser["role"]): Promise<IdentityUser | null> {
-    for (const [phone, user] of this.users.entries()) {
-      if (user.id === userId) {
-        const updated: IdentityUser = { ...user, role };
-        this.users.set(phone, updated);
-        return updated;
-      }
-    }
-    return null;
+    const user = this.usersById.get(userId);
+    if (!user) return null;
+    const updated: IdentityUser = { ...user, role };
+    this.users.set(user.phone, updated);
+    this.usersById.set(userId, updated);
+    return updated;
   }
 
   _reset(): void {
     this.users.clear();
+    this.usersById.clear();
   }
 }

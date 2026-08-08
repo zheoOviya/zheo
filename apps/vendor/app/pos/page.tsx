@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import TealSkeleton from "@/components/TealSkeleton";
+import { Skeleton } from "@snakzap/ui";
 
 const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
 const STORE_KEY = "snakzap_pos_store";
@@ -170,7 +170,7 @@ export default function PosPage() {
             >
               {syncing ? (
                 <span className="inline-flex items-center gap-2">
-                  <TealSkeleton className="h-3 w-12" />
+                  <Skeleton className="h-3 w-12" />
                   Syncing…
                 </span>
               ) : (
@@ -184,7 +184,7 @@ export default function PosPage() {
             >
               {testing ? (
                 <span className="inline-flex items-center gap-2">
-                  <TealSkeleton className="h-3 w-12" />
+                  <Skeleton className="h-3 w-12" />
                   Sending…
                 </span>
               ) : (

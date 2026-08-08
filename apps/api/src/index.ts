@@ -22,6 +22,30 @@ process.on("uncaughtException", (err) => {
 const app = createApp();
 const server = createServer(app);
 
+const DEFAULT_ACCESS_SECRET = "dev-access-secret-change-in-production";
+const DEFAULT_REFRESH_SECRET = "dev-refresh-secret-change-in-production";
+
+if (
+  config.env === "production" &&
+  (config.jwt.accessSecret === DEFAULT_ACCESS_SECRET ||
+    config.jwt.refreshSecret === DEFAULT_REFRESH_SECRET)
+) {
+  logger.error({
+    message:
+      "jwt_default_secret_in_production: JWT secrets are using dev defaults. " +
+      "Set JWT_SECRET and JWT_REFRESH_SECRET before going live.",
+  });
+} else if (
+  config.jwt.accessSecret === DEFAULT_ACCESS_SECRET ||
+  config.jwt.refreshSecret === DEFAULT_REFRESH_SECRET
+) {
+  logger.warn({
+    message:
+      "jwt_default_secret_in_use: JWT secrets fall back to dev defaults. " +
+      "Set JWT_SECRET and JWT_REFRESH_SECRET in non-development environments.",
+  });
+}
+
 // Phase 4 demo data (dev only): Chain Owner + "SnakZap Mumbai Chain".
 seedPhase4DemoData();
 

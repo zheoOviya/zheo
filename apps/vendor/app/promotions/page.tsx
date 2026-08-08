@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import TealSkeleton from "@/components/TealSkeleton";
+import { Skeleton } from "@snakzap/ui";
 import { formatINR } from "@/lib/format";
 
 interface Promotion {
@@ -151,7 +151,7 @@ export default function PromotionsPage() {
         >
           {submitting ? (
             <span className="inline-flex items-center gap-2">
-              <TealSkeleton className="h-3 w-12" />
+              <Skeleton className="h-3 w-12" />
               Creating…
             </span>
           ) : (
@@ -176,8 +176,8 @@ export default function PromotionsPage() {
         </h2>
         {loading ? (
           <div className="space-y-2">
-            <TealSkeleton className="h-16" />
-            <TealSkeleton className="h-16" />
+            <Skeleton className="h-16" />
+            <Skeleton className="h-16" />
           </div>
         ) : promos.length === 0 ? (
           <p className="rounded-2xl border border-primary-500/15 bg-primary-900/30 p-4 text-sm text-primary-600/60">

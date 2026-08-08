@@ -4,15 +4,11 @@ import "dotenv/config";
 // Config Module - simulates a Central Configuration Registry
 // (e.g. AWS AppConfig / Consul). All values are read from the
 // environment ONLY. Zero hardcoded secrets (EGS Layer 2.2).
+//
+// JWT secrets fall back to well-known dev defaults. The startup
+// warning in index.ts fires whenever the defaults are in use so a
+// production deployment can never silently run with weak secrets.
 // ============================================
-
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required configuration: ${name}`);
-  }
-  return value;
-}
 
 function optional(name: string, fallback: string): string {
   return process.env[name] ?? fallback;
@@ -102,6 +98,12 @@ export const config = {
     accessKeyId: optional("S3_ACCESS_KEY_ID", ""),
     secretAccessKey: optional("S3_SECRET_ACCESS_KEY", ""),
     cdnBaseUrl: optional("S3_CDN_BASE_URL", ""),
+  },
+
+  cors: {
+    // Comma-separated allowlist of origins. When CORS_ORIGINS is empty,
+    // the dev fallback (localhost frontend ports) is used.
+    origins: optional("CORS_ORIGINS", "http://localhost:3000,http://localhost:3002,http://localhost:3003"),
   },
 } as const;
 

@@ -10,6 +10,7 @@ import { sharedPaymentRepo } from "../repositories/shared";
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001";
 const USER_ID = "u00000000-0000-4000-8000-000000000001";
+const OWNER_ID = "e0000000-0000-4000-a000-000000000001"; // Biryani House owner
 
 function authHeaders(userId?: string) {
   return {
@@ -25,7 +26,7 @@ function authHeaders(userId?: string) {
 function vendorAuthHeaders(userId?: string, role?: string) {
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? USER_ID,
+      sub: userId ?? OWNER_ID,
       phone: "+919876543210",
       role: role ?? "VENDOR_OWNER",
       device_fingerprint: "fp_test_device_abc1234",
@@ -456,6 +457,71 @@ describe("Fulfillment routes", () => {
 
       expect(res.body.data).toHaveLength(1);
       expect(res.body.data[0].id).toBe(orderRes.body.data.id);
+    });
+  });
+
+  describe("Vendor restaurant ownership guard (H2)", () => {
+    const OTHER_OWNER_ID = "e0000000-0000-4000-a000-000000000002"; // Green Bowl owner
+
+    it("forbids a vendor listing orders for a restaurant they do not own (403)", async () => {
+      const res = await request(app)
+        .get(`/api/vendor/orders?restaurant_id=${REST_ID}`)
+        .set(vendorAuthHeaders(OTHER_OWNER_ID))
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
+    });
+
+    it("forbids a vendor advancing status on a foreign restaurant's order (403)", async () => {
+      const orderRes = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+
+      await sharedOrderRepo.updateStatus(orderRes.body.data.id, "CONFIRMED");
+
+      const res = await request(app)
+        .put(`/api/vendor/orders/${orderRes.body.data.id}/status`)
+        .set(vendorAuthHeaders(OTHER_OWNER_ID))
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
+
+      const order = await sharedOrderRepo.getById(orderRes.body.data.id);
+      expect(order?.status).toBe("CONFIRMED");
+    });
+
+    it("allows an ADMIN to bypass the ownership guard", async () => {
+      const orderRes = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+
+      await sharedOrderRepo.updateStatus(orderRes.body.data.id, "CONFIRMED");
+
+      const res = await request(app)
+        .put(`/api/vendor/orders/${orderRes.body.data.id}/status`)
+        .set(vendorAuthHeaders(OTHER_OWNER_ID, "ADMIN"))
+        .expect(200);
+
+      expect(res.body.data.status).toBe("PREPARING");
+    });
+
+    it("forbids a vendor fetching menu for a restaurant they do not own (403)", async () => {
+      const res = await request(app)
+        .get(`/api/vendor/menu?restaurant_id=${REST_ID}`)
+        .set(vendorAuthHeaders(OTHER_OWNER_ID))
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
     });
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import TealSkeleton from "@/components/TealSkeleton";
+import { Skeleton } from "@snakzap/ui";
 import { formatINR } from "@/lib/format";
 
 interface SettlementSummary {
@@ -113,10 +113,10 @@ export default function SettlementsPage() {
 
       {!summary ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <TealSkeleton className="h-28" />
-          <TealSkeleton className="h-28" />
-          <TealSkeleton className="h-28" />
-          <TealSkeleton className="h-64 sm:col-span-3" />
+          <Skeleton className="h-28" />
+          <Skeleton className="h-28" />
+          <Skeleton className="h-28" />
+          <Skeleton className="h-64 sm:col-span-3" />
         </div>
       ) : (
         <>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import TealSkeleton from "@/components/TealSkeleton";
+import { Skeleton } from "@snakzap/ui";
 import { formatINR } from "@/lib/format";
 
 interface MenuItem {
@@ -111,9 +111,9 @@ export default function MenuPage() {
 
       {loading ? (
         <div className="space-y-3">
-          <TealSkeleton className="h-24" />
-          <TealSkeleton className="h-24" />
-          <TealSkeleton className="h-24" />
+          <Skeleton className="h-24" />
+          <Skeleton className="h-24" />
+          <Skeleton className="h-24" />
         </div>
       ) : items.length === 0 ? (
         <p className="py-8 text-center text-sm text-primary-600/30">
@@ -128,7 +128,7 @@ export default function MenuPage() {
             >
               <div className="flex items-start gap-4">
                 {uploading === item.id ? (
-                  <TealSkeleton className="h-20 w-20 shrink-0 rounded-xl" />
+                  <Skeleton className="h-20 w-20 shrink-0 rounded-xl" />
                 ) : item.image_url ? (
                   <img
                     src={item.image_url}

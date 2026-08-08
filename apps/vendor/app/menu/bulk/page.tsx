@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import TealSkeleton from "@/components/TealSkeleton";
+import { Skeleton } from "@snakzap/ui";
 
 interface MenuItem {
   id: string;
@@ -95,7 +95,7 @@ export default function BulkMenuPage() {
         >
           {saving ? (
             <span className="inline-flex items-center gap-2">
-              <TealSkeleton className="h-3 w-12" />
+              <Skeleton className="h-3 w-12" />
               Saving…
             </span>
           ) : (
@@ -117,10 +117,10 @@ export default function BulkMenuPage() {
 
       {loading ? (
         <div className="space-y-2">
-          <TealSkeleton className="h-12" />
-          <TealSkeleton className="h-12" />
-          <TealSkeleton className="h-12" />
-          <TealSkeleton className="h-12" />
+          <Skeleton className="h-12" />
+          <Skeleton className="h-12" />
+          <Skeleton className="h-12" />
+          <Skeleton className="h-12" />
         </div>
       ) : (
         <div className="overflow-x-auto rounded-2xl border border-primary-500/15 bg-primary-900/30">

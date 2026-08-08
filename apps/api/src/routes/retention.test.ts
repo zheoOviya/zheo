@@ -20,6 +20,7 @@ import { resetCatalogRepository } from "./catalog";
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001"; // Chicken Biryani (spice 5)
 const USER_ID = "00000000-0000-4000-8000-0000000000e1";
+const OWNER_ID = "e0000000-0000-4000-a000-000000000001"; // Biryani House owner
 
 function authHeaders(userId?: string) {
   return {
@@ -35,7 +36,7 @@ function authHeaders(userId?: string) {
 function vendorAuthHeaders(userId?: string, role?: string) {
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? USER_ID,
+      sub: userId ?? OWNER_ID,
       phone: "+919876543210",
       role: role ?? "VENDOR_OWNER",
       device_fingerprint: "fp_test_device_abc1234",

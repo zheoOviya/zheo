@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import TealSkeleton from "@/components/TealSkeleton";
+import { Skeleton } from "@snakzap/ui";
 import { formatINR } from "@/lib/format";
 import { authedFetch } from "@/lib/cateringAuth";
 
@@ -300,7 +300,7 @@ export default function CateringPage() {
                       Menu item
                     </span>
                     {menu.length === 0 ? (
-                      <TealSkeleton className="h-9 w-full" />
+                      <Skeleton className="h-9 w-full" />
                     ) : (
                       <select
                         value={line.menu_item_id}

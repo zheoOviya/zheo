@@ -76,8 +76,9 @@ export async function verifyOtp(
     throw new AppError("OTP_EXPIRED", "OTP expired or not requested", 400);
   }
 
-  const isDevMode = process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "test";
-  if (stored !== otp && !(isDevMode && /^\d{6}$/.test(otp))) {
+  const isDevBypass =
+    process.env.DEV_BYPASS_OTP === "true";
+  if (stored !== otp && !(isDevBypass && /^\d{6}$/.test(otp))) {
     throw new AppError("OTP_INVALID", "Invalid OTP", 400);
   }
 

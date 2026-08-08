@@ -3,6 +3,7 @@ import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
+import { assertRestaurantAccess } from "../middleware/vendorAccess";
 import { getCatalogRepository } from "./catalog";
 import {
   sharedAuditRepo,
@@ -152,6 +153,7 @@ vendorOpsRouter.get(
   "/menu",
   asyncHandler(async (req, res) => {
     const restaurantId = restaurantIdOf(req);
+    await assertRestaurantAccess(res, restaurantId);
     const repo = getCatalogRepository();
     const items = await repo.getMenuAll(restaurantId);
     ok(res, items.map((m) => ({
@@ -173,6 +175,7 @@ vendorOpsRouter.put(
   "/menu/bulk",
   asyncHandler(async (req, res) => {
     const restaurantId = restaurantIdOf(req);
+    await assertRestaurantAccess(res, restaurantId);
     const body = BulkMenuUpdateSchema.safeParse(req.body);
     if (!body.success) {
       throw new AppError(
@@ -225,6 +228,7 @@ vendorOpsRouter.put(
     if (!item) {
       throw new AppError("NOT_FOUND", "Menu item not found", 404);
     }
+    await assertRestaurantAccess(res, item.restaurant_id);
     const updated = await repo.updateMenuItem(paramId(req.params.itemId), patch.data);
     await sharedAuditRepo.log(actorId(res), "menu_updated", {
       menu_item_id: paramId(req.params.itemId),
@@ -266,6 +270,7 @@ vendorOpsRouter.post(
     if (!item) {
       throw new AppError("NOT_FOUND", "Menu item not found", 404);
     }
+    await assertRestaurantAccess(res, item.restaurant_id);
 
     const ext = file.originalname.split(".").pop() ?? "jpg";
     const key = buildMenuPhotoKey(item.restaurant_id, item.id, ext);
@@ -294,6 +299,7 @@ vendorOpsRouter.get(
   "/settlements/summary",
   asyncHandler(async (req, res) => {
     const restaurantId = restaurantIdOf(req);
+    await assertRestaurantAccess(res, restaurantId);
     const { periodStart, periodEnd } = previousSettlementWindow();
     const orders = await sharedOrderRepo.getSettlableOrdersByRestaurant(
       restaurantId,
@@ -309,6 +315,7 @@ vendorOpsRouter.put(
   "/settlements/today",
   asyncHandler(async (req, res) => {
     const restaurantId = restaurantIdOf(req);
+    await assertRestaurantAccess(res, restaurantId);
     const restaurant = await getCatalogRepository().getRestaurantById(
       restaurantId,
     );
@@ -341,6 +348,7 @@ vendorOpsRouter.post(
   "/pos/sync-menu",
   asyncHandler(async (req, res) => {
     const restaurantId = restaurantIdOf(req);
+    await assertRestaurantAccess(res, restaurantId);
     const result = await menuSyncService.syncMenu(restaurantId);
 
     await sharedAuditRepo.log(actorId(res), "pos_menu_synced", {
@@ -356,6 +364,7 @@ vendorOpsRouter.post(
   "/pos/simulate-order",
   asyncHandler(async (req, res) => {
     const restaurantId = restaurantIdOf(req);
+    await assertRestaurantAccess(res, restaurantId);
 
     // One-click demo: sync first so the POS items exist, then push an order.
     const synced = await menuSyncService.syncMenu(restaurantId);
@@ -394,6 +403,7 @@ vendorOpsRouter.get(
   "/insights",
   asyncHandler(async (req, res) => {
     const restaurantId = restaurantIdOf(req);
+    await assertRestaurantAccess(res, restaurantId);
     const days = parseInsightsDays(req.query.days);
     const insights = await insightsService.compute(restaurantId, days);
     ok(res, insights);
@@ -448,6 +458,7 @@ vendorOpsRouter.get(
   "/gst-export",
   asyncHandler(async (req, res) => {
     const restaurantId = restaurantIdOf(req);
+    await assertRestaurantAccess(res, restaurantId);
     const month = parseGstMonth(req.query.month);
     const { startIso, endIso } = gstMonthWindow(month);
 

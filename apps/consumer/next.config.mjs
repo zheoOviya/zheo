@@ -4,19 +4,24 @@ const withBundleAnalyzer = bundleAnalyzer({
   enabled: process.env.ANALYZE === "true",
 });
 
+function imageHosts() {
+  const configured = (process.env.NEXT_PUBLIC_IMAGE_HOSTS ?? "")
+    .split(",")
+    .map((h) => h.trim())
+    .filter(Boolean);
+  if (configured.length > 0) return configured;
+  return ["picsum.photos"];
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   images: {
-    remotePatterns: [
-      {
-        protocol: "https",
-        hostname: "picsum.photos",
-      },
-    ],
+    remotePatterns: imageHosts().map((hostname) => ({
+      protocol: "https",
+      hostname,
+    })),
   },
   allowedHosts: [".monkeycode-ai.live"],
-  experimental: {
-  },
   async rewrites() {
     return [
       {

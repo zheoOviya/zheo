@@ -4,6 +4,20 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { storeSession } from "../../lib/auth";
 
+const FP_STORAGE_KEY = "snakzap_admin_device_fingerprint";
+
+function getDeviceFingerprint(): string {
+  try {
+    const existing = window.localStorage.getItem(FP_STORAGE_KEY);
+    if (existing) return existing;
+    const fresh = "admin-console-" + crypto.randomUUID();
+    window.localStorage.setItem(FP_STORAGE_KEY, fresh);
+    return fresh;
+  } catch {
+    return "admin-console-" + crypto.randomUUID();
+  }
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [phone, setPhone] = useState("");
@@ -41,7 +55,7 @@ export default function LoginPage() {
         body: JSON.stringify({
           phone,
           otp,
-          device_fingerprint: "admin-console-" + crypto.randomUUID(),
+          device_fingerprint: getDeviceFingerprint(),
         }),
       });
       const body = await res.json();
