@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { killSwitches } from "@snakzap/db";
 import type { DrizzleDb } from "../lib/dbType";
+import { logger } from "../lib/logger";
 
 export interface KillSwitchDTO {
   id: string;
@@ -79,7 +80,9 @@ export class MemoryKillSwitchRepository implements KillSwitchRepository {
 
 export class DrizzleKillSwitchRepository implements KillSwitchRepository {
   constructor(private readonly db: DrizzleDb) {
-    this.seedDefaults().catch(() => {});
+    this.seedDefaults().catch((err) => {
+      logger.warn({ message: "killswitch_seed_failed", error: err instanceof Error ? err.message : String(err) });
+    });
   }
 
   private async seedDefaults(): Promise<void> {

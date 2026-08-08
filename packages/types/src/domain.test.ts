@@ -140,7 +140,7 @@ describe("OrderItemSchema", () => {
       item_subtotal: 490,
     });
     expect(item.customizations).toHaveLength(2);
-    expect(item.customizations[0].price_delta).toBe(25);
+    expect(item.customizations?.[0]?.price_delta).toBe(25);
     expect(item.quantity).toBe(2);
   });
 

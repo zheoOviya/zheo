@@ -9,10 +9,11 @@
     "./schema": "./src/schema/index.ts"
   },
   "scripts": {
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio",
-    "typecheck": "tsc --noEmit"
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "pg": "^8.13.0",

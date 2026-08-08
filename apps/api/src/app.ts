@@ -30,6 +30,8 @@ import { initEventSubscriber } from "./lib/eventBus";
 import { metrics, metricsRouter } from "./routes/metrics";
 import { adminRouter } from "./routes/admin";
 import { requireRole } from "./middleware/requireRoles";
+import { getRedis } from "./lib/redis";
+import { getDb } from "./lib/db";
 
 // EOS Layer 1 wiring: loyalty + retention contexts subscribe to
 // OrderPickedUp so stamp cards fill themselves, wallet cashback is
@@ -52,7 +54,7 @@ export function createApp(): Express {
 
   app.set("trust proxy", 1);
   app.use(helmet());
-  app.use(cors({ origin: true, credentials: true }));
+  app.use(cors({ origin: ["http://localhost:3000", "http://localhost:3002", "http://localhost:3003"], credentials: true }));
   app.use(compression());
   app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());
@@ -77,8 +79,32 @@ export function createApp(): Express {
     next();
   });
 
-  app.get("/health", (_req, res) => {
-    res.json({ success: true, data: { status: "ok", service: "snakzap-api" }, error: null });
+  app.get("/health", async (_req, res) => {
+    const status: Record<string, string> = { api: "ok" };
+    let healthy = true;
+
+    try {
+      const redis = getRedis();
+      status.redis = redis.status === "ready" ? "ok" : redis.status;
+      if (redis.status !== "ready") healthy = false;
+    } catch {
+      status.redis = "unreachable";
+      healthy = false;
+    }
+
+    try {
+      getDb();
+      status.postgres = "ok";
+    } catch {
+      status.postgres = "unavailable";
+    }
+
+    const httpStatus = healthy ? 200 : 503;
+    res.status(httpStatus).json({
+      success: healthy,
+      data: { status },
+      error: null,
+    });
   });
 
   // Metrics endpoint is intentionally NOT behind the API rate limiter

@@ -62,9 +62,10 @@ fulfillmentRouter.post(
   }),
 );
 
-// Consumer confirm-pickup (QR or OTP)
+// Consumer confirm-pickup (QR or OTP). Requires authentication.
 fulfillmentRouter.post(
   "/orders/:id/confirm-pickup",
+  authenticate,
   asyncHandler(async (req, res) => {
     const body = ConfirmPickupSchema.safeParse(req.body);
     if (!body.success) {

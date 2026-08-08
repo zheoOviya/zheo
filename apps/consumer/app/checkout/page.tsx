@@ -336,7 +336,6 @@ function CheckoutContent() {
   }
 
   if (step === "payment" && rpOrderId) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
     useEffect(() => {
       const openRazorpay = async () => {
         const loaded = await loadRazorpayScript();

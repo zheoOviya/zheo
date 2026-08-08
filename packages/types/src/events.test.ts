@@ -63,6 +63,8 @@ describe("Event Envelope (EOS Layer 1.2)", () => {
           total_amount: 245,
           status: "CONFIRMED",
           pickup_otp: null,
+          is_catering: false,
+          headcount: null,
           created_at: new Date(),
           updated_at: new Date(),
         },

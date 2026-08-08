@@ -2,6 +2,8 @@ import "dotenv/config";
 import { createServer } from "node:http";
 import { config } from "./config";
 import { createApp } from "./app";
+import { closeDb } from "./lib/db";
+import { getRedis } from "./lib/redis";
 import { logger } from "./lib/logger";
 import { initWebSocketServer } from "./lib/websocket";
 import { seedPhase4DemoData } from "./seed/phase4Demo";
@@ -33,3 +35,30 @@ server.listen(config.port, () => {
     env: config.env,
   });
 });
+
+function shutdown(signal: string) {
+  logger.info({ message: "shutdown_initiated", signal });
+  server.close(async () => {
+    logger.info({ message: "http_server_closed" });
+    try {
+      await getRedis().quit();
+      logger.info({ message: "redis_disconnected" });
+    } catch {
+      // ignore
+    }
+    try {
+      await closeDb();
+      logger.info({ message: "postgres_pool_closed" });
+    } catch {
+      // ignore
+    }
+    process.exit(0);
+  });
+  setTimeout(() => {
+    logger.error({ message: "shutdown_timeout", signal });
+    process.exit(1);
+  }, 10_000).unref();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

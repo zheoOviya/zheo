@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { orders, order_items } from "@snakzap/db";
 import type { OrderStatus } from "@snakzap/types";
 import type { DrizzleDb } from "../../lib/dbType";
+import { logger } from "../../lib/logger";
 import type {
   OrderRepository,
   OrderDTO,
@@ -331,8 +332,8 @@ export class DrizzleOrderRepository implements OrderRepository {
       pickup_otp: order.pickup_otp,
       created_at: new Date(order.created_at),
       updated_at: new Date(order.updated_at),
-    }).catch(() => {
-      // Silently ignore duplicate seeds.
+    }).catch((err) => {
+      logger.warn({ message: "order_seed_failed", error: err instanceof Error ? err.message : String(err) });
     });
     for (const item of order.items) {
       this.db.insert(order_items).values({
@@ -345,7 +346,9 @@ export class DrizzleOrderRepository implements OrderRepository {
         customizations: item.customizations,
         customization_total: String(item.customization_total),
         item_subtotal: String(item.item_subtotal),
-      }).catch(() => {});
+      }).catch((err) => {
+        logger.warn({ message: "order_item_seed_failed", error: err instanceof Error ? err.message : String(err) });
+      });
     }
     return order;
   }

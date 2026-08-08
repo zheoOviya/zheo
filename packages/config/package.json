@@ -8,6 +8,10 @@
     ".": "./index.ts",
     "./tailwind": "./tailwind.config.ts"
   },
+  "scripts": {
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  },
   "devDependencies": {
     "tailwindcss": "^3.4.0",
     "typescript": "^5.7.0"

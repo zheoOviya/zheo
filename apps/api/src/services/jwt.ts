@@ -70,6 +70,7 @@ export class JwtService {
     let payload: JwtPayload;
     try {
       payload = jwt.verify(token, config.jwt.accessSecret, {
+        algorithms: ["HS256"],
         issuer: "snakzap",
       }) as JwtPayload;
     } catch (err) {
@@ -86,6 +87,7 @@ export class JwtService {
     let payload: JwtPayload;
     try {
       payload = jwt.verify(token, config.jwt.refreshSecret, {
+        algorithms: ["HS256"],
         issuer: "snakzap",
       }) as JwtPayload;
     } catch (err) {

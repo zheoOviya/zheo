@@ -130,7 +130,6 @@ export default function MenuPage() {
                 {uploading === item.id ? (
                   <TealSkeleton className="h-20 w-20 shrink-0 rounded-xl" />
                 ) : item.image_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={item.image_url}
                     alt={item.name}

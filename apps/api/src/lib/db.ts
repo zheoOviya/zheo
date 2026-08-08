@@ -10,12 +10,13 @@ import type { DrizzleDb } from "./dbType";
 // ============================================
 
 let db: DrizzleDb | null = null;
+let pool: Pool | null = null;
 
 export function createDb(): DrizzleDb {
   if (process.env.NODE_ENV === "test") {
     throw new Error("DB not available in test mode - use Memory repositories");
   }
-  const pool = new Pool({ connectionString: config.database.url });
+  pool = new Pool({ connectionString: config.database.url });
   return drizzle(pool) as unknown as DrizzleDb;
 }
 
@@ -28,4 +29,12 @@ export function getDb(): DrizzleDb {
     }
   }
   return db;
+}
+
+export async function closeDb(): Promise<void> {
+  if (pool) {
+    await pool.end();
+    pool = null;
+    db = null;
+  }
 }

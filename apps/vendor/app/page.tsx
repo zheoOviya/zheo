@@ -41,7 +41,7 @@ export default function VendorDashboard() {
   const [orders, setOrders] = useState<DashboardOrder[]>([]);
   const [error, setError] = useState("");
   const [otpInput, setOtpInput] = useState<Record<string, string>>({});
-  const [qrInput, setQrInput] = useState<Record<string, string>>({});
+  const [qrInput, _setQrInput] = useState<Record<string, string>>({});
   const { updates, connected } = useOrdersWebSocket(RESTAURANT_ID);
 
   const fetchOrders = useCallback(async () => {
@@ -51,7 +51,7 @@ export default function VendorDashboard() {
       );
       const body = await res.json();
       if (body.success) setOrders(body.data);
-    } catch (err) {
+    } catch (_err) {
       setError("Failed to load orders");
     }
   }, []);

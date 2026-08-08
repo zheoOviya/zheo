@@ -172,6 +172,7 @@ describe("Fulfillment routes", () => {
 
       await request(app)
         .post(`/api/v1/orders/${orderId}/confirm-pickup`)
+        .set(authHeaders())
         .send({ pickup_otp: (await sharedOrderRepo.getById(orderId))?.pickup_otp })
         .expect(200);
 
@@ -252,6 +253,7 @@ describe("Fulfillment routes", () => {
 
       const res = await request(app)
         .post(`/api/v1/orders/${orderId}/confirm-pickup`)
+        .set(authHeaders())
         .send({ pickup_otp: otp })
         .expect(200);
 
@@ -267,6 +269,7 @@ describe("Fulfillment routes", () => {
 
       const res = await request(app)
         .post(`/api/v1/orders/${orderId}/confirm-pickup`)
+        .set(authHeaders())
         .send({ qr_token: qrToken })
         .expect(200);
 
@@ -278,6 +281,7 @@ describe("Fulfillment routes", () => {
 
       const res = await request(app)
         .post(`/api/v1/orders/${orderId}/confirm-pickup`)
+        .set(authHeaders())
         .send({ pickup_otp: "9999" })
         .expect(400);
 
@@ -289,6 +293,7 @@ describe("Fulfillment routes", () => {
 
       const res = await request(app)
         .post(`/api/v1/orders/${orderId}/confirm-pickup`)
+        .set(authHeaders())
         .send({ qr_token: "00000000-0000-4000-8000-000000000099" })
         .expect(400);
 
@@ -307,6 +312,7 @@ describe("Fulfillment routes", () => {
 
       const res = await request(app)
         .post(`/api/v1/orders/${orderRes.body.data.id}/confirm-pickup`)
+        .set(authHeaders())
         .send({ pickup_otp: "1234" })
         .expect(400);
 
@@ -318,6 +324,7 @@ describe("Fulfillment routes", () => {
 
       const res = await request(app)
         .post(`/api/v1/orders/${orderId}/confirm-pickup`)
+        .set(authHeaders())
         .send({})
         .expect(400);
 
@@ -329,11 +336,13 @@ describe("Fulfillment routes", () => {
 
       await request(app)
         .post(`/api/v1/orders/${orderId}/confirm-pickup`)
+        .set(authHeaders())
         .send({ pickup_otp: otp })
         .expect(200);
 
       const res = await request(app)
         .post(`/api/v1/orders/${orderId}/confirm-pickup`)
+        .set(authHeaders())
         .send({ pickup_otp: otp })
         .expect(400);
 

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { users } from "@snakzap/db";
 import type { DrizzleDb } from "../../lib/dbType";
+import { logger } from "../../lib/logger";
 import type {
   IdentityRepository,
   IdentityUser,
@@ -129,7 +130,9 @@ export class DrizzleIdentityRepository implements IdentityRepository {
       role: user.role,
       spice_tolerance: user.spice_tolerance ?? 3,
       is_suspended: user.is_suspended ?? false,
-    }).catch(() => {});
+    }).catch((err) => {
+      logger.warn({ message: "identity_seed_failed", error: err instanceof Error ? err.message : String(err) });
+    });
   }
 
   _reset(): void {}

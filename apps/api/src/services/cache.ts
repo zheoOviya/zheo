@@ -56,7 +56,9 @@ export function cacheKey(...parts: string[]): string {
 export async function invalidateCache(...keys: string[]): Promise<void> {
   const redis = getRedis();
   if (keys.length > 0) {
-    await redis.del(...keys).catch(() => undefined);
+    await redis.del(...keys).catch((err) => {
+      logger.warn({ message: "cache_invalidation_failed", error: err instanceof Error ? err.message : String(err) });
+    });
   }
   logger.info({ message: "cache_invalidated", keys });
 }

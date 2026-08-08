@@ -63,6 +63,7 @@ authRouter.post(
 
 authRouter.post(
   "/verify-otp",
+  otpLimiter,
   asyncHandler(async (req, res) => {
     const body = VerifyOtpSchema.safeParse(req.body);
     if (!body.success) {

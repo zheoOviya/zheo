@@ -62,11 +62,21 @@ export default function OrdersPage() {
       const d = await fetchOrderDetail(orderId);
       setDetail(d);
     } catch (e) {
-      setDetail(null);
+      setError("Failed to load orders");
+    }
+  };
+
+  const loadOrderDetail = useCallback(async (id: string) => {
+    setLoadingDetail(true);
+    try {
+      const data = await fetchOrderDetail(id);
+      setDetail(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load order detail");
     } finally {
       setLoadingDetail(false);
     }
-  }
+  }, []);
 
   async function handleOverride(orderId: string) {
     if (!overrideStatus) return;
