@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Badge, Sheet } from "@snakzap/ui";
 import type { Restaurant, MenuItem } from "@/lib/api";
 import { useCartStore, type CartItem } from "@/lib/store";
@@ -69,7 +69,7 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
 
   return (
     <>
-      <motion.div
+      <m.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: index * 0.05, duration: 0.3 }}
@@ -118,7 +118,7 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
             </button>
           </div>
         </Link>
-      </motion.div>
+      </m.div>
 
       <Sheet open={quickAddOpen} onClose={() => setQuickAddOpen(false)} title={`Quick Add - ${restaurant.name}`}>
         {loadingMenu ? (

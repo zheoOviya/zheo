@@ -1,6 +1,6 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { RestaurantCard } from "./RestaurantCard";
 import type { Restaurant } from "@/lib/api";
 
@@ -11,13 +11,13 @@ interface RestaurantGridProps {
 export function RestaurantGrid({ restaurants }: RestaurantGridProps) {
   if (restaurants.length === 0) {
     return (
-      <motion.p
+      <m.p
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         className="py-16 text-center text-sm text-neutral-400 dark:text-neutral-500"
       >
         No restaurants available right now.
-      </motion.p>
+      </m.p>
     );
   }
 

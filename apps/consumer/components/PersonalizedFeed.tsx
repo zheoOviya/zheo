@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Badge } from "@snakzap/ui";
 import { fetchPersonalizedHomepage, type PersonalizedHomepage } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
@@ -59,7 +59,7 @@ export function PersonalizedFeed() {
       ) : (
         <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {feed.personalized_restaurants.map((pick, i) => (
-            <motion.li
+            <m.li
               key={pick.restaurant.id}
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
@@ -76,10 +76,10 @@ export function PersonalizedFeed() {
                   {pick.reason}
                 </p>
               </Link>
-            </motion.li>
+            </m.li>
           ))}
           {feed.surprise_restaurant && (
-            <motion.li
+            <m.li
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: feed.personalized_restaurants.length * 0.06, duration: 0.25 }}
@@ -96,7 +96,7 @@ export function PersonalizedFeed() {
                   {feed.surprise_restaurant.reason}
                 </p>
               </Link>
-            </motion.li>
+            </m.li>
           )}
         </ul>
       )}

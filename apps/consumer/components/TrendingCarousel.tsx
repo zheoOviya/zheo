@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Badge } from "@snakzap/ui";
 import {
   fetchTrending,
@@ -80,13 +80,13 @@ export function TrendingCarousel() {
           ))}
         </div>
       ) : dishes.length === 0 ? (
-        <motion.p
+        <m.p
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           className="rounded-xl bg-white dark:bg-neutral-900 p-4 text-sm text-neutral-400 dark:text-neutral-500 shadow-elevation-1"
         >
           No trending dishes in the last hour yet. Order something tasty!
-        </motion.p>
+        </m.p>
       ) : (
         <ul className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 scrollbar-hide">
           {dishes.map((dish, index) => {
@@ -95,7 +95,7 @@ export function TrendingCarousel() {
             const label = rank < 3 ? rankLabels[rank] : `#${index + 1}`;
 
             return (
-              <motion.li
+              <m.li
                 key={`${dish.restaurant_id}-${dish.menu_item_id}`}
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -124,7 +124,7 @@ export function TrendingCarousel() {
                     {formatINR(dish.price)}
                   </p>
                 </Link>
-              </motion.li>
+              </m.li>
             );
           })}
         </ul>
