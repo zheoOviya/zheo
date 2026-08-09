@@ -39,3 +39,17 @@ An external architectural review identified three critical issues:
 - Stated Redis-backed event bus
 - Positioned as "Startup-grade / Portfolio" project
 - Added MIT LICENSE file
+
+---
+
+## Sprint 6 Re-Audit (2026-08-09) — Re-verification
+
+Full project re-audit re-checked every sprint-6 claim against source:
+
+- **Dedup (orders.ts):** PASS — single cursor-based `ListOrdersQuerySchema` + single `ordersRouter.get("/")`; all 6 orders pagination tests still green.
+- **Redis Pub/Sub event bus:** PASS — `emit()` publishes to `snakzap:events`, subscriber dispatch wired in `app.ts`; MemoryRedis `subscribe` no-op compatible. Single-process fallback documented as intended dev behavior.
+- **Rate limiter fail-closed:** PASS — `failClosed` → 503 on Redis failure for OTP/payments/admin-write; `rateLimiter.test.ts` green. **New this re-audit:** pickup-OTP brute-force protection added (`routes/fulfillment.ts` `pickupLimiter`, 10/min fail-closed).
+- **Truthful README:** PARTIAL — positioning/MIT correct, but README test counts now stale (says 386/45; actual 372 root + 75 consumer + 9 vendor + 20 admin). Noted in `work-logs/full-reaudit.md` §6.
+
+**Verdict: sprint-6 hardening holds.**
+

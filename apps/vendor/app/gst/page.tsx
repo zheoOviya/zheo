@@ -2,8 +2,7 @@
 
 import { useState } from "react";
 import { Skeleton } from "@snakzap/ui";
-
-const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
+import { RESTAURANT_ID } from "@/lib/constants";
 
 function currentMonth(): string {
   const now = new Date();

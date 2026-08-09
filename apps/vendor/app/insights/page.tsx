@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Skeleton } from "@snakzap/ui";
 import { formatINR } from "@/lib/format";
+import { RESTAURANT_ID } from "@/lib/constants";
 
 interface PeakHour {
   hour: number;
@@ -20,8 +21,6 @@ interface Insights {
   total_customers: number;
   peak_hours: PeakHour[];
 }
-
-const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
 
 const PERIODS = [
   { days: 7, label: "7 days" },

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Skeleton } from "@snakzap/ui";
 import { formatINR } from "@/lib/format";
+import { RESTAURANT_ID } from "@/lib/constants";
 
 interface MenuItem {
   id: string;
@@ -12,8 +13,6 @@ interface MenuItem {
   image_url: string | null;
   is_available: boolean;
 }
-
-const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
 
 const TAG_LABELS: Record<string, { label: string; className: string }> = {
   VEG: { label: "VEG", className: "border-green-500/40 text-green-400" },

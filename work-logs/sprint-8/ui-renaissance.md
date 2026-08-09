@@ -140,3 +140,16 @@ Transform the frontend architecture from a functional prototype into a premium, 
 - `apps/consumer/components/__tests__/BottomNav.test.tsx`
 - `apps/consumer/components/__tests__/QuickAddSheet.test.tsx`
 - `work-logs/sprint-8/verification.json`
+
+---
+
+## Sprint 8 Re-Audit (2026-08-09) — Motion correction + spec-drift check
+
+Full project re-audit verified the sprint-8 motion integration. One real defect found and fixed:
+
+- **FIXED — KDS motion silently disabled:** `apps/vendor/app/page.tsx` uses `m.div layout` + `AnimatePresence mode="popLayout"` (kanban columns), but `VendorLayoutClient.tsx` loaded `LazyMotion features={domAnimation}`. Verified in framer-motion 13.0.0 source (`motion/index.mjs` → `getProjectionFunctionality`): the `layout` feature is registered by the **`domMax`** bundle only, so `MeasureLayout`/`ProjectionNode` were `undefined` — the `layout` prop was a silent no-op (cards snapped, no popLayout exit). **Fix (motion import correction):** `VendorLayoutClient.tsx` now imports `domMax` instead of `domAnimation`. `exit` + `popLayout` now animate as sprint-8 intended. No crash either way (verified: strict mode only throws for `motion.X` components, and the KDS uses `m.*`).
+- **Spec drift (documented):** `packages/ui` Button/Card/BottomNav are CSS-only (`active:scale-[0.97]`, hover lift, LayoutGroup indicator absent) — no framer-motion in the shared UI package. Functional, tree-shaking-safe, but deviates from the sprint-8 "whileHover/whileTap/LayoutGroup" spec. Options: adopt `m.` variants under each app's existing LazyMotion, or formally declare the CSS approach.
+- Consumer `m.*` usage (RestaurantCard, RestaurantGrid, PersonalizedFeed, TrendingCarousel) verified compatible with `LazyMotion domAnimation strict` (initial/animate only).
+
+**Verification:** vendor 9 tests pass; consumer 75; typecheck 8/8; lint 8/8. Full detail in `work-logs/full-reaudit.md`.
+

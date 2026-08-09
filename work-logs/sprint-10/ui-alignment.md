@@ -94,3 +94,26 @@ Fixed bottom surfaces (Consumer BottomNav, KDS action buttons) overlap iOS home-
 - RTL tests: `<Container>` renders `max-w-5xl` + `px-4 sm:px-6`; `maxWidth` variants; `Button` md/lg enforce `min-h-[44px]`.
 - Grep audit across `apps/consumer` + `apps/vendor`: no `text-[*]` arbitrary sizes remain; all primary CTAs carry `min-h-[44px]`.
 - Full backend + consumer test suites, typecheck (4 apps), and ESLint on changed files.
+
+---
+
+## Sprint 10 Re-Audit (2026-08-09) — Compliance re-check + open WARNs
+
+Full project re-audit re-verified the sprint-10 alignment system against source.
+
+### Compliant (verified)
+- **Container:** consumer pages use `py-*` only (no double gutters); narrow pages (`group-cart` max-w-2xl, vendor forms max-w-3xl) keep `mx-auto max-w-*` and drop `px`. Vendor KDS bypasses Container (full-bleed `h-dvh` grid) as designed.
+- **Typography:** zero `text-[Npx]` arbitrary sizes; `text-2xs` token used consistently.
+- **Grids:** consumer `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`; KDS `grid-cols-2 md:grid-cols-3 xl:grid-cols-4`. No broken flex-wrapped grids.
+- **Safe areas:** `pt/pb/pl/pr-safe` + `env(safe-area-inset-*)` in consumer + vendor `globals.css`, applied to BottomNav/Sheet/CartDrawer.
+- **Touch targets:** `Button` md/lg `min-h-[44px]`; KDS Advance/Hand Over/OTP 44px; consumer `OtpInput` `h-12`.
+
+### Open WARNs (code-level suggestions in `work-logs/full-reaudit.md` §7)
+1. Full-screen consumer pages (login/onboarding/not-found/error) re-apply `px-4` inside the layout Container → double horizontal gutter.
+2. Admin has zero `@snakzap/ui` Container adoption (heatmap hand-rolls `mx-auto max-w-5xl p-8` + `h-[540px]`, `rounded-[3px]`); admin `globals.css` lacks `pb-safe`/`min-h-touch`.
+3. <44px touch targets: consumer profile theme-toggle (`p-2`), RestaurantCard Quick Add / "+ Add" (~30px), admin sidebar toggle + support-tickets/audit-logs text-xs buttons (~27px).
+4. `space-2xs..2xl` tokens adopted only 2× (dead vocabulary) — adopt or drop.
+5. Hardcoded hex colors in tsx (checkout `#0D9488`, CartDrawer, ToastProvider, QrCode, admin dashboard) vs token classes.
+
+**Verification:** consumer 75 tests, vendor 9, admin 20, API 372; typecheck 8/8; lint 8/8.
+

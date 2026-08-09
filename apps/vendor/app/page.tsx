@@ -9,6 +9,7 @@ import {
   pickupFailureMessage,
   sanitizePickupOtp,
 } from "@/lib/kds";
+import { RESTAURANT_ID } from "@/lib/constants";
 
 interface OrderItem {
   name: string;
@@ -25,8 +26,6 @@ interface DashboardOrder {
   checked_in: boolean;
   created_at: string;
 }
-
-const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
 
 function formatINR(amount: number): string {
   return new Intl.NumberFormat("en-IN", {

@@ -349,6 +349,26 @@ describe("Fulfillment routes", () => {
 
       expect(res.body.error.code).toBe("ALREADY_PICKED_UP");
     });
+
+    it("rate-limits pickup OTP attempts per order", async () => {
+      const { orderId } = await createConfirmedOrder(app);
+
+      let saw429 = false;
+      for (let i = 0; i < 12; i++) {
+        const res = await request(app)
+          .post(`/api/v1/orders/${orderId}/confirm-pickup`)
+          .set(authHeaders())
+          .send({ pickup_otp: "9999" });
+        if (res.status === 429) {
+          saw429 = true;
+          expect(res.body.error.code).toBe("RATE_LIMIT_EXCEEDED");
+          break;
+        }
+        expect(res.status).toBe(400);
+      }
+
+      expect(saw429).toBe(true);
+    });
   });
 
   describe("P13 Early Ready Alert", () => {

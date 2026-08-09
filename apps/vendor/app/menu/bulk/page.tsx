@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Skeleton } from "@snakzap/ui";
+import { RESTAURANT_ID } from "@/lib/constants";
 
 interface MenuItem {
   id: string;
@@ -10,8 +11,6 @@ interface MenuItem {
   description: string | null;
   is_available: boolean;
 }
-
-const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
 
 export default function BulkMenuPage() {
   const [items, setItems] = useState<MenuItem[]>([]);

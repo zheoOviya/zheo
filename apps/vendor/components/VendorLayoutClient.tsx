@@ -2,7 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-import { LazyMotion, domAnimation } from "framer-motion";
+import { LazyMotion, domMax } from "framer-motion";
 import { Container } from "@snakzap/ui";
 import VendorNav from "./VendorNav";
 
@@ -11,7 +11,7 @@ export function VendorLayoutClient({ children }: { children: ReactNode }) {
   const isDashboard = pathname === "/";
 
   return (
-    <LazyMotion features={domAnimation} strict>
+    <LazyMotion features={domMax} strict>
       {isDashboard ? (
         <>{children}</>
       ) : (

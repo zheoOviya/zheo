@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Skeleton } from "@snakzap/ui";
 import { formatINR } from "@/lib/format";
+import { RESTAURANT_ID } from "@/lib/constants";
 
 interface SettlementSummary {
   period_start: string;
@@ -24,8 +25,6 @@ interface SettlementSummary {
     payout: number;
   }>;
 }
-
-const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
 
 export default function SettlementsPage() {
   const [summary, setSummary] = useState<SettlementSummary | null>(null);

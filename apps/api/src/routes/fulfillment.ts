@@ -3,6 +3,7 @@ import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
 import { assertRestaurantAccess } from "../middleware/vendorAccess";
+import { rateLimiter } from "../middleware/rateLimiter";
 import { sharedAuditRepo, sharedOrderRepo } from "../repositories/shared";
 import { FulfillmentService } from "../services/fulfillment";
 import { GeoFenceService } from "../services/geoFence";
@@ -32,6 +33,20 @@ function orderId(id: string | string[] | undefined): string {
   if (Array.isArray(id)) return id[0] ?? "";
   return id ?? "";
 }
+
+// Pickup OTP is 4 digits, so it must be defended against brute-force.
+// Fail-closed per order+IP: 10 attempts per minute. Exceeding the window
+// yields 429 (or 503 if Redis is down).
+const pickupLimiter = rateLimiter({
+  prefix: "pickup",
+  max: 10,
+  windowMs: 60_000,
+  identifier: (req) => {
+    const id = orderId(req.params.id);
+    return id ? `${id}|${req.ip ?? "unknown"}` : (req.ip ?? "unknown");
+  },
+  failClosed: true,
+});
 
 export const fulfillmentRouter: Router = Router();
 
@@ -64,9 +79,12 @@ fulfillmentRouter.post(
 );
 
 // Consumer confirm-pickup (QR or OTP). Requires authentication.
+// Pickup is protected by a fail-closed per-order rate limiter because the
+// OTP space is only 4 digits (10k combinations).
 fulfillmentRouter.post(
   "/orders/:id/confirm-pickup",
   authenticate,
+  pickupLimiter,
   asyncHandler(async (req, res) => {
     const body = ConfirmPickupSchema.safeParse(req.body);
     if (!body.success) {

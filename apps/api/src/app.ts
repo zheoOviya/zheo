@@ -31,7 +31,7 @@ import { metrics, metricsRouter } from "./routes/metrics";
 import { adminRouter } from "./routes/admin";
 import { requireRole } from "./middleware/requireRoles";
 import { getRedis } from "./lib/redis";
-import { getDb } from "./lib/db";
+import { probePostgres } from "./lib/db";
 
 // EOS Layer 1 wiring: loyalty + retention contexts subscribe to
 // OrderPickedUp so stamp cards fill themselves, wallet cashback is
@@ -107,11 +107,22 @@ export function createApp(): Express {
       healthy = false;
     }
 
-    try {
-      getDb();
-      status.postgres = "ok";
-    } catch {
-      status.postgres = "unavailable";
+    if (process.env.NODE_ENV === "test") {
+      status.postgres = "test";
+    } else if (process.env.USE_MEMORY_REPOS === "true") {
+      // Dev/preview boot with in-memory repos (see index.ts probe).
+      status.postgres = "memory";
+    } else {
+      // Real PostgreSQL in use: issue an actual `SELECT 1` so a dead DB
+      // degrades the health response instead of a lazy pool returning "ok".
+      try {
+        const up = await probePostgres(1500);
+        status.postgres = up ? "ok" : "unavailable";
+        if (!up) healthy = false;
+      } catch {
+        status.postgres = "unavailable";
+        healthy = false;
+      }
     }
 
     const httpStatus = healthy ? 200 : 503;

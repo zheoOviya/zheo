@@ -32,5 +32,11 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
+      - name: Test (API + packages)
         run: pnpm test
+
+      - name: Test (frontend suites)
+        run: |
+          pnpm --filter consumer test
+          pnpm --filter vendor test
+          pnpm --filter admin test

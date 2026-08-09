@@ -1,4 +1,4 @@
-import { randomInt, randomUUID } from "node:crypto";
+import { randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import { createEventEnvelope, emit } from "../lib/eventBus";
 import { publishStatusUpdate } from "../lib/websocket";
 import { AppError } from "../middleware/envelope";
@@ -11,6 +11,13 @@ import type { OrderStatus } from "@snakzap/types";
 // generates OTP/QR tokens, handles check-in and
 // pickup confirmation, broadcasts WebSocket events.
 // ============================================
+
+// Constant-time string comparison to avoid leaking OTP comparisons
+// through timing side-channels (both sides are 4-digit numeric strings).
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 
 const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   CONFIRMED: ["PREPARING"],
@@ -169,7 +176,7 @@ export class FulfillmentService {
         throw new AppError("INVALID_QR", "Invalid QR token", 400);
       }
     } else if (pickupOtp) {
-      if (order.pickup_otp !== pickupOtp) {
+      if (!order.pickup_otp || !safeEqual(order.pickup_otp, pickupOtp)) {
         throw new AppError("INVALID_OTP", "Invalid pickup OTP", 400);
       }
     } else {

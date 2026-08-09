@@ -104,3 +104,30 @@ No new features. Hardening only -- fixing OWASP-critical vulnerabilities, establ
 - `.prettierignore`
 - `.github/workflows/ci.yml`
 - Modified: `services/jwt.ts`, `routes/auth.ts`, `app.ts`, `routes/fulfillment.ts`, `index.ts`, `killSwitchRepository.ts`, `drizzleIdentityRepository.ts`, `drizzleOrderRepository.ts`, `cache.ts`, multiple `package.json` files
+
+---
+
+## Sprint 7 Re-Audit (2026-08-09) — Security & DevOps re-verification + new fixes
+
+Full project re-audit re-verified sprint-7 claims and closed remaining gaps.
+
+### Security re-verification
+- JWT `algorithms: ["HS256"]` + issuer on both verifiers: **PASS** (intact).
+- OTP `otpLimiter` (3/min, phone-keyed, fail-closed) on send + verify: **PASS** (intact).
+- CORS explicit allowlist (no `origin:true` reflection): **PASS** (intact); note preview `*.monkeycode-ai.live` origins are not allowlisted (frontends use same-origin `/api` rewrites).
+- confirm-pickup `authenticate` middleware: **PASS** (intact).
+- **NEW — OTP constant-time compare:** `services/otp.ts` compared with `!==` (timing side-channel). Now `timingSafeEqual`. Same for 4-digit pickup OTP in `services/fulfillment.ts` (`safeEqual`).
+- **NEW — OTP bypass guard:** `DEV_BYPASS_OTP=true` accepted any 6-digit OTP with no environment guard. Now gated on `NODE_ENV !== "production"`.
+- **NEW — pickup brute-force:** fail-closed `pickupLimiter` (10/min per order+IP) on confirm-pickup.
+- **OPEN WARNs:** unauthenticated WebSocket subscribe; admin access JWT in localStorage; razorpay/petpooja MOCK_MODE triggers on empty keys (no prod guard) — see `work-logs/full-reaudit.md` §5.
+
+### DevOps re-verification + fixes
+- **NEW — `/health` PG probe fixed:** previously `getDb()` (lazy pool, no socket) reported `postgres:"ok"` and PG failure never degraded status. Now a real `SELECT 1` (`probePostgres(1500)`), and PG failure sets `healthy=false` → 503.
+- **NEW — lint stack migrated:** `next lint` is deprecated (Next 15.5.22, removed in 16). The Next ESLint plugin was never registered and `.eslintrc.cjs` was dead (flat config precedence). Now: all 3 Next apps run `eslint .`; `eslint.config.mjs` registers `@next/eslint-plugin-next` (recommended + core-web-vitals); generated `.next/**` + `next-env.d.ts` ignored. 0 lint errors repo-wide.
+- **NEW — CI runs frontend suites:** `ci.yml` previously ran only `pnpm test` (API + packages). Now adds `pnpm --filter consumer|vendor|admin test`. This surfaced a stale empty suite (`consumer/components/MenuItemsList.test.tsx`) which broke collection — replaced with 2 real tests.
+- **NEW — prettier tooling:** installed + `format`/`format:check` scripts. Repo has 209 files out of style (one-time `pnpm format` needed before gating).
+- **OPEN WARNs:** no coverage gate / Next build / env-validation / fail-fast in CI; `.env.production`/`.env.test` not git-ignored; no pre-commit hooks — see `work-logs/full-reaudit.md` §6.
+
+### Verification
+- API 372 tests, consumer 75, vendor 9, admin 20 (all pass); typecheck 8/8; lint 8/8.
+

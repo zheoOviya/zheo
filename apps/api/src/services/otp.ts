@@ -1,4 +1,4 @@
-import { randomInt } from "node:crypto";
+import { randomInt, timingSafeEqual } from "node:crypto";
 import { config } from "../config";
 import { getRedis } from "../lib/redis";
 import { AppError } from "../middleware/envelope";
@@ -76,9 +76,18 @@ export async function verifyOtp(
     throw new AppError("OTP_EXPIRED", "OTP expired or not requested", 400);
   }
 
+  // Dev bypass is for local demo builds ONLY and must never be honoured
+  // in a production deployment (config.env mirrors NODE_ENV at boot).
   const isDevBypass =
+    process.env.NODE_ENV !== "production" &&
     process.env.DEV_BYPASS_OTP === "true";
-  if (stored !== otp && !(isDevBypass && /^\d{6}$/.test(otp))) {
+
+  // Constant-time compare to avoid timing side-channels on the OTP.
+  const matches =
+    stored.length === otp.length &&
+    timingSafeEqual(Buffer.from(stored), Buffer.from(otp));
+
+  if (!matches && !(isDevBypass && /^\d{6}$/.test(otp))) {
     throw new AppError("OTP_INVALID", "Invalid OTP", 400);
   }
 

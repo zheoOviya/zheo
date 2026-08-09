@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { Fragment, useEffect, useState, useCallback } from "react";
 import { fetchLiveOrders, fetchOrderDetail, overrideOrderStatus } from "../../../lib/api";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -62,21 +62,11 @@ export default function OrdersPage() {
       const d = await fetchOrderDetail(orderId);
       setDetail(d);
     } catch (e) {
-      setError("Failed to load orders");
-    }
-  };
-
-  const loadOrderDetail = useCallback(async (id: string) => {
-    setLoadingDetail(true);
-    try {
-      const data = await fetchOrderDetail(id);
-      setDetail(data);
-    } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load order detail");
     } finally {
       setLoadingDetail(false);
     }
-  }, []);
+  }
 
   async function handleOverride(orderId: string) {
     if (!overrideStatus) return;
@@ -156,8 +146,8 @@ export default function OrdersPage() {
             </thead>
             <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
               {data.orders.map((o) => (
-                <>
-                  <tr key={o.id} className="hover:bg-neutral-50 dark:hover:bg-neutral-950/50 transition-colors">
+                <Fragment key={o.id}>
+                  <tr className="hover:bg-neutral-50 dark:hover:bg-neutral-950/50 transition-colors">
                     <td className="px-4 py-3 font-mono text-xs text-neutral-500">{o.id.slice(0, 12)}...</td>
                     <td className="px-4 py-3">
                       <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${STATUS_COLORS[o.status] ?? "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400"}`}>
@@ -234,7 +224,7 @@ export default function OrdersPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))}
               {data.orders.length === 0 && (
                 <tr>

@@ -12,11 +12,15 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (isAuthenticated) return;
 
-    refreshAccessToken().then((ok) => {
-      if (!ok) {
+    refreshAccessToken()
+      .then((ok) => {
+        if (!ok) {
+          router.replace("/login");
+        }
+      })
+      .catch(() => {
         router.replace("/login");
-      }
-    });
+      });
   }, [isAuthenticated, refreshAccessToken, router]);
 
   if (!accessToken) {
