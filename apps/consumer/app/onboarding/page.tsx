@@ -103,7 +103,7 @@ export default function OnboardingPage() {
       role="region"
       aria-roledescription="carousel"
       aria-label="Welcome to SnakZap"
-      className="flex min-h-screen flex-col bg-surface-light"
+      className="flex min-h-dvh flex-col bg-surface-light"
     >
       <header className="flex justify-end p-5">
         <button

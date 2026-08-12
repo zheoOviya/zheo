@@ -8,8 +8,8 @@ export default function ErrorPage({
   reset: () => void;
 }) {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-surface-light px-4">
-      <div className="text-center max-w-sm">
+    <main className="flex min-h-dvh bg-surface-light">
+      <div className="m-auto max-w-sm text-center py-6">
         <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary-500/10">
           <svg className="h-8 w-8 text-primary-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />

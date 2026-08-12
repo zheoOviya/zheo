@@ -9,6 +9,8 @@ import { useCartStore } from "@/lib/store";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { I18nProvider } from "@/lib/i18n";
 
+const FULL_SCREEN_PAGES = ["/login", "/onboarding"];
+
 const navItems: BottomNavItem[] = [
   {
     icon: (
@@ -55,18 +57,21 @@ export function ClientProviders({ children }: { children: ReactNode }) {
   const itemsWithBadge = navItems.map((item) =>
     item.href === "/checkout" ? { ...item, badge: itemCount } : item,
   );
+  const isFullScreen = FULL_SCREEN_PAGES.includes(pathname);
 
   return (
     <ThemeProvider>
       <I18nProvider>
         <LazyMotion features={domAnimation} strict>
-          <div className="min-h-screen bg-surface-light dark:bg-surface-dark text-neutral-800 dark:text-neutral-200 font-sans antialiased">
-            <div className="pb-20">{children}</div>
-            <BottomNav
-              items={itemsWithBadge}
-              activeHref={pathname}
-              onNavigate={(href) => router.push(href)}
-            />
+          <div className="min-h-dvh bg-surface-light dark:bg-surface-dark text-neutral-800 dark:text-neutral-200 font-sans antialiased">
+            <div className={isFullScreen ? "" : "pb-20"}>{children}</div>
+            {!isFullScreen && (
+              <BottomNav
+                items={itemsWithBadge}
+                activeHref={pathname}
+                onNavigate={(href) => router.push(href)}
+              />
+            )}
           </div>
         </LazyMotion>
       </I18nProvider>

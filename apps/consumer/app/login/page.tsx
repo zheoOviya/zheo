@@ -74,8 +74,8 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-surface-light px-4">
-      <div className="w-full max-w-sm space-y-8">
+    <main className="flex min-h-dvh bg-surface-light">
+      <div className="m-auto w-full max-w-sm space-y-8 py-6">
         <div className="text-center">
           <h1 className="text-2xl font-bold text-primary-700">SnakZap</h1>
           <p className="mt-2 text-sm text-neutral-500">
