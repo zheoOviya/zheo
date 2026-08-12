@@ -64,6 +64,11 @@ describe("Auth routes (integration)", () => {
     const setCookie = verifyRes.headers["set-cookie"] as string[] | undefined;
     expect(setCookie).toBeDefined();
     expect(setCookie![0]).toContain("HttpOnly");
+    // Path=/ is required so the Next.js page middleware (which checks the
+    // snakzap_refresh cookie on /checkout and /orders requests) can see it.
+    // A /api/v1/auth-scoped path hides the cookie from page navigations and
+    // traps the user in a /login?from=/checkout redirect loop after login.
+    expect(setCookie![0]).toContain("Path=/");
     const firstCookie = setCookie![0]!;
 
     const refreshRes = await agent

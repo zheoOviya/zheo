@@ -85,7 +85,7 @@ authRouter.post(
       httpOnly: true,
       secure: config.env === "production",
       sameSite: "strict",
-      path: "/api/v1/auth",
+      path: "/",
       maxAge: config.jwt.refreshTtlSeconds * 1000,
     });
 
@@ -127,7 +127,7 @@ authRouter.post(
       httpOnly: true,
       secure: config.env === "production",
       sameSite: "strict",
-      path: "/api/v1/auth",
+      path: "/",
       maxAge: config.jwt.refreshTtlSeconds * 1000,
     });
 
@@ -150,7 +150,7 @@ authRouter.post(
         // invalid token is fine for logout
       }
     }
-    res.clearCookie(config.jwt.refreshCookieName, { path: "/api/v1/auth" });
+    res.clearCookie(config.jwt.refreshCookieName, { path: "/" });
     ok(res, { logged_out: true });
   }),
 );
