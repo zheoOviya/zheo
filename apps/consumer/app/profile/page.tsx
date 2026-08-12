@@ -5,8 +5,6 @@ import Link from "next/link";
 import AuthGate from "@/components/AuthGate";
 import StampCardProgress from "@/components/StampCardProgress";
 import { useAuthStore } from "@/lib/store";
-import { useTheme } from "@/components/ThemeProvider";
-import { useI18n } from "@/lib/i18n";
 import {
   applyReferral,
   createSupportTicket,
@@ -583,8 +581,6 @@ function VipSupportCard({
 
 function ProfileContent() {
   const accessToken = useAuthStore((s) => s.accessToken);
-  const { theme, toggleTheme } = useTheme();
-  const { locale, setLocale } = useI18n();
   const [profile, setProfile] = useState<ReferralProfile | null>(null);
   const [cards, setCards] = useState<StampCard[]>([]);
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);

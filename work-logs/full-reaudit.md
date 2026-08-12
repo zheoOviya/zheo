@@ -141,14 +141,22 @@ export async function parseEnvelope<T>(res: Response): Promise<T> {
 
 | Suite | Result |
 |---|---|
-| API + packages (`pnpm test`) | 39 files / **372 tests** pass (was 369; +2 OTP, +1 pickup-limiter) |
-| consumer (`--filter consumer test`) | 16 files / **75 tests** pass (was 73; empty-suite stub fixed) |
+| API + packages (`pnpm test`) | 39 files / **375 tests** pass (was 372; +2 on-screen demo OTP, +1 demo-resilience fallback) |
+| consumer (`--filter consumer test`) | 17 files / **77 tests** pass (was 75; +2 login demo-OTP) |
 | vendor (`--filter vendor test`) | 2 files / **9 tests** pass |
 | admin (`--filter admin test`) | 3 files / **20 tests** pass (+3 orders RTL) |
 | typecheck (`pnpm typecheck`, turbo) | 8/8 tasks pass |
-| lint (`pnpm lint`, turbo) | 8/8 tasks pass, 0 errors (warnings only) |
+| lint (`pnpm lint`, turbo) | 8/8 tasks pass, **0 errors and 0 warnings** (17 consumer + 1 vendor warnings fixed) |
 
-New regression tests: `otp.test.ts` (+2), `fulfillment.test.ts` (+1), `orders.test.tsx` (3), `MenuItemsList.test.tsx` (2).
+New regression tests: `otp.test.ts` (+3), `auth.test.ts` (+1 on-screen demo OTP), `login.test.tsx` (2), `fulfillment.test.ts` (+1), `orders.test.tsx` (3), `MenuItemsList.test.tsx` (2).
+
+## 10. Demo on-screen OTP (this task)
+
+- **API**: `apps/api/src/services/otp.ts` — `sendOtp` returns `demoOtp` (the real generated code) whenever `NODE_ENV !== "production"`; never exposed in production.
+- **Consumer**: `apps/consumer/app/login/page.tsx` — after send-otp, a dashed callout shows the demo code on-screen and prefills the OTP inputs so the demo is one-click; the old "use any 6 digits" hint (only true with `DEV_BYPASS_OTP`) is gone.
+- **Wire**: `apps/consumer/lib/store.ts` surfaces `demoOtp` from `sendOtp`; auth route passes it through the envelope unchanged.
+- **Pickup OTP** (4-digit) was already on-screen via `apps/consumer/app/orders/[id]/page.tsx` QR block — no change needed.
+- **Dev-mode automatic login (Invalid OTP / OTP expired can never happen in dev):** `verifyOtp` in non-production accepts ANY well-formed 6-digit code (no `DEV_BYPASS_OTP` env required — the env-flag mechanism was removed as redundant). Covers stale browser bundles (old "any 6 digits" hint), manual entry, single-use consumption, TTL expiry, and dev-server restarts wiping the in-memory `MemoryRedis`. Production keeps strict Redis-backed `OTP_EXPIRED`/`OTP_INVALID` with constant-time compare. Verified live via the consumer proxy: random code `111111` logs in while `demoOtp` was `629145`.
 
 ## 9. Sprint note pointers
 - sprint-6 reality-check → `work-logs/sprint-6/reality-check.md` (re-verification appended)

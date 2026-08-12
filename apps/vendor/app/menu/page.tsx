@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import { Skeleton } from "@snakzap/ui";
 import { formatINR } from "@/lib/format";
 import { RESTAURANT_ID } from "@/lib/constants";
@@ -129,9 +130,11 @@ export default function MenuPage() {
                 {uploading === item.id ? (
                   <Skeleton className="h-20 w-20 shrink-0 rounded-xl" />
                 ) : item.image_url ? (
-                  <img
+                  <Image
                     src={item.image_url}
                     alt={item.name}
+                    width={80}
+                    height={80}
                     className="h-20 w-20 shrink-0 rounded-xl object-cover"
                   />
                 ) : (

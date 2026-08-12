@@ -26,6 +26,8 @@ describe("Auth routes (integration)", () => {
     expect(ApiEnvelopeSchema.safeParse(res.body).success).toBe(true);
     expect(res.body.success).toBe(true);
     expect(res.body.data.phoneMasked).toMatch(/\*\*\*\*/);
+    // Demo build surfaces the on-screen OTP on the wire.
+    expect(res.body.data.demoOtp).toMatch(/^[0-9]{6}$/);
   }
 
   async function readStoredOtp(phone: string): Promise<string> {
@@ -34,6 +36,14 @@ describe("Auth routes (integration)", () => {
     expect(stored).toMatch(/^[0-9]{6}$/);
     return stored as string;
   }
+
+  it("send-otp exposes the demo OTP that matches the stored code", async () => {
+    const res = await request(app)
+      .post("/api/v1/auth/send-otp")
+      .send({ phone: PHONE })
+      .expect(200);
+    expect(res.body.data.demoOtp).toBe(await readStoredOtp(PHONE));
+  });
 
   it("send-otp -> verify-otp -> refresh -> logout flow", async () => {
     await requestOtp(PHONE);

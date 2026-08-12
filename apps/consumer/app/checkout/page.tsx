@@ -142,7 +142,7 @@ function PickupSlotSelector({
                   className="grid grid-cols-4 gap-2"
                   onKeyDown={handleKeyDown}
                 >
-                  {slots.map((slot, index) => {
+                  {slots.map((slot) => {
                     const enabledSlots = slots.filter((s) => s.available);
                     const enabledIndex = enabledSlots.indexOf(slot);
                     const isFocused = enabledIndex === focusedIndex;
@@ -229,7 +229,7 @@ function CheckoutContent() {
         order_id: rpOrderId,
         prefill: { contact: user?.phone || "" },
         theme: { color: "#0D9488" },
-        handler: async (response) => {
+        handler: async () => {
           setProcessing(true);
           try {
             await simulatePaymentWebhook(rpOrderId, amount, true);
@@ -298,28 +298,6 @@ function CheckoutContent() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setStep("cart");
-    }
-  }
-
-  async function handleSimulatePayment(success: boolean) {
-    if (!rpOrderId || processing) return;
-    setProcessing(true);
-    setError("");
-    try {
-      // Replay the Razorpay webhook so the server order state is real:
-      // DRAFT -> PAYMENT_PENDING -> CONFIRMED / PAYMENT_FAILED.
-      await simulatePaymentWebhook(rpOrderId, amount, success);
-      if (success) {
-        clear();
-        setStep("success");
-      } else {
-        setStep("failed");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Payment failed");
-      setStep("payment");
-    } finally {
-      setProcessing(false);
     }
   }
 

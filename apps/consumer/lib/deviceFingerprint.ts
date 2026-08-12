@@ -1,7 +1,5 @@
 "use client";
 
-import { create } from "zustand";
-
 // ============================================
 // Device Fingerprint (EOS Layer 2.3 - Device Binding)
 // Generates a stable browser-identity used for JWT binding.

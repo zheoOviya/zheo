@@ -6,8 +6,7 @@ import { useAuthStore } from "@/lib/store";
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { accessToken, isAuthenticated, refreshAccessToken, logout } =
-    useAuthStore();
+  const { accessToken, isAuthenticated, refreshAccessToken } = useAuthStore();
 
   useEffect(() => {
     if (isAuthenticated) return;

@@ -23,7 +23,7 @@ interface AuthState {
   user: AuthUser | null;
   isAuthenticated: boolean;
   login: (phone: string, otp: string) => Promise<void>;
-  sendOtp: (phone: string) => Promise<{ sent: boolean; expiresIn: number }>;
+  sendOtp: (phone: string) => Promise<{ sent: boolean; expiresIn: number; demoOtp?: string }>;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<void>;
   getAuthHeaders: () => Record<string, string>;
@@ -47,7 +47,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!body.success) {
       throw new Error(body.error?.message ?? "Failed to send OTP");
     }
-    return { sent: body.data.sent, expiresIn: body.data.expiresInSeconds };
+    return {
+      sent: body.data.sent,
+      expiresIn: body.data.expiresInSeconds,
+      demoOtp: body.data.demoOtp,
+    };
   },
 
   login: async (phone: string, otp: string) => {

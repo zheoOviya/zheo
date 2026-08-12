@@ -1,8 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useCartStore, useAuthStore } from "./store";
 
-import { describe as vitestDescribe } from "vitest";
-
 describe("Cart store", () => {
   beforeEach(() => {
     useCartStore.setState({

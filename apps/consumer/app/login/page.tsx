@@ -16,6 +16,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [otpSent, setOtpSent] = useState(false);
+  const [demoOtp, setDemoOtp] = useState("");
 
   const isPhoneValid = /^[0-9]{10,15}$/.test(phone);
   const isOtpComplete = otp.replace(/\D/g, "").length === 6;
@@ -23,12 +24,17 @@ export default function LoginPage() {
   async function handleSendOtp() {
     if (!isPhoneValid || loading) return;
     setError("");
+    setDemoOtp("");
     setLoading(true);
     try {
       const result = await sendOtp(phone);
       if (result.sent) {
         setOtpSent(true);
         setStep("otp");
+        if (result.demoOtp) {
+          setDemoOtp(result.demoOtp);
+          setOtp(result.demoOtp);
+        }
       } else {
         setError("Failed to send OTP. Please try again.");
       }
@@ -64,6 +70,7 @@ export default function LoginPage() {
     setStep("phone");
     setOtp("");
     setError("");
+    setDemoOtp("");
   }
 
   return (
@@ -116,10 +123,27 @@ export default function LoginPage() {
                 disabled={loading}
                 error={error}
               />
-              {otpSent && (
-                <p className="text-center text-xs text-neutral-400">
-                  Demo: use any 6 digits as OTP (offline mode)
-                </p>
+              {demoOtp ? (
+                <div
+                  data-testid="demo-otp"
+                  className="rounded-xl border border-dashed border-primary-300 bg-primary-50 px-4 py-3 text-center"
+                >
+                  <p className="text-xs font-semibold uppercase tracking-wide text-primary-600">
+                    Demo code (on-screen OTP)
+                  </p>
+                  <p className="mt-1 font-mono text-3xl font-bold tracking-[0.35em] text-primary-700">
+                    {demoOtp}
+                  </p>
+                  <p className="mt-1 text-xs text-neutral-500">
+                    Auto-filled — no SMS is sent in this preview
+                  </p>
+                </div>
+              ) : (
+                otpSent && (
+                  <p className="text-center text-xs text-neutral-400">
+                    No SMS is sent in this preview build
+                  </p>
+                )
               )}
               <button
                 type="button"

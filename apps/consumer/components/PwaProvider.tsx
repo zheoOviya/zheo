@@ -7,6 +7,7 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
     if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
 
     navigator.serviceWorker.register("/sw.js").catch((err) => {
+      // eslint-disable-next-line no-console
       console.warn("SW registration failed:", err);
     });
   }, []);

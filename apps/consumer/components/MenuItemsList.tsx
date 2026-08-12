@@ -77,7 +77,7 @@ export function MenuItemsList({
   restaurantName: string;
   items: MenuItem[];
 }) {
-  const { items: cartItems, addItem, itemCount, restoreSnapshot } = useCartStore();
+  const { items: cartItems, addItem, itemCount } = useCartStore();
   const [pickerItem, setPickerItem] = useState<MenuItem | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [adding, setAdding] = useState(false);
