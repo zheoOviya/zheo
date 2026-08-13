@@ -105,6 +105,15 @@ export interface DashboardMetrics {
   cac_ltv_ratio: number;
 }
 
+export interface HealthReport {
+  status: "ok";
+  storage_mode: "postgres" | "memory";
+  redis: "reachable" | "degraded" | "memory";
+  uptime_seconds: number;
+  latency_ms: number;
+  timestamp: string;
+}
+
 const ADMIN_API = "/api/v1/admin";
 
 async function adminFetch<T>(path: string, options?: RequestInit): Promise<T> {
@@ -137,6 +146,10 @@ export async function fetchHeatmap(): Promise<HeatmapResult> {
 
 export function fetchDashboardMetrics(): Promise<DashboardMetrics> {
   return adminFetch<DashboardMetrics>("/metrics");
+}
+
+export function fetchHealth(): Promise<HealthReport> {
+  return adminFetch<HealthReport>("/health");
 }
 
 export function fetchLiveOrders(status?: string): Promise<LiveOrdersResponse> {
@@ -200,9 +213,10 @@ export function toggleKillSwitch(name: string, enabled: boolean): Promise<KillSw
   });
 }
 
-export function fetchUsers(page: number, search?: string): Promise<UserListResponse> {
+export function fetchUsers(page: number, search?: string, role?: string): Promise<UserListResponse> {
   const qs = new URLSearchParams({ page: String(page), limit: "20" });
   if (search) qs.set("search", search);
+  if (role) qs.set("role", role);
   return adminFetch<UserListResponse>(`/users?${qs}`);
 }
 
