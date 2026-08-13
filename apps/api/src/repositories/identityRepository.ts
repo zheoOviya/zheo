@@ -15,6 +15,8 @@ import { randomUUID } from "node:crypto";
 export interface IdentityUser {
   id: string;
   phone: string;
+  /** Admin console login identifier. Nullable for consumer/vendor users. */
+  email?: string | null;
   role:
     | "CONSUMER"
     | "VENDOR_OWNER"
@@ -38,6 +40,8 @@ export interface IdentityUser {
 export interface IdentityRepository {
   getById(id: string): Promise<IdentityUser | null>;
   getByPhone(phone: string): Promise<IdentityUser | null>;
+  /** Admin login: resolve an operator account by its email. */
+  getByEmail(email: string): Promise<IdentityUser | null>;
   /** Returns the existing user for a phone or creates one (idempotent). */
   ensureByPhone(phone: string, role?: IdentityUser["role"]): Promise<IdentityUser>;
   /** D03: sets the user's spice tolerance (1-5). */
@@ -67,6 +71,7 @@ export interface IdentityRepository {
 export class MemoryIdentityRepository implements IdentityRepository {
   private readonly users = new Map<string, IdentityUser>();
   private readonly usersById = new Map<string, IdentityUser>();
+  private readonly usersByEmail = new Map<string, IdentityUser>();
 
   async getById(id: string): Promise<IdentityUser | null> {
     return this.usersById.get(id) ?? null;
@@ -74,6 +79,27 @@ export class MemoryIdentityRepository implements IdentityRepository {
 
   async getByPhone(phone: string): Promise<IdentityUser | null> {
     return this.users.get(phone) ?? null;
+  }
+
+  async getByEmail(email: string): Promise<IdentityUser | null> {
+    const key = email.trim().toLowerCase();
+    if (!key) return null;
+    return this.usersByEmail.get(key) ?? null;
+  }
+
+  /** Keeps the phone/id/email indexes consistent for every mutation. */
+  private indexUser(user: IdentityUser): void {
+    this.users.set(user.phone, user);
+    this.usersById.set(user.id, user);
+    const key = user.email?.trim().toLowerCase();
+    if (key) {
+      this.usersByEmail.set(key, user);
+    } else {
+      // If email was cleared, drop any stale index for this user id.
+      for (const [k, v] of this.usersByEmail) {
+        if (v.id === user.id) this.usersByEmail.delete(k);
+      }
+    }
   }
 
   async ensureByPhone(
@@ -90,8 +116,7 @@ export class MemoryIdentityRepository implements IdentityRepository {
       totp_enabled: false,
       created_at: new Date().toISOString(),
     };
-    this.users.set(phone, user);
-    this.usersById.set(user.id, user);
+    this.indexUser(user);
     return user;
   }
 
@@ -99,8 +124,7 @@ export class MemoryIdentityRepository implements IdentityRepository {
     const user = this.usersById.get(userId);
     if (!user) return null;
     const updated: IdentityUser = { ...user, totp_secret: secret };
-    this.users.set(user.phone, updated);
-    this.usersById.set(userId, updated);
+    this.indexUser(updated);
     return updated;
   }
 
@@ -112,8 +136,7 @@ export class MemoryIdentityRepository implements IdentityRepository {
       totp_enabled: true,
       totp_confirmed_at: new Date().toISOString(),
     };
-    this.users.set(user.phone, updated);
-    this.usersById.set(userId, updated);
+    this.indexUser(updated);
     return updated;
   }
 
@@ -126,14 +149,12 @@ export class MemoryIdentityRepository implements IdentityRepository {
       totp_secret: null,
       totp_confirmed_at: null,
     };
-    this.users.set(user.phone, updated);
-    this.usersById.set(userId, updated);
+    this.indexUser(updated);
     return updated;
   }
 
   _seed(user: IdentityUser): void {
-    this.users.set(user.phone, user);
-    this.usersById.set(user.id, user);
+    this.indexUser(user);
   }
 
   async updateSpiceTolerance(
@@ -143,8 +164,7 @@ export class MemoryIdentityRepository implements IdentityRepository {
     const user = this.usersById.get(userId);
     if (!user) return null;
     const updated: IdentityUser = { ...user, spice_tolerance: tolerance };
-    this.users.set(user.phone, updated);
-    this.usersById.set(userId, updated);
+    this.indexUser(updated);
     return updated;
   }
 
@@ -164,8 +184,7 @@ export class MemoryIdentityRepository implements IdentityRepository {
     const user = this.usersById.get(userId);
     if (!user) return null;
     const updated: IdentityUser = { ...user, is_suspended: true };
-    this.users.set(user.phone, updated);
-    this.usersById.set(userId, updated);
+    this.indexUser(updated);
     return updated;
   }
 
@@ -173,8 +192,7 @@ export class MemoryIdentityRepository implements IdentityRepository {
     const user = this.usersById.get(userId);
     if (!user) return null;
     const updated: IdentityUser = { ...user, is_suspended: false };
-    this.users.set(user.phone, updated);
-    this.usersById.set(userId, updated);
+    this.indexUser(updated);
     return updated;
   }
 
@@ -182,13 +200,13 @@ export class MemoryIdentityRepository implements IdentityRepository {
     const user = this.usersById.get(userId);
     if (!user) return null;
     const updated: IdentityUser = { ...user, role };
-    this.users.set(user.phone, updated);
-    this.usersById.set(userId, updated);
+    this.indexUser(updated);
     return updated;
   }
 
   _reset(): void {
     this.users.clear();
     this.usersById.clear();
+    this.usersByEmail.clear();
   }
 }

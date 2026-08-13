@@ -7,6 +7,7 @@ import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { rateLimiter } from "../middleware/rateLimiter";
 import { requireRole } from "../middleware/requireRoles";
 import { sharedAuditRepo, sharedIdentityRepo } from "../repositories/shared";
+import type { IdentityUser } from "../repositories/identityRepository";
 import { jwtService } from "../services/jwt";
 import { sendOtp, verifyOtp } from "../services/otp";
 import {
@@ -70,6 +71,43 @@ const TotpCodeSchema = z.object({
   code: z.string().regex(/^[0-9]{6}$/, "Code must be 6 digits"),
 });
 
+// Admin console login is email-keyed: the OTP is delivered to the operator's
+// linked mobile number (resolved by email on the server).
+const AdminEmailSchema = z.object({
+  email: z.string().email("Invalid email address"),
+});
+
+const AdminVerifyOtpSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  otp: z.string().regex(/^[0-9]{6}$/, "OTP must be 6 digits"),
+  device_fingerprint: z.string().min(8, "device_fingerprint too short"),
+});
+
+const OPERATOR_ROLES = ["ADMIN", "SUPER_ADMIN"];
+
+const adminOtpLimiter = rateLimiter({
+  prefix: "otp-admin",
+  max: config.rateLimit.otpMaxPerMinute,
+  windowMs: 60_000,
+  identifier: (req) => String(req.body?.email ?? req.ip ?? "unknown").toLowerCase(),
+  failClosed: true,
+});
+
+async function resolveOperatorByEmail(email: string): Promise<IdentityUser> {
+  const user = await sharedIdentityRepo.getByEmail(email);
+  if (!user || !OPERATOR_ROLES.includes(user.role)) {
+    throw new AppError(
+      "FORBIDDEN",
+      "Unknown email or not an operator account",
+      403,
+    );
+  }
+  if (user.is_suspended) {
+    throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended", 403);
+  }
+  return user;
+}
+
 export const authRouter: Router = Router();
 
 // Phone-keyed stable identity so repeat customers keep the
@@ -131,6 +169,7 @@ authRouter.post(
       ok(res, {
         totp_required: true,
         totp_ticket: totpTicket,
+        phone: user.phone,
       }, 202);
       return;
     }
@@ -208,6 +247,90 @@ authRouter.post(
     }
     res.clearCookie(config.jwt.refreshCookieName, { path: "/" });
     ok(res, { logged_out: true });
+  }),
+);
+
+// ============================================
+// Admin console login (email -> OTP on linked mobile)
+// The admin app signs in with an operator email; the OTP is sent to and
+// verified against the linked mobile number stored on the account.
+// ============================================
+
+authRouter.post(
+  "/admin/send-otp",
+  adminOtpLimiter,
+  asyncHandler(async (req, res) => {
+    const body = AdminEmailSchema.safeParse(req.body);
+    if (!body.success) {
+      throw new AppError("VALIDATION_ERROR", "Invalid request body", 400, body.error.flatten());
+    }
+    const user = await resolveOperatorByEmail(body.data.email);
+    const result = await sendOtp(user.phone);
+    logger.info({
+      message: "admin_otp_sent",
+      email: body.data.email.toLowerCase(),
+      phone_masked: result.phoneMasked,
+      correlation_id: res.locals.correlationId,
+    });
+    ok(res, result);
+  }),
+);
+
+authRouter.post(
+  "/admin/verify-otp",
+  adminOtpLimiter,
+  asyncHandler(async (req, res) => {
+    const body = AdminVerifyOtpSchema.safeParse(req.body);
+    if (!body.success) {
+      throw new AppError("VALIDATION_ERROR", "Invalid request body", 400, body.error.flatten());
+    }
+
+    const user = await resolveOperatorByEmail(body.data.email);
+    await verifyOtp(user.phone, body.data.otp);
+
+    const claims = {
+      sub: user.id,
+      phone: user.phone,
+      role: user.role,
+      device_fingerprint: body.data.device_fingerprint,
+    };
+
+    // 2FA: TOTP-enabled operators get a ticket + phone to finish login.
+    if (user.totp_enabled) {
+      const totpTicket = jwtService.signTotpTicket(claims);
+      await sharedAuditRepo.log(user.id, "totp_step_required", {
+        event: "AdminOtpVerified",
+        correlation_id: res.locals.correlationId,
+      });
+      ok(res, {
+        totp_required: true,
+        totp_ticket: totpTicket,
+        phone: user.phone,
+      }, 202);
+      return;
+    }
+
+    const pair = jwtService.issuePair(claims);
+
+    res.cookie(config.jwt.refreshCookieName, pair.refreshToken, {
+      httpOnly: true,
+      secure: config.env === "production",
+      sameSite: "strict",
+      path: "/",
+      maxAge: config.jwt.refreshTtlSeconds * 1000,
+    });
+
+    logger.info({
+      message: "admin_otp_verified",
+      user_id: user.id,
+      correlation_id: res.locals.correlationId,
+    });
+
+    ok(res, {
+      access_token: pair.accessToken,
+      expires_in: config.jwt.accessTtlSeconds,
+      user: { id: user.id, phone: user.phone, role: user.role },
+    }, 200);
   }),
 );
 

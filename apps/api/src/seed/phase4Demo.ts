@@ -37,6 +37,7 @@ export function seedPhase4DemoData(): void {
   sharedIdentityRepo._seed({
     id: ADMIN_ID,
     phone: ADMIN_PHONE,
+    email: "admin@snakzap.dev",
     role: "ADMIN",
     totp_enabled: false,
     created_at: new Date().toISOString(),
@@ -45,6 +46,7 @@ export function seedPhase4DemoData(): void {
   sharedIdentityRepo._seed({
     id: SUPER_ADMIN_ID,
     phone: SUPER_ADMIN_PHONE,
+    email: "superadmin@snakzap.dev",
     role: "SUPER_ADMIN",
     totp_enabled: false,
     created_at: new Date().toISOString(),

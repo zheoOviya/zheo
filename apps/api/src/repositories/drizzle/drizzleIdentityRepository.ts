@@ -17,6 +17,7 @@ function mapRow(row: Record<string, unknown>): IdentityUser {
   return {
     id: row.id as string,
     phone: row.phone as string,
+    email: (row.email as string | null) ?? null,
     role: row.role as IdentityUser["role"],
     spice_tolerance: row.spice_tolerance as number | undefined,
     is_suspended: (row.is_suspended as boolean) ?? false,
@@ -47,6 +48,15 @@ export class DrizzleIdentityRepository implements IdentityRepository {
       .select()
       .from(users)
       .where(eq(users.phone, phone))) as Record<string, unknown>[];
+    const row = rows[0];
+    return row ? mapRow(row) : null;
+  }
+
+  async getByEmail(email: string): Promise<IdentityUser | null> {
+    const rows = (await this.db
+      .select()
+      .from(users)
+      .where(eq(users.email, email.trim().toLowerCase()))) as Record<string, unknown>[];
     const row = rows[0];
     return row ? mapRow(row) : null;
   }
@@ -161,6 +171,7 @@ export class DrizzleIdentityRepository implements IdentityRepository {
     this.db.insert(users).values({
       id: user.id,
       phone: user.phone,
+      email: user.email ?? null,
       role: user.role,
       spice_tolerance: user.spice_tolerance ?? 3,
       is_suspended: user.is_suspended ?? false,

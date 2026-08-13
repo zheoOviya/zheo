@@ -26,6 +26,8 @@ export const users = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     phone: text("phone").notNull(),
+    /** Admin console login identifier (nullable for consumer/vendor users). */
+    email: text("email"),
     spice_tolerance: integer("spice_tolerance").notNull().default(3),
     role: userRoleEnum("role").notNull().default("CONSUMER"),
     is_suspended: boolean("is_suspended").notNull().default(false),
@@ -40,6 +42,7 @@ export const users = pgTable(
   },
   (table) => ({
     phoneIdx: uniqueIndex("users_phone_idx").on(table.phone),
+    emailIdx: uniqueIndex("users_email_idx").on(table.email),
   }),
 );
 

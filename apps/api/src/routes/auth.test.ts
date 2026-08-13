@@ -436,3 +436,117 @@ describe("TOTP 2FA (2-step login)", () => {
     expect(res.body.error.code).toBe("CONFLICT");
   });
 });
+
+// ============================================
+// Admin console login (email -> OTP on linked mobile)
+// ============================================
+
+describe("Admin email login (email -> mobile OTP)", () => {
+  const ADMIN_EMAIL = "ops@snakzap.dev";
+  const ADMIN_PHONE = "+919876000060";
+  const ADMIN_ID = "u-admin-email-000000000001";
+  const TOTP_EMAIL = "secops@snakzap.dev";
+  const TOTP_PHONE = "+919876000061";
+  const TOTP_ID = "u-admin-totp-000000000001";
+  const FP = "admin-fp-000000000001";
+
+  let app: Express;
+
+  beforeEach(() => {
+    resetRedisForTests();
+    sharedIdentityRepo._reset();
+    app = createApp();
+  });
+
+  function seedOperators() {
+    sharedIdentityRepo._seed({
+      id: ADMIN_ID,
+      phone: ADMIN_PHONE,
+      email: ADMIN_EMAIL,
+      role: "ADMIN",
+      is_suspended: false,
+      totp_secret: null,
+      totp_enabled: false,
+      created_at: new Date().toISOString(),
+    });
+    sharedIdentityRepo._seed({
+      id: TOTP_ID,
+      phone: TOTP_PHONE,
+      email: TOTP_EMAIL,
+      role: "SUPER_ADMIN",
+      is_suspended: false,
+      totp_secret: RFC_SECRET_BASE32,
+      totp_enabled: true,
+      totp_confirmed_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    });
+  }
+
+  it("send-otp resolves the email to the linked mobile and exposes the demo OTP", async () => {
+    seedOperators();
+    const res = await request(app)
+      .post("/api/v1/auth/admin/send-otp")
+      .send({ email: ADMIN_EMAIL })
+      .expect(200);
+    expect(res.body.data.phoneMasked).toMatch(/\*\*\*\*/);
+    expect(res.body.data.demoOtp).toMatch(/^[0-9]{6}$/);
+  });
+
+  it("rejects unknown or non-operator emails", async () => {
+    seedOperators();
+    sharedIdentityRepo._seed({
+      id: "u-consumer-email-00000001",
+      phone: "+919876000062",
+      email: "buyer@snakzap.dev",
+      role: "CONSUMER",
+      is_suspended: false,
+      totp_enabled: false,
+      created_at: new Date().toISOString(),
+    });
+    for (const email of ["nobody@snakzap.dev", "buyer@snakzap.dev"]) {
+      const res = await request(app)
+        .post("/api/v1/auth/admin/send-otp")
+        .send({ email })
+        .expect(403);
+      expect(res.body.error.code).toBe("FORBIDDEN");
+    }
+  });
+
+  it("verify-otp completes admin login with the code from the linked mobile", async () => {
+    seedOperators();
+    await request(app)
+      .post("/api/v1/auth/admin/send-otp")
+      .send({ email: ADMIN_EMAIL })
+      .expect(200);
+    const stored = await getRedis().get(`otp:${ADMIN_PHONE}`);
+    expect(stored).toMatch(/^[0-9]{6}$/);
+
+    const agent = request.agent(app);
+    const res = await agent
+      .post("/api/v1/auth/admin/verify-otp")
+      .send({ email: ADMIN_EMAIL, otp: stored, device_fingerprint: FP })
+      .expect(200);
+    expect(res.body.data.access_token).toBeTruthy();
+    expect(res.body.data.user.role).toBe("ADMIN");
+    const setCookie = res.headers["set-cookie"] as string[] | undefined;
+    expect(setCookie).toBeDefined();
+    expect(setCookie![0]).toContain("HttpOnly");
+  });
+
+  it("TOTP-enabled operators get a ticket + phone instead of tokens", async () => {
+    seedOperators();
+    await request(app)
+      .post("/api/v1/auth/admin/send-otp")
+      .send({ email: TOTP_EMAIL })
+      .expect(200);
+    const stored = await getRedis().get(`otp:${TOTP_PHONE}`);
+    const res = await request(app)
+      .post("/api/v1/auth/admin/verify-otp")
+      .send({ email: TOTP_EMAIL, otp: stored, device_fingerprint: FP })
+      .expect(202);
+    expect(res.body.data.totp_required).toBe(true);
+    expect(res.body.data.totp_ticket).toBeTruthy();
+    expect(res.body.data.phone).toBe(TOTP_PHONE);
+    expect(res.body.data.access_token).toBeUndefined();
+  });
+});
