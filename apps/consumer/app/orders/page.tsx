@@ -252,15 +252,30 @@ function OrderHistoryContent() {
   return (
     <main className="py-6 pb-28">
       <header className="mb-6">
-        <Link
-          href="/"
-          className="mb-4 inline-block text-sm text-primary-600 hover:text-primary-700"
-        >
-          &larr; Back
-        </Link>
-        <h1 className="text-2xl font-bold text-primary-700 dark:text-primary-300">Your Orders</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Track in-progress orders and reorder past ones.
+        <div className="section-head">
+          <div>
+            <p className="section-eyebrow">History</p>
+            <h1 className="section-title">Your Orders</h1>
+          </div>
+          <Link
+            href="/"
+            className="inline-flex min-h-9 items-center gap-1 rounded-full bg-white px-3.5 text-xs font-semibold text-neutral-600 shadow-elevation-1 ring-1 ring-neutral-900/5 transition-colors hover:bg-surface-light dark:bg-neutral-900 dark:text-neutral-300 dark:ring-white/10"
+          >
+            <svg
+              className="h-3.5 w-3.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2.5}
+              aria-hidden="true"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+            </svg>
+            Home
+          </Link>
+        </div>
+        <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+          Track in-progress orders and quickly reorder your favorites.
         </p>
       </header>
 
@@ -298,17 +313,14 @@ function OrderHistoryContent() {
       {loading && <OrderSkeleton />}
 
       {!loading && !error && orders.length === 0 && (
-        <div className="rounded-2xl bg-white p-10 text-center shadow-sm dark:bg-neutral-900">
-          <p className="text-lg font-semibold text-neutral-700 dark:text-neutral-200">
+        <div className="surface-card p-10 text-center">
+          <p className="text-lg font-bold tracking-tight text-neutral-700 dark:text-neutral-200">
             No orders yet
           </p>
-          <p className="mt-1 text-sm text-neutral-500">
+          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
             Order ahead from a nearby restaurant to get started.
           </p>
-          <Link
-            href="/"
-            className="mt-5 inline-block rounded-full bg-primary-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
-          >
+          <Link href="/" className="btn-primary mt-5">
             Browse Restaurants
           </Link>
         </div>
@@ -341,7 +353,7 @@ function OrderHistoryContent() {
             type="button"
             onClick={loadMore}
             disabled={loadingMore}
-            className="rounded-full border border-primary-500/30 px-6 py-2 text-sm font-semibold text-primary-700 hover:bg-surface-light disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-400"
+            className="btn-outline min-h-10 px-6 text-sm disabled:cursor-not-allowed"
           >
             {loadingMore ? "Loading..." : "Load more"}
           </button>

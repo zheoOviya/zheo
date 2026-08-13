@@ -127,6 +127,9 @@ export const snakZapPreset: Partial<Config> = {
         "fade-in": "fade-in 0.2s ease-out",
         "scale-in": "scale-in 0.2s ease-out",
       },
+      transitionDuration: {
+        250: "250ms",
+      },
     },
   },
 };

@@ -191,26 +191,39 @@ function TrackingContent() {
         <button
           type="button"
           onClick={() => router.push("/")}
-          className="mb-4 text-sm text-primary-600 hover:text-primary-700"
+          className="mb-4 inline-flex items-center gap-1 text-sm font-semibold text-primary-600 transition-colors hover:text-primary-700 dark:text-primary-400"
         >
-          &larr; Back
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2.5}
+            aria-hidden="true"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+          Back
         </button>
-        <h1 className="text-2xl font-bold text-primary-700">Order Status</h1>
-        <p className="mt-1 text-sm text-neutral-500">
+        <p className="section-eyebrow">Live</p>
+        <h1 className="section-title">Order Status</h1>
+        <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
           {order.items.map((i) => `${i.name} x${i.quantity}`).join(", ")}
         </p>
       </header>
 
       <div className="space-y-6">
         {/* Live tracker */}
-        <div className="rounded-2xl bg-white p-6 shadow-sm">
+        <div className="surface-card p-6">
           <OrderTracker orderId={orderId} initialStatus={order.status} />
         </div>
 
         {/* P04 Traffic-based ETA: know exactly when to leave */}
-        <div className="rounded-2xl bg-white p-6 shadow-sm">
+        <div className="surface-card p-6">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-primary-700">When to leave</h2>
+            <h2 className="text-lg font-semibold text-neutral-800 dark:text-neutral-100">
+              When to leave
+            </h2>
             {eta && (
               <span
                 className={`rounded-full px-3 py-1 text-xs font-bold ${
@@ -247,8 +260,10 @@ function TrackingContent() {
         </div>
 
         {/* L01 Stamp card progress for this restaurant */}
-        <div className="rounded-2xl bg-white p-6 shadow-sm">
-          <h2 className="mb-4 text-lg font-semibold text-primary-700">Stamp Card</h2>
+        <div className="surface-card p-6">
+          <h2 className="mb-4 text-lg font-semibold text-neutral-800 dark:text-neutral-100">
+            Stamp Card
+          </h2>
           <StampCardProgress
             stampCount={stampCard?.stamp_count ?? 0}
             rewardsEarned={stampCard?.rewards_earned ?? 0}
@@ -257,7 +272,7 @@ function TrackingContent() {
 
         {/* Check-in button */}
         {!isReady && !isPickedUp && (
-          <div className="rounded-2xl bg-white p-6 shadow-sm">
+          <div className="surface-card p-6">
             {checkedIn ? (
               <div className="flex items-center gap-2 text-sm text-green-600">
                 <svg
@@ -275,7 +290,7 @@ function TrackingContent() {
               <button
                 type="button"
                 onClick={handleCheckIn}
-                className="w-full min-h-[44px] rounded-full bg-primary-500 py-3 text-sm font-semibold text-white hover:bg-primary-hover"
+                className="btn-primary min-h-[44px] w-full"
               >
                 I am Here (Check In)
               </button>
@@ -285,8 +300,8 @@ function TrackingContent() {
 
         {/* QR Code + OTP for pickup */}
         {isReady && order.qr_token && order.pickup_otp && (
-          <div className="rounded-2xl bg-white p-6 shadow-sm">
-            <h2 className="mb-4 text-lg font-semibold text-neutral-700">
+          <div className="surface-card p-6">
+            <h2 className="mb-4 text-lg font-semibold text-neutral-800 dark:text-neutral-100">
               Show this at the counter
             </h2>
             <div className="flex flex-col items-center gap-6 sm:flex-row sm:justify-center">
@@ -306,10 +321,10 @@ function TrackingContent() {
 
         {/* Picked up confirmation */}
         {isPickedUp && (
-          <div className="rounded-2xl bg-green-50 p-6 text-center shadow-sm">
-            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-green-100">
+          <div className="rounded-3xl bg-green-50 p-6 text-center ring-1 ring-green-600/20 dark:bg-green-900/20">
+            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-green-100 dark:bg-green-800">
               <svg
-                className="h-7 w-7 text-green-600"
+                className="h-7 w-7 text-green-600 dark:text-green-300"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -318,8 +333,10 @@ function TrackingContent() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <p className="text-lg font-semibold text-green-700">Order Picked Up!</p>
-            <p className="mt-1 text-sm text-green-600">Enjoy your meal!</p>
+            <p className="text-lg font-semibold text-green-700 dark:text-green-300">
+              Order Picked Up!
+            </p>
+            <p className="mt-1 text-sm text-green-600 dark:text-green-400">Enjoy your meal!</p>
             <button
               type="button"
               onClick={() => router.push("/")}

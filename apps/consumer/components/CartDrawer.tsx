@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { useAuthStore, useCartStore } from "@/lib/store";
 import { createGroupCart } from "@/lib/api";
 import { computePriceBreakdown, formatINR, itemUnitPrice } from "@/lib/pricing";
@@ -18,13 +19,7 @@ function getFocusableElements(container: HTMLElement): HTMLElement[] {
   return els;
 }
 
-export function CartDrawer({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
+export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const router = useRouter();
   const { items, restaurantId, removeItem, updateQuantity, clear, hydrateFromServer } =
     useCartStore();
@@ -170,9 +165,7 @@ export function CartDrawer({
       const cart = await createGroupCart(accessToken, restaurantId);
       router.push(`/group-cart?token=${encodeURIComponent(cart.group_cart_token)}`);
     } catch (err) {
-      setGroupError(
-        err instanceof Error ? err.message : "Could not start a group order",
-      );
+      setGroupError(err instanceof Error ? err.message : "Could not start a group order");
       setStartingGroup(false);
     }
   }
@@ -194,10 +187,7 @@ export function CartDrawer({
   }));
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex items-end justify-center" onClick={onClose}>
       <div
         aria-hidden="true"
         className={[
@@ -213,44 +203,50 @@ export function CartDrawer({
         aria-label="Your cart"
         onClick={(e) => e.stopPropagation()}
         className={[
-          "flex max-h-[85vh] w-full max-w-sm flex-col overflow-auto rounded-t-2xl bg-white shadow-xl",
+          "flex max-h-[85vh] w-full max-w-md flex-col overflow-auto rounded-t-3xl bg-white shadow-elevation-3 dark:bg-neutral-900",
           "transition-transform duration-250 ease-out",
           animating ? "translate-y-0" : "translate-y-full",
         ].join(" ")}
       >
-        <div className="flex items-center justify-between border-b border-primary-500/20 p-4">
-          <div>
-            <h2 className="text-lg font-semibold text-primary-700">
-              Your Cart ({breakdown.itemCount})
-            </h2>
-            {timeLeft && (
-              <p
-                aria-live="polite"
-                className={`text-xs font-medium ${getExpiryColor()}`}
-              >
-                Expires in {timeLeft}
-              </p>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close cart"
-            className="flex min-h-11 min-w-11 items-center justify-center rounded-full p-1 text-neutral-400 hover:text-primary-700"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
+        <div className="sticky top-0 z-10 border-b border-neutral-100 bg-white/95 backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95">
+          <div
+            className="mx-auto mt-2 h-1 w-10 rounded-full bg-neutral-200 dark:bg-neutral-700"
+            aria-hidden="true"
+          />
+          <div className="flex items-center justify-between px-5 pb-3 pt-2">
+            <div>
+              <h2 className="text-lg font-bold tracking-tight text-neutral-900 dark:text-white">
+                Your Cart{" "}
+                <span className="text-sm font-semibold text-neutral-400 dark:text-neutral-500">
+                  ({breakdown.itemCount})
+                </span>
+              </h2>
+              {timeLeft && (
+                <p aria-live="polite" className={`text-xs font-medium ${getExpiryColor()}`}>
+                  Expires in {timeLeft}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close cart"
+              className="flex min-h-11 min-w-11 items-center justify-center rounded-full bg-neutral-100 text-neutral-500 transition-colors hover:bg-neutral-200 hover:text-neutral-700 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700"
             >
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {items.length === 0 ? (
@@ -276,66 +272,72 @@ export function CartDrawer({
             cta={
               <button
                 type="button"
-                onClick={() => { onClose(); router.push("/"); }}
-                className="min-h-[44px] rounded-full bg-primary-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
+                onClick={() => {
+                  onClose();
+                  router.push("/");
+                }}
+                className="btn-primary"
               >
                 Browse Restaurants
               </button>
             }
           />
         ) : (
-          <div className="space-y-3 p-space-sm">
+          <div className="space-y-3 p-5">
             {items.map((item) => (
-              <div
-                key={item.menuItemId}
-                className="flex items-start justify-between rounded-lg border border-primary-500/10 p-space-xs"
-              >
+              <div key={item.menuItemId} className="surface-card flex items-center gap-3 p-3">
+                <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-primary-100 dark:bg-primary-900/30">
+                  <Image
+                    src={`https://picsum.photos/seed/${item.menuItemId}/140/140`}
+                    alt=""
+                    fill
+                    sizes="56px"
+                    loading="lazy"
+                    className="object-cover"
+                  />
+                </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-neutral-700">
+                  <p className="truncate text-sm font-bold text-neutral-800 dark:text-neutral-100">
                     {item.name}
                   </p>
                   {item.customizations.length > 0 && (
-                    <p className="text-xs text-neutral-400">
+                    <p className="line-clamp-1 text-xs text-neutral-400">
                       {item.customizations.map((c) => c.name).join(", ")}
                     </p>
                   )}
-                  <p className="mt-1 text-xs text-primary-600">
+                  <p className="mt-0.5 text-xs font-semibold text-primary-600 dark:text-primary-400">
                     {formatINR(itemUnitPrice(item))} each
                   </p>
                 </div>
-                <div className="ml-3 flex items-center gap-1.5">
+                <div className="flex shrink-0 items-center gap-1">
                   <button
                     type="button"
                     aria-label="Decrease quantity"
-                    onClick={() =>
-                      updateQuantity(item.menuItemId, item.quantity - 1)
-                    }
-                    className="flex h-11 w-11 items-center justify-center rounded-full bg-surface-light text-base text-primary-700 hover:bg-primary-500/20"
+                    onClick={() => updateQuantity(item.menuItemId, item.quantity - 1)}
+                    className="flex h-9 w-9 items-center justify-center rounded-full bg-neutral-100 text-base font-bold text-neutral-600 transition-colors hover:bg-primary-500/15 hover:text-primary-700 dark:bg-neutral-800 dark:text-neutral-300"
                   >
                     -
                   </button>
-                  <span className="w-6 text-center text-sm font-medium text-neutral-700">
+                  <span className="w-6 text-center text-sm font-bold text-neutral-800 dark:text-neutral-100">
                     {item.quantity}
                   </span>
                   <button
                     type="button"
                     aria-label="Increase quantity"
-                    onClick={() =>
-                      updateQuantity(item.menuItemId, item.quantity + 1)
-                    }
-                    className="flex h-11 w-11 items-center justify-center rounded-full bg-surface-light text-base text-primary-700 hover:bg-primary-500/20"
+                    onClick={() => updateQuantity(item.menuItemId, item.quantity + 1)}
+                    className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-500 text-base font-bold text-white transition-colors hover:bg-primary-hover"
                   >
                     +
                   </button>
-                  <button
-                    type="button"
-                    aria-label={`Remove ${item.name}`}
-                    onClick={() => removeItem(item.menuItemId)}
-                    className="ml-1 text-xs text-red-400 hover:text-red-600"
-                  >
-                    Remove
-                  </button>
                 </div>
+                <button
+                  type="button"
+                  aria-label={`Remove ${item.name}`}
+                  onClick={() => removeItem(item.menuItemId)}
+                  className="shrink-0 text-xs text-neutral-400 transition-colors hover:text-red-500"
+                >
+                  Remove
+                </button>
               </div>
             ))}
 
@@ -352,7 +354,7 @@ export function CartDrawer({
               type="button"
               disabled={items.length === 0}
               onClick={() => router.push("/checkout")}
-              className="min-h-[44px] w-full rounded-full bg-primary-500 py-3 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-50"
+              className="min-h-[44px] w-full rounded-2xl bg-gradient-to-r from-primary-700 to-primary-500 py-3 text-sm font-bold text-white shadow-sm shadow-primary-700/20 transition-transform hover:from-primary-800 hover:to-primary-600 active:scale-[0.99] disabled:opacity-50"
             >
               Place Order ({formatINR(breakdown.total)})
             </button>
@@ -361,7 +363,7 @@ export function CartDrawer({
               type="button"
               disabled={items.length === 0 || startingGroup}
               onClick={handleStartGroupOrder}
-              className="min-h-[44px] w-full rounded-full border-2 border-primary-500 py-3 text-sm font-semibold text-primary-700 hover:bg-surface-light disabled:opacity-50"
+              className="btn-outline min-h-[44px] w-full rounded-2xl"
             >
               {startingGroup ? "Starting Group Order..." : "Start Group Order"}
             </button>

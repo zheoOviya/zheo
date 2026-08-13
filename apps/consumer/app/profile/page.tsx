@@ -639,7 +639,8 @@ function ProfileContent() {
     <main className="py-6">
       <header className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-primary-700 dark:text-primary-300">My Account</h1>
+          <p className="section-eyebrow">Account</p>
+          <h1 className="section-title">My Account</h1>
           <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
             Set your spice level, track cashback and streaks, and refer friends.
           </p>

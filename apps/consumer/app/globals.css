@@ -15,6 +15,81 @@
   .dark body {
     @apply bg-surface-dark text-neutral-200;
   }
+
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+@layer components {
+  /* Brand mark (SnakZap wordmark) */
+  .brand-wordmark {
+    @apply text-xl font-extrabold tracking-tight text-neutral-900 dark:text-white;
+  }
+
+  /* Section heading with eyebrow label */
+  .section-head {
+    @apply mb-4 flex items-end justify-between;
+  }
+
+  .section-eyebrow {
+    @apply text-2xs font-bold uppercase tracking-[0.14em] text-primary-600 dark:text-primary-400;
+  }
+
+  .section-title {
+    @apply mt-0.5 text-lg font-bold tracking-tight text-neutral-900 dark:text-white;
+  }
+
+  /* Gradient hero panel */
+  .hero-panel {
+    background-image:
+      radial-gradient(60% 120% at 85% -10%, rgba(45, 212, 191, 0.45), transparent 60%),
+      radial-gradient(50% 100% at 0% 110%, rgba(251, 191, 36, 0.18), transparent 55%),
+      linear-gradient(135deg, #134e4a 0%, #0f766e 55%, #0d9488 100%);
+  }
+
+  .dark .hero-panel {
+    background-image:
+      radial-gradient(60% 120% at 85% -10%, rgba(45, 212, 191, 0.28), transparent 60%),
+      radial-gradient(50% 100% at 0% 110%, rgba(251, 191, 36, 0.12), transparent 55%),
+      linear-gradient(135deg, #042f2e 0%, #134e4a 55%, #0f766e 100%);
+  }
+
+  .hero-cta-primary {
+    @apply inline-flex min-h-11 items-center justify-center gap-1.5 rounded-full bg-white px-5 text-sm font-bold text-teal-800 shadow-sm transition-all duration-150 hover:bg-teal-50 active:scale-95;
+  }
+
+  .hero-cta-secondary {
+    @apply inline-flex min-h-11 items-center justify-center gap-1.5 rounded-full bg-white/10 px-5 text-sm font-bold text-white ring-1 ring-white/25 backdrop-blur transition-all duration-150 hover:bg-white/20 active:scale-95;
+  }
+
+  /* Primary/secondary buttons (replaces ad-hoc rounded-full pairs) */
+  .btn-primary {
+    @apply inline-flex min-h-11 items-center justify-center rounded-full bg-primary-500 px-6 text-sm font-bold text-white shadow-sm transition-all duration-150 hover:bg-primary-hover active:scale-95 disabled:opacity-50;
+  }
+
+  .btn-outline {
+    @apply inline-flex min-h-11 items-center justify-center rounded-full border-2 border-primary-500 px-6 text-sm font-bold text-primary-700 transition-all duration-150 hover:bg-primary-500/10 active:scale-95 disabled:opacity-50;
+  }
+
+  /* Floating glass surfaces */
+  .glass-nav {
+    @apply border border-white/60 bg-white/75 shadow-elevation-3 backdrop-blur-xl dark:border-white/10 dark:bg-neutral-950/70;
+  }
+
+  .glass-chip {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-white/10 px-4 py-2 text-sm font-semibold text-white ring-1 ring-white/25 backdrop-blur transition-all duration-150 hover:bg-white/20;
+  }
+
+  /* Imagery treatment: hover zoom on any image container */
+  .img-zoom {
+    @apply transition-transform duration-500 ease-out group-hover:scale-105;
+  }
+
+  /* Soft content card used across sections */
+  .surface-card {
+    @apply rounded-2xl bg-white shadow-elevation-1 ring-1 ring-neutral-900/5 transition-all duration-200 dark:bg-neutral-900 dark:ring-white/5;
+  }
 }
 
 @layer utilities {

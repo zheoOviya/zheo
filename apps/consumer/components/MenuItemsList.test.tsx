@@ -40,7 +40,7 @@ describe("MenuItemsList", () => {
   it("renders menu items with dietary tags", () => {
     renderMenu();
     expect(screen.getByText("Veg Bowl")).toBeTruthy();
-    expect(screen.getByText("VEG")).toBeTruthy();
+    expect(screen.getByLabelText("VEG")).toBeTruthy();
   });
 
   it("adds an item to the cart and surfaces the floating cart bar", async () => {
@@ -50,7 +50,7 @@ describe("MenuItemsList", () => {
     fireEvent.click(screen.getByRole("button", { name: /Add to Cart/ }));
 
     await waitFor(() => {
-      expect(screen.getByText(/View Cart · 1 item/)).toBeTruthy();
+      expect(screen.getByRole("button", { name: /View cart, 1 item, total/ })).toBeTruthy();
     });
   });
 });

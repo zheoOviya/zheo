@@ -387,9 +387,10 @@ function CheckoutContent() {
     return (
       <main className="py-6">
         <header className="mb-6">
-          <h1 className="text-2xl font-bold text-primary-700">Checkout</h1>
+          <p className="section-eyebrow">Secure checkout</p>
+          <h1 className="section-title">Checkout</h1>
         </header>
-        <div className="rounded-2xl bg-white p-8 text-center shadow-sm">
+        <div className="surface-card p-8 text-center">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary-500/10">
             <svg
               className="h-8 w-8 text-primary-500"
@@ -459,7 +460,8 @@ function CheckoutContent() {
     return (
       <main className="py-6">
         <header className="mb-6">
-          <h1 className="text-2xl font-bold text-primary-700">Checkout</h1>
+          <p className="section-eyebrow">Secure checkout</p>
+          <h1 className="section-title">Checkout</h1>
         </header>
         <div className="rounded-2xl bg-white p-8 text-center shadow-sm">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-100">
@@ -493,7 +495,8 @@ function CheckoutContent() {
     return (
       <main className="py-6">
         <header className="mb-6">
-          <h1 className="text-2xl font-bold text-primary-700">Checkout</h1>
+          <p className="section-eyebrow">Secure checkout</p>
+          <h1 className="section-title">Checkout</h1>
         </header>
         <div className="rounded-2xl bg-white p-6 shadow-sm">
           <div className="flex flex-col items-center gap-4 py-8">
@@ -524,11 +527,12 @@ function CheckoutContent() {
   }
 
   return (
-    <main className="py-6">
+    <main className="py-6 pb-28">
       <header className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-primary-700">Checkout</h1>
-          <p className="mt-1 text-sm text-neutral-500">
+          <p className="section-eyebrow">Secure checkout</p>
+          <h1 className="section-title">Checkout</h1>
+          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
             {user?.phone ? `Signed in as +91 ${user.phone}` : "Preparing your order"}
           </p>
         </div>
@@ -538,7 +542,7 @@ function CheckoutContent() {
             await logout();
             router.push("/login");
           }}
-          className="rounded-full border border-primary-500/30 px-4 py-2 text-sm font-medium text-primary-700 hover:bg-surface-light"
+          className="btn-outline !min-h-9 !px-4 !py-1.5 !text-xs"
         >
           Sign Out
         </button>

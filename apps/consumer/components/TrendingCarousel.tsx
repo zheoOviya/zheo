@@ -2,12 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { m } from "framer-motion";
 import { Badge } from "@snakzap/ui";
-import {
-  fetchTrending,
-  type TrendingDish,
-} from "@/lib/api";
+import { fetchTrending, type TrendingDish } from "@/lib/api";
 import { formatINR } from "@/lib/pricing";
 
 const SKELETON_ITEMS = [0, 1, 2, 3];
@@ -46,25 +44,27 @@ export function TrendingCarousel() {
 
   if (error) {
     return (
-      <section aria-label="Trending Now" className="mt-6">
-        <h2 className="mb-3 text-lg font-bold text-primary-700 dark:text-primary-300">
-          Trending Now
-        </h2>
-        <p className="rounded-xl bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-600 dark:text-red-400">
-          {error}
-        </p>
+      <section aria-label="Trending Now" className="mt-8">
+        <div className="section-head">
+          <div>
+            <p className="section-eyebrow">Popular</p>
+            <h2 className="section-title">Trending Now</h2>
+          </div>
+        </div>
+        <p className="surface-card p-3 text-sm text-red-600 dark:text-red-400">{error}</p>
       </section>
     );
   }
 
   return (
-    <section aria-label="Trending Now" className="mt-6">
-      <div className="mb-3 flex items-baseline justify-between">
-        <h2 className="text-lg font-bold text-primary-700 dark:text-primary-300">
-          Trending Now
-        </h2>
+    <section aria-label="Trending Now" className="mt-8">
+      <div className="section-head">
+        <div>
+          <p className="section-eyebrow">Popular</p>
+          <h2 className="section-title">Trending Now</h2>
+        </div>
         {dishes && dishes.length > 0 && (
-          <span className="text-xs text-neutral-400 dark:text-neutral-500">
+          <span className="text-xs font-medium text-neutral-400 dark:text-neutral-500">
             Last 60 min &middot; 5 km
           </span>
         )}
@@ -100,29 +100,45 @@ export function TrendingCarousel() {
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.08, duration: 0.3 }}
-                className="w-52 shrink-0 snap-start"
+                className="w-56 shrink-0 snap-start"
               >
                 <Link
                   href={`/restaurants/${dish.restaurant_id}`}
-                  className="block rounded-xl bg-white dark:bg-neutral-900 p-4 shadow-elevation-1 transition-all duration-200 hover:-translate-y-1 hover:shadow-elevation-3"
+                  className="group block overflow-hidden rounded-3xl bg-white shadow-elevation-1 ring-1 ring-neutral-900/5 transition-all duration-200 hover:-translate-y-1 hover:shadow-elevation-3 dark:bg-neutral-900 dark:ring-white/5"
                 >
-                  <div className="flex items-center justify-between">
-                    <Badge variant={variant} size="sm">
-                      {label}
-                    </Badge>
-                    <span className="text-2xs font-semibold text-primary-600 dark:text-primary-400">
+                  <div className="relative h-28 w-full overflow-hidden bg-primary-100 dark:bg-primary-900/30">
+                    <Image
+                      src={`https://picsum.photos/seed/${dish.menu_item_id}/400/220`}
+                      alt=""
+                      fill
+                      sizes="(max-width: 640px) 224px, 224px"
+                      loading="lazy"
+                      className="img-zoom object-cover"
+                    />
+                    <div
+                      aria-hidden="true"
+                      className="absolute inset-0 bg-gradient-to-t from-black/45 to-transparent"
+                    />
+                    <span className="absolute left-2 top-2">
+                      <Badge variant={variant} size="sm">
+                        {label}
+                      </Badge>
+                    </span>
+                    <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-2xs font-bold text-white backdrop-blur">
                       {dish.quantity_sold} sold
                     </span>
                   </div>
-                  <h3 className="mt-3 truncate font-semibold text-neutral-700 dark:text-neutral-200">
-                    {dish.name}
-                  </h3>
-                  <p className="truncate text-xs text-neutral-400 dark:text-neutral-500">
-                    {dish.restaurant_name}
-                  </p>
-                  <p className="mt-2 text-sm font-bold text-primary-700 dark:text-primary-300">
-                    {formatINR(dish.price)}
-                  </p>
+                  <div className="p-3">
+                    <h3 className="line-clamp-1 text-sm font-bold tracking-tight text-neutral-900 dark:text-white">
+                      {dish.name}
+                    </h3>
+                    <p className="mt-0.5 line-clamp-1 text-xs text-neutral-400 dark:text-neutral-500">
+                      {dish.restaurant_name}
+                    </p>
+                    <p className="mt-1.5 text-sm font-extrabold text-primary-700 dark:text-primary-300">
+                      {formatINR(dish.price)}
+                    </p>
+                  </div>
                 </Link>
               </m.li>
             );

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import Image from "next/image";
 import toast, { type Toast } from "react-hot-toast";
 import type { MenuItem } from "@/lib/api";
 import {
@@ -47,10 +48,9 @@ function warnCrossRestaurant(result: Extract<AddItemResult, { cleared: true }>, 
     (t: Toast) => (
       <div className="flex items-start gap-3">
         <p className="min-w-0 flex-1 text-sm leading-snug text-neutral-700">
-          Starting a new order from {newName}. Your {result.clearedItemCount}{" "}
-          item{result.clearedItemCount === 1 ? "" : "s"} from{" "}
-          {result.previousRestaurantName ?? "your last restaurant"} were
-          cleared.
+          Starting a new order from {newName}. Your {result.clearedItemCount} item
+          {result.clearedItemCount === 1 ? "" : "s"} from{" "}
+          {result.previousRestaurantName ?? "your last restaurant"} were cleared.
         </p>
         <button
           type="button"
@@ -145,37 +145,52 @@ export function MenuItemsList({
           const isJustAdded = justAddedId === item.id;
 
           return (
-            <div
-              key={item.id}
-              className="flex items-center justify-between rounded-2xl bg-white p-4 shadow-sm"
-            >
-              <div className="min-w-0 flex-1 pr-3">
+            <div key={item.id} className="surface-card flex items-center gap-3.5 p-3.5">
+              <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-primary-100 dark:bg-primary-900/30">
+                <Image
+                  src={item.image_url ?? `https://picsum.photos/seed/${item.id}/160/160`}
+                  alt=""
+                  fill
+                  sizes="64px"
+                  loading="lazy"
+                  className="object-cover"
+                />
+                {tags[0] && (
+                  <span
+                    aria-label={tags[0]}
+                    aria-hidden="false"
+                    className={`absolute bottom-0.5 right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full ring-2 ring-white ${
+                      tags[0] === "NON_VEG" ? "bg-red-600" : "bg-green-600"
+                    }`}
+                  />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <h3 className="truncate font-semibold text-neutral-800">
+                  <h3 className="line-clamp-1 text-sm font-bold tracking-tight text-neutral-900 dark:text-white">
                     {item.name}
                   </h3>
-                  {tags.map((tag) => (
+                  {tags.slice(1).map((tag) => (
                     <span
                       key={tag}
                       className={`shrink-0 rounded px-1.5 py-0.5 text-2xs font-bold uppercase ring-1 ${
-                        DIETARY_COLORS[tag] ?? "bg-neutral-500/10 text-neutral-600"
+                        DIETARY_COLORS[tag] ??
+                        "bg-neutral-500/10 text-neutral-600 dark:text-neutral-300"
                       }`}
                     >
                       {tag}
                     </span>
                   ))}
                 </div>
-                <p className="mt-1 text-sm font-semibold text-primary-600">
+                <p className="mt-1 text-sm font-extrabold text-primary-700 dark:text-primary-300">
                   {formatINR(unitPrice)}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setPickerItem(item)}
-                aria-label={
-                  isJustAdded ? `Added ${item.name}` : `Add ${item.name}`
-                }
-                className={`shrink-0 rounded-full px-5 py-2 text-sm font-bold text-white transition-transform active:scale-95 ${
+                aria-label={isJustAdded ? `Added ${item.name}` : `Add ${item.name}`}
+                className={`shrink-0 rounded-full px-4 py-2 text-xs font-bold text-white transition-transform active:scale-95 ${
                   isJustAdded ? "bg-green-500" : "bg-primary-500 hover:bg-primary-hover"
                 }`}
               >
@@ -199,15 +214,15 @@ export function MenuItemsList({
         })}
 
         {unavailable.length > 0 && (
-          <div className="rounded-2xl bg-white/60 p-4 shadow-sm">
-            <h4 className="text-sm font-semibold text-neutral-400">
+          <div className="surface-card bg-white/60 p-4 dark:bg-neutral-900/60">
+            <h4 className="text-sm font-semibold text-neutral-400 dark:text-neutral-500">
               Currently unavailable
             </h4>
             <ul className="mt-2 space-y-1">
               {unavailable.map((item) => (
                 <li
                   key={item.id}
-                  className="flex items-center justify-between text-sm text-neutral-300"
+                  className="flex items-center justify-between text-sm text-neutral-300 dark:text-neutral-600"
                 >
                   <span>{item.name}</span>
                   <span>{formatINR(item.price)}</span>
@@ -218,7 +233,7 @@ export function MenuItemsList({
         )}
 
         {available.length === 0 && unavailable.length === 0 && (
-          <p className="rounded-2xl bg-white py-10 text-center text-sm text-neutral-400">
+          <p className="surface-card py-10 text-center text-sm text-neutral-400">
             No items on the menu right now.
           </p>
         )}
@@ -241,16 +256,32 @@ export function MenuItemsList({
       <CartDrawer open={cartOpen} onClose={() => setCartOpen(false)} />
 
       {count > 0 && (
-        <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-5xl px-4 pb-4">
+        <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 px-4 pb-3">
           <button
             type="button"
             onClick={() => setCartOpen(true)}
-            className="flex w-full items-center justify-between rounded-full bg-primary-700 px-6 py-4 text-white shadow-lg shadow-primary-900/30 hover:bg-primary-800 active:scale-[0.99] transition-transform"
+            aria-label={`View cart, ${count} item${count === 1 ? "" : "s"}, total ${formatINR(breakdown.total)}`}
+            className="pointer-events-auto flex w-full items-center justify-between rounded-2xl bg-gradient-to-r from-primary-700 to-primary-600 px-6 py-4 text-white shadow-elevation-3 shadow-primary-900/30 transition-transform hover:from-primary-800 hover:to-primary-700 active:scale-[0.99]"
           >
-            <span className="text-sm font-semibold">
-              View Cart · {count} item{count === 1 ? "" : "s"}
+            <span className="flex items-center gap-2.5 text-sm font-bold">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/20 text-xs">
+                {count}
+              </span>
+              View Cart
             </span>
-            <span className="text-sm font-bold">{formatINR(breakdown.total)}</span>
+            <span className="flex items-center gap-1.5 text-sm font-extrabold">
+              {formatINR(breakdown.total)}
+              <svg
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2.5}
+                aria-hidden="true"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </span>
           </button>
         </div>
       )}

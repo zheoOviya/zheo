@@ -37,24 +37,20 @@ export function DiscoveryControls() {
 
       {dishResults.length > 0 && (
         <section aria-label="Filtered dishes" className="space-y-2">
-          <h3 className="text-sm font-semibold text-primary-700">
+          <h3 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
             Matching dishes
           </h3>
-          <ul className="divide-y divide-primary-500/10 rounded-xl bg-white shadow-sm">
+          <ul className="divide-y divide-neutral-100 overflow-hidden rounded-2xl bg-white shadow-elevation-1 ring-1 ring-neutral-900/5 dark:divide-neutral-800 dark:bg-neutral-900 dark:ring-white/5">
             {dishResults.map((item) => (
               <li key={item.id}>
                 <Link
-                  href={
-                    item.restaurant_id
-                      ? `/restaurants/${item.restaurant_id}`
-                      : "/"
-                  }
-                  className="flex items-center justify-between px-4 py-3 hover:bg-surface-light"
+                  href={item.restaurant_id ? `/restaurants/${item.restaurant_id}` : "/"}
+                  className="flex items-center justify-between px-4 py-3 transition-colors hover:bg-surface-light dark:hover:bg-neutral-800"
                 >
-                  <span className="text-sm font-medium text-neutral-700">
+                  <span className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
                     {item.name}
                   </span>
-                  <span className="text-sm font-semibold text-primary-600">
+                  <span className="text-sm font-bold text-primary-600 dark:text-primary-400">
                     {formatINR(item.price)}
                   </span>
                 </Link>
