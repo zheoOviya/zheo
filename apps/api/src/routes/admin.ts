@@ -9,7 +9,10 @@ import {
   sharedIdentityRepo,
   sharedKillSwitchRepo,
   sharedSupportRepo,
+  getStorageMode,
 } from "../repositories/shared";
+import { getRedis } from "../lib/redis";
+import { config } from "../config";
 import { getCatalogRepository } from "./catalog";
 import type { RestaurantDTO } from "../repositories/catalogRepository";
 import type { KillSwitchDTO } from "../repositories/killSwitchRepository";
@@ -23,6 +26,41 @@ const adminWriteLimiter = rateLimiter({
   identifier: (req) => req.ip ?? "unknown",
   failClosed: true,
 });
+
+// ============================================
+// System Health (A-11) — live component status
+// ============================================
+
+adminRouter.get(
+  "/health",
+  adminReadOnly,
+  asyncHandler(async (req, res) => {
+    const started = Date.now();
+    const storageMode = getStorageMode();
+    let redisStatus: "reachable" | "degraded" | "memory";
+    if (process.env.NODE_ENV === "test" || !config.redis.url) {
+      redisStatus = "memory";
+    } else {
+      try {
+        const pong = await Promise.race([
+          getRedis().ping(),
+          new Promise<"TIMEOUT">((resolve) => setTimeout(() => resolve("TIMEOUT"), 1500)),
+        ]);
+        redisStatus = pong === "PONG" ? "reachable" : "degraded";
+      } catch {
+        redisStatus = "degraded";
+      }
+    }
+    ok(res, {
+      status: "ok",
+      storage_mode: storageMode,
+      redis: redisStatus,
+      uptime_seconds: Math.round(process.uptime()),
+      latency_ms: Date.now() - started,
+      timestamp: new Date().toISOString(),
+    });
+  }),
+);
 
 // ============================================
 // Kill Switches (A-03) — Sprint 5.1: DB-persisted
@@ -375,7 +413,11 @@ adminRouter.get(
     const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "20"), 10) || 20));
     const search = typeof req.query.search === "string" ? req.query.search : undefined;
-    const result = await sharedIdentityRepo.listAll(page, limit, search);
+    const role = typeof req.query.role === "string" ? req.query.role : undefined;
+    const roleParam = role && ALL_ROLES.includes(role as (typeof ALL_ROLES)[number])
+      ? (role as (typeof ALL_ROLES)[number])
+      : undefined;
+    const result = await sharedIdentityRepo.listAll(page, limit, search, roleParam);
     ok(res, result);
   }),
 );

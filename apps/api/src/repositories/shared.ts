@@ -74,11 +74,22 @@ interface RepoSet {
 }
 
 let _repos: RepoSet | null = null;
+let _memoryMode = false;
+
+/**
+ * Reports the active storage backend once the repo set is locked in.
+ * "postgres" when Drizzle repos are wired, "memory" otherwise (fallback mode).
+ */
+export function getStorageMode(): "postgres" | "memory" {
+  getRepos();
+  return _memoryMode ? "memory" : "postgres";
+}
 
 function getRepos(): RepoSet {
   if (_repos) return _repos;
 
   if (isMemoryMode()) {
+    _memoryMode = true;
     _repos = {
       sharedOrderRepo: new MemoryOrderRepository(),
       sharedPaymentRepo: new MemoryPaymentRepository(),

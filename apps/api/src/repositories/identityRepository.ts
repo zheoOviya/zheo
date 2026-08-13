@@ -49,8 +49,8 @@ export interface IdentityRepository {
     userId: string,
     tolerance: number,
   ): Promise<IdentityUser | null>;
-  /** A-06: paginated user listing with optional phone search. */
-  listAll(page: number, limit: number, searchPhone?: string): Promise<{ items: IdentityUser[]; total: number }>;
+  /** A-06: paginated user listing with optional phone search and role filter. */
+  listAll(page: number, limit: number, searchPhone?: string, role?: IdentityUser["role"]): Promise<{ items: IdentityUser[]; total: number }>;
   /** A-06: suspend a user by id. */
   suspend(userId: string): Promise<IdentityUser | null>;
   /** A-06: reactivate a suspended user by id. */
@@ -168,10 +168,13 @@ export class MemoryIdentityRepository implements IdentityRepository {
     return updated;
   }
 
-  async listAll(page: number, limit: number, searchPhone?: string): Promise<{ items: IdentityUser[]; total: number }> {
+  async listAll(page: number, limit: number, searchPhone?: string, role?: IdentityUser["role"]): Promise<{ items: IdentityUser[]; total: number }> {
     let all = Array.from(this.users.values());
     if (searchPhone) {
       all = all.filter((u) => u.phone.includes(searchPhone));
+    }
+    if (role) {
+      all = all.filter((u) => u.role === role);
     }
     all.sort((a, b) => b.created_at.localeCompare(a.created_at));
     const total = all.length;

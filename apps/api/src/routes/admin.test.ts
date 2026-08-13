@@ -34,6 +34,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
   describe("Read-only endpoints (adminReadOnly)", () => {
     const readEndpoints = [
       { method: "get" as const, path: "/api/v1/admin/metrics" },
+      { method: "get" as const, path: "/api/v1/admin/health" },
       { method: "get" as const, path: "/api/v1/admin/kill-switches" },
       { method: "get" as const, path: "/api/v1/admin/audit-logs" },
       { method: "get" as const, path: "/api/v1/admin/orders" },
@@ -142,6 +143,22 @@ describe("Admin RBAC (A-01, A-11)", () => {
     });
   });
 
+  describe("System Health (A-11)", () => {
+    it("GET /admin/health reports storage mode, redis, uptime and latency", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/health")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      const data = res.body.data;
+      expect(data.status).toBe("ok");
+      expect(["postgres", "memory"]).toContain(data.storage_mode);
+      expect(["reachable", "degraded", "memory"]).toContain(data.redis);
+      expect(typeof data.uptime_seconds).toBe("number");
+      expect(typeof data.latency_ms).toBe("number");
+      expect(typeof data.timestamp).toBe("string");
+    });
+  });
+
   describe("Vendor suspend returns 409 when already suspended", () => {
     it("returns 409 when suspending an already suspended vendor", async () => {
       const res = await request(app)
@@ -179,6 +196,14 @@ describe("Admin RBAC (A-01, A-11)", () => {
         totp_enabled: false,
         created_at: new Date().toISOString(),
       });
+      sharedIdentityRepo._seed({
+        id: "u-sprint52-admin-0000000000001",
+        phone: "+910000000002",
+        role: "ADMIN",
+        is_suspended: false,
+        totp_enabled: false,
+        created_at: new Date().toISOString(),
+      });
     });
 
     it("GET /admin/users returns paginated user list", async () => {
@@ -197,6 +222,15 @@ describe("Admin RBAC (A-01, A-11)", () => {
         .set("Authorization", adminToken("ADMIN"));
       expect(res.status).toBe(200);
       expect(res.body.data.items.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("GET /admin/users supports role filtering", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/users?role=ADMIN")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      expect(res.body.data.items.length).toBeGreaterThanOrEqual(1);
+      expect(res.body.data.items.every((u: { role: string }) => u.role === "ADMIN")).toBe(true);
     });
 
     it("PUT /admin/users/:id/suspend works for ADMIN", async () => {

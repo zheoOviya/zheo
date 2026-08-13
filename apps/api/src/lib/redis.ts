@@ -9,6 +9,7 @@ import { logger } from "./logger";
 // ============================================
 
 export interface RedisLike {
+  ping(): Promise<string>;
   get(key: string): Promise<string | null>;
   set(
     key: string,
@@ -34,6 +35,10 @@ export class MemoryRedis implements RedisLike {
   private zsets = new Map<string, Map<string, number>>();
 
   status = "ready";
+
+  async ping(): Promise<string> {
+    return "PONG";
+  }
 
   async get(key: string): Promise<string | null> {
     return this.store.get(key) ?? null;

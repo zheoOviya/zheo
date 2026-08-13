@@ -98,7 +98,7 @@ export class DrizzleIdentityRepository implements IdentityRepository {
     return this.getById(userId);
   }
 
-  async listAll(page: number, limit: number, searchPhone?: string): Promise<{ items: IdentityUser[]; total: number }> {
+  async listAll(page: number, limit: number, searchPhone?: string, role?: IdentityUser["role"]): Promise<{ items: IdentityUser[]; total: number }> {
     const allRows = (await this.db
       .select()
       .from(users)
@@ -106,6 +106,9 @@ export class DrizzleIdentityRepository implements IdentityRepository {
     let filtered = searchPhone
       ? allRows.filter((r) => (r.phone as string).includes(searchPhone))
       : allRows;
+    if (role) {
+      filtered = filtered.filter((r) => r.role === role);
+    }
     filtered.sort((a, b) =>
       (b.created_at as Date).getTime() - (a.created_at as Date).getTime(),
     );
