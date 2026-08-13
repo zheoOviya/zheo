@@ -30,6 +30,7 @@ export default function LoginPage() {
   const [step, setStep] = useState<Step>("phone");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [demoOtp, setDemoOtp] = useState("");
 
   async function sendOtp() {
     setError("");
@@ -42,6 +43,10 @@ export default function LoginPage() {
       });
       const body = await res.json();
       if (!body.success) throw new Error(body.error?.message ?? "Failed to send OTP");
+      if (body.data?.demoOtp) {
+        setDemoOtp(body.data.demoOtp);
+        setOtp(body.data.demoOtp);
+      }
       setStep("otp");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
@@ -126,6 +131,15 @@ export default function LoginPage() {
               disabled={loading}
             />
             {error && <p className="text-sm text-red-500">{error}</p>}
+            <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 px-3 py-2.5 text-xs text-neutral-500 dark:text-neutral-400">
+              <p className="font-semibold uppercase tracking-wide">Demo accounts</p>
+              <p className="mt-1 font-mono">+919876000000 — Admin</p>
+              <p className="font-mono">+919876000099 — Super Admin</p>
+              <p className="mt-1 text-neutral-400">
+                Any 6-digit code works in this preview; it auto-fills on the
+                next step.
+              </p>
+            </div>
             <button
               onClick={sendOtp}
               disabled={loading || phone.length < 10}
@@ -141,6 +155,19 @@ export default function LoginPage() {
             <p className="text-sm text-neutral-600 dark:text-neutral-400 text-center">
               Enter the 6-digit code sent to {phone}
             </p>
+            {demoOtp && (
+              <div className="rounded-xl border border-dashed border-primary-300 dark:border-primary-800 bg-primary-50 dark:bg-primary-950 px-4 py-3 text-center">
+                <p className="text-xs font-semibold uppercase tracking-wide text-primary-600 dark:text-primary-400">
+                  Demo code (on-screen OTP)
+                </p>
+                <p className="mt-1 font-mono text-3xl font-bold tracking-[0.35em] text-primary-700 dark:text-primary-300">
+                  {demoOtp}
+                </p>
+                <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                  Auto-filled — no SMS is sent in this preview
+                </p>
+              </div>
+            )}
             <input
               type="text"
               inputMode="numeric"
