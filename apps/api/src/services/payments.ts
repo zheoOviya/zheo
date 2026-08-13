@@ -1,18 +1,20 @@
 import { createEventEnvelope, emit } from "../lib/eventBus";
 import { AppError } from "../middleware/envelope";
 import type { OrderRepository } from "../repositories/orderRepository";
-import type {
-  PaymentRepository,
-  PaymentDTO,
-} from "../repositories/paymentRepository";
+import type { PaymentRepository, PaymentDTO } from "../repositories/paymentRepository";
 import { razorpayService, type RazorpayWebhookPayload } from "./razorpay";
 
 // ============================================
 // Payments context service (payments bounded context)
-// Orchestrates: Razorpay order creation -> payment
+// Orchestrates: payment order creation -> payment
 // webhook processing with idempotency -> status
 // transitions -> event emission.
 // ============================================
+
+// Indian-market payment methods. Online methods (upi / card / netbanking /
+// wallet) all funnel through the Razorpay checkout (aggregator that already
+// supports 100+ methods); "cod" is pay-at-pickup with no gateway.
+export type PaymentMethod = "upi" | "card" | "netbanking" | "wallet" | "cod";
 
 export class PaymentService {
   constructor(
@@ -20,8 +22,12 @@ export class PaymentService {
     private readonly orderRepo: OrderRepository,
   ) {}
 
-  async createRazorpayOrder(orderId: string): Promise<{
-    razorpay_order_id: string;
+  async createPaymentOrder(
+    orderId: string,
+    method: PaymentMethod = "upi",
+  ): Promise<{
+    payment_method: PaymentMethod;
+    razorpay_order_id?: string;
     amount: number;
     currency: string;
   }> {
@@ -36,6 +42,32 @@ export class PaymentService {
         `Cannot create payment: order is ${order.status}, not DRAFT`,
         400,
       );
+    }
+
+    if (method === "cod") {
+      const payment = await this.paymentRepo.create({
+        order_id: order.id,
+        razorpay_order_id: `cod_${order.id.slice(0, 8)}`,
+        amount: order.total_amount,
+        method: "cod",
+      });
+
+      // Cash is collected at the counter on pickup, so the order goes
+      // straight to CONFIRMED and the fulfillment flow proceeds.
+      await this.orderRepo.updateStatus(order.id, "CONFIRMED");
+      await emit(
+        createEventEnvelope("CashOnPickupSelected", order.id, {
+          order_id: order.id,
+          payment_id: payment.id,
+          amount: order.total_amount,
+        }),
+      );
+
+      return {
+        payment_method: "cod",
+        amount: order.total_amount,
+        currency: "INR",
+      };
     }
 
     const amountInPaise = Math.round(order.total_amount * 100);
@@ -53,6 +85,7 @@ export class PaymentService {
     await this.orderRepo.updateStatus(order.id, "PAYMENT_PENDING");
 
     return {
+      payment_method: method,
       razorpay_order_id: rpOrder.id,
       amount: order.total_amount,
       currency: "INR",
@@ -68,11 +101,7 @@ export class PaymentService {
     orderStatus?: string;
   }> {
     if (!razorpayService.verifyWebhookSignature(rawBody, signatureHeader)) {
-      throw new AppError(
-        "INVALID_WEBHOOK_SIGNATURE",
-        "Webhook signature verification failed",
-        401,
-      );
+      throw new AppError("INVALID_WEBHOOK_SIGNATURE", "Webhook signature verification failed", 401);
     }
 
     const payload: RazorpayWebhookPayload = JSON.parse(rawBody);

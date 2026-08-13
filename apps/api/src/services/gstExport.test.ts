@@ -25,6 +25,7 @@ const REST: RestaurantDTO = {
   is_active: true,
   lat: 19.076,
   lng: 72.8777,
+  pickup_eta_min: 25,
 };
 
 function makeOrder(
@@ -111,25 +112,17 @@ describe("buildGstCsv", () => {
     const csv = buildGstCsv(orders, REST, "2026-08");
     const lines = csv.split("\r\n");
 
-    expect(lines[0]).toBe(
-      "Invoice No,GSTIN,Date,Taxable Value,CGST 2.5%,SGST 2.5%",
-    );
+    expect(lines[0]).toBe("Invoice No,GSTIN,Date,Taxable Value,CGST 2.5%,SGST 2.5%");
     expect(lines).toHaveLength(3);
 
     // Row 1: taxable 200 -> CGST/SGST 5 each
-    expect(lines[1]).toBe(
-      "INV-2026-08-0001,27AABCB1234A1Z5,2026-08-04,200.00,5.00,5.00",
-    );
+    expect(lines[1]).toBe("INV-2026-08-0001,27AABCB1234A1Z5,2026-08-04,200.00,5.00,5.00");
     // Row 2: taxable 440 -> CGST/SGST 11 each
-    expect(lines[2]).toBe(
-      "INV-2026-08-0002,27AABCB1234A1Z5,2026-08-05,440.00,11.00,11.00",
-    );
+    expect(lines[2]).toBe("INV-2026-08-0002,27AABCB1234A1Z5,2026-08-05,440.00,11.00,11.00");
   });
 
   it("returns just the header when there are no orders", () => {
     const csv = buildGstCsv([], REST, "2026-08");
-    expect(csv).toBe(
-      "Invoice No,GSTIN,Date,Taxable Value,CGST 2.5%,SGST 2.5%",
-    );
+    expect(csv).toBe("Invoice No,GSTIN,Date,Taxable Value,CGST 2.5%,SGST 2.5%");
   });
 });

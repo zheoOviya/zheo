@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createEvent,
-  EventEnvelopeSchema,
-  EventNameSchema,
-  TypedEventEnvelope,
-} from "./events";
+import { createEvent, EventEnvelopeSchema, EventNameSchema, TypedEventEnvelope } from "./events";
 
 describe("Event Envelope (EOS Layer 1.2)", () => {
   it("has the exact envelope contract", () => {
@@ -20,11 +15,12 @@ describe("Event Envelope (EOS Layer 1.2)", () => {
     ).toBe(true);
   });
 
-  it("EventNameSchema contains all 25 core events", () => {
+  it("EventNameSchema contains all 26 core events", () => {
     expect(EventNameSchema.options).toEqual([
       "OrderCreated",
       "PaymentSucceeded",
       "PaymentFailed",
+      "CashOnPickupSelected",
       "OrderPreparationStarted",
       "OrderReadyForPickup",
       "OrderPickedUp",

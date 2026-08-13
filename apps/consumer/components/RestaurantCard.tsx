@@ -22,6 +22,7 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
 
   const queueStatus = restaurant.is_active ? "Light" : "Closed";
   const queueColor: "green" | "red" = restaurant.is_active ? "green" : "red";
+  const etaLabel = restaurant.is_active ? `~${restaurant.pickup_eta_min} min` : "Opens 11:00";
 
   async function openQuickAdd() {
     setQuickAddOpen(true);
@@ -88,7 +89,11 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
               className="object-cover"
             />
             <div className="absolute top-2 left-2 flex gap-1.5">
-              <Badge variant={restaurant.is_active ? "green" : "red"} size="sm" pulse={restaurant.is_active}>
+              <Badge
+                variant={restaurant.is_active ? "green" : "red"}
+                size="sm"
+                pulse={restaurant.is_active}
+              >
                 {restaurant.is_active ? "Open" : "Closed"}
               </Badge>
             </div>
@@ -101,9 +106,7 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
               <Badge variant={queueColor} size="sm">
                 {queueStatus} Queue
               </Badge>
-              <span className="text-2xs text-neutral-400 dark:text-neutral-500">
-                ~15 min
-              </span>
+              <span className="text-2xs text-neutral-400 dark:text-neutral-500">{etaLabel}</span>
             </div>
             <button
               type="button"
@@ -120,11 +123,18 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
         </Link>
       </m.div>
 
-      <Sheet open={quickAddOpen} onClose={() => setQuickAddOpen(false)} title={`Quick Add - ${restaurant.name}`}>
+      <Sheet
+        open={quickAddOpen}
+        onClose={() => setQuickAddOpen(false)}
+        title={`Quick Add - ${restaurant.name}`}
+      >
         {loadingMenu ? (
           <div className="space-y-3 py-4">
             {[0, 1, 2].map((i) => (
-              <div key={i} className="h-16 animate-skeleton-teal rounded-lg bg-primary-100 dark:bg-primary-900/30" />
+              <div
+                key={i}
+                className="h-16 animate-skeleton-teal rounded-lg bg-primary-100 dark:bg-primary-900/30"
+              />
             ))}
           </div>
         ) : menuItems.length === 0 ? (

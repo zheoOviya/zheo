@@ -4,6 +4,7 @@ import {
   decimal,
   doublePrecision,
   index,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -33,9 +34,9 @@ export const restaurants = pgTable(
     // P04 traffic ETA: restaurant pickup location.
     lat: doublePrecision("lat"),
     lng: doublePrecision("lng"),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
+    // Consumer home cards show a real per-restaurant pickup ETA.
+    pickup_eta_min: integer("pickup_eta_min").notNull().default(20),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     ownerIdx: index("restaurants_owner_idx").on(table.owner_id),
@@ -66,21 +67,18 @@ export const menu_items = pgTable(
     image_url: text("image_url"),
     pos_item_id: text("pos_item_id"),
     is_available: boolean("is_available").notNull().default(true),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     restaurantIdx: index("menu_items_restaurant_idx").on(table.restaurant_id),
     nameIdx: index("menu_items_name_idx").on(table.name),
     // V01 POS sync looks up menu items by (restaurant_id, pos_item_id).
-    posItemIdx: index("menu_items_pos_item_idx").on(
-      table.restaurant_id,
-      table.pos_item_id,
-    ),
+    posItemIdx: index("menu_items_pos_item_idx").on(table.restaurant_id, table.pos_item_id),
     // CRITICAL: GIN index on JSONB dietary_tags for @> containment queries.
     // Enables efficient lookups like: WHERE dietary_tags @> '{"vegan": true}'
-    dietaryTagsGinIdx: index("menu_items_dietary_tags_gin_idx")
-      .using("gin", sql`${table.dietary_tags} jsonb_path_ops`),
+    dietaryTagsGinIdx: index("menu_items_dietary_tags_gin_idx").using(
+      "gin",
+      sql`${table.dietary_tags} jsonb_path_ops`,
+    ),
   }),
 );

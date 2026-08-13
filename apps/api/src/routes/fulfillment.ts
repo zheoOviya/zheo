@@ -4,7 +4,12 @@ import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
 import { assertRestaurantAccess } from "../middleware/vendorAccess";
 import { rateLimiter } from "../middleware/rateLimiter";
-import { sharedAuditRepo, sharedOrderRepo } from "../repositories/shared";
+import {
+  sharedAuditRepo,
+  sharedOrderRepo,
+  sharedPaymentRepo,
+  sharedIdentityRepo,
+} from "../repositories/shared";
 import { FulfillmentService } from "../services/fulfillment";
 import { GeoFenceService } from "../services/geoFence";
 
@@ -14,12 +19,14 @@ import { GeoFenceService } from "../services/geoFence";
 // Vendor: advance order status
 // ============================================
 
-const ConfirmPickupSchema = z.object({
-  qr_token: z.string().uuid().optional(),
-  pickup_otp: z.string().length(4).optional(),
-}).refine((d) => d.qr_token || d.pickup_otp, {
-  message: "Either qr_token or pickup_otp is required",
-});
+const ConfirmPickupSchema = z
+  .object({
+    qr_token: z.string().uuid().optional(),
+    pickup_otp: z.string().length(4).optional(),
+  })
+  .refine((d) => d.qr_token || d.pickup_otp, {
+    message: "Either qr_token or pickup_otp is required",
+  });
 
 const LocationUpdateSchema = z.object({
   lat: z.number().min(-90).max(90),
@@ -70,10 +77,7 @@ fulfillmentRouter.post(
     if (!body.success) {
       throw new AppError("VALIDATION_ERROR", "lat/lng required", 400, body.error.flatten());
     }
-    const result = await geoFenceService.handleLocationUpdate(
-      orderId(req.params.id),
-      body.data,
-    );
+    const result = await geoFenceService.handleLocationUpdate(orderId(req.params.id), body.data);
     ok(res, result);
   }),
 );
@@ -134,27 +138,95 @@ vendorRouter.put(
   }),
 );
 
+const VendorOrdersQuerySchema = z.object({
+  restaurant_id: z.string().uuid(),
+  // "active" = live kitchen pipeline (default, excludes terminal/not-yet-paid
+  // states). "all" = full history for the Orders console.
+  scope: z.enum(["active", "all"]).default("active"),
+  // Optional single-status filter on top of scope (e.g. status=READY_FOR_PICKUP).
+  status: z.string().optional(),
+});
+
+// States that never belong in the live kitchen pipeline.
+const INACTIVE_STATUSES = [
+  "DRAFT",
+  "PAYMENT_PENDING",
+  "PICKED_UP",
+  "CANCELLED",
+  "REFUNDED",
+  "PAYMENT_FAILED",
+  "EXPIRED",
+  "DISPUTED",
+  "SETTLED",
+] as const;
+
+vendorRouter.put(
+  "/orders/:id/cancel",
+  asyncHandler(async (req, res) => {
+    const order = await sharedOrderRepo.getById(orderId(req.params.id));
+    if (!order) {
+      throw new AppError("ORDER_NOT_FOUND", "Order not found", 404);
+    }
+    await assertRestaurantAccess(res, order.restaurant_id);
+
+    const updated = await fulfillmentService.cancelOrder(order.id);
+    ok(res, { order_id: updated.id, status: updated.status });
+  }),
+);
+
 vendorRouter.get(
   "/orders",
   asyncHandler(async (req, res) => {
-    const restaurantId = req.query.restaurant_id as string | undefined;
-    if (!restaurantId) {
-      throw new AppError("VALIDATION_ERROR", "restaurant_id query param required", 400);
+    const query = VendorOrdersQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid query parameters",
+        400,
+        query.error.flatten(),
+      );
     }
-    await assertRestaurantAccess(res, restaurantId);
-    const orders = await sharedOrderRepo.getByRestaurant(restaurantId);
-    const filtered = orders.filter(
-      (o) => !["PICKED_UP", "CANCELLED", "PAYMENT_FAILED", "DRAFT", "PAYMENT_PENDING"].includes(o.status),
+    const { restaurant_id, scope, status } = query.data;
+    await assertRestaurantAccess(res, restaurant_id);
+
+    const orders = await sharedOrderRepo.getByRestaurant(restaurant_id);
+    const filtered =
+      scope === "all"
+        ? orders
+        : orders.filter(
+            (o) => !INACTIVE_STATUSES.includes(o.status as (typeof INACTIVE_STATUSES)[number]),
+          );
+    const scoped = status ? filtered.filter((o) => o.status === status) : filtered;
+
+    const payload = await Promise.all(
+      scoped.map(async (o) => {
+        const payment = await sharedPaymentRepo.getByOrderId(o.id);
+        const customer = await sharedIdentityRepo.getById(o.user_id);
+        return {
+          id: o.id,
+          status: o.status,
+          total_amount: o.total_amount,
+          restaurant_name: o.restaurant_name ?? null,
+          scheduled_pickup_time: o.scheduled_pickup_time ?? null,
+          items: o.items.map((i) => ({
+            name: i.name,
+            quantity: i.quantity,
+            base_price: i.base_price,
+            customizations: i.customizations,
+          })),
+          pickup_otp: o.pickup_otp,
+          qr_token: o.qr_token,
+          checked_in: o.checked_in,
+          created_at: o.created_at,
+          payment_method: payment?.method ?? null,
+          payment_status: payment?.status ?? null,
+          customer_phone: customer?.phone ?? null,
+          is_catering: o.is_catering ?? false,
+          headcount: o.headcount ?? null,
+        };
+      }),
     );
-    ok(res, filtered.map((o) => ({
-      id: o.id,
-      status: o.status,
-      total_amount: o.total_amount,
-      items: o.items.map((i) => ({ name: i.name, quantity: i.quantity })),
-      pickup_otp: o.pickup_otp,
-      qr_token: o.qr_token,
-      checked_in: o.checked_in,
-      created_at: o.created_at,
-    })));
+
+    ok(res, payload);
   }),
 );

@@ -38,6 +38,38 @@ const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
 export class FulfillmentService {
   constructor(private readonly orderRepo: OrderRepository) {}
 
+  /**
+   * Vendor cancellation. Allowed only before the order becomes ready for
+   * pickup (a ready order must be handed over or handled via pickup OTP).
+   */
+  async cancelOrder(orderId: string): Promise<OrderDTO> {
+    const order = await this.orderRepo.getById(orderId);
+    if (!order) {
+      throw new AppError("ORDER_NOT_FOUND", "Order not found", 404);
+    }
+    const cancellable = new Set<OrderStatus>([
+      "DRAFT",
+      "PAYMENT_PENDING",
+      "CONFIRMED",
+      "PREPARING",
+    ]);
+    if (!cancellable.has(order.status)) {
+      throw new AppError("INVALID_TRANSITION", `Order in ${order.status} cannot be cancelled`, 400);
+    }
+
+    const updated = await this.orderRepo.updateStatus(orderId, "CANCELLED");
+    if (!updated) {
+      throw new AppError("UPDATE_FAILED", "Failed to update order status", 500);
+    }
+
+    await publishStatusUpdate({
+      order_id: order.id,
+      restaurant_id: order.restaurant_id,
+      status: "CANCELLED",
+    });
+    return updated;
+  }
+
   async advanceOrderStatus(
     orderId: string,
   ): Promise<{ order: OrderDTO; nextStatus: string; earlyReadyAlerted: boolean }> {
@@ -143,30 +175,18 @@ export class FulfillmentService {
     return updated;
   }
 
-  async confirmPickup(
-    orderId: string,
-    qrToken?: string,
-    pickupOtp?: string,
-  ): Promise<OrderDTO> {
+  async confirmPickup(orderId: string, qrToken?: string, pickupOtp?: string): Promise<OrderDTO> {
     const order = await this.orderRepo.getById(orderId);
     if (!order) {
       throw new AppError("ORDER_NOT_FOUND", "Order not found", 404);
     }
 
     if (order.status === "PICKED_UP") {
-      throw new AppError(
-        "ALREADY_PICKED_UP",
-        "This order has already been picked up",
-        400,
-      );
+      throw new AppError("ALREADY_PICKED_UP", "This order has already been picked up", 400);
     }
 
     if (order.status !== "READY_FOR_PICKUP") {
-      throw new AppError(
-        "NOT_READY",
-        `Order is ${order.status}, not READY_FOR_PICKUP`,
-        400,
-      );
+      throw new AppError("NOT_READY", `Order is ${order.status}, not READY_FOR_PICKUP`, 400);
     }
 
     // Verify QR token or OTP
@@ -180,11 +200,7 @@ export class FulfillmentService {
         throw new AppError("INVALID_OTP", "Invalid pickup OTP", 400);
       }
     } else {
-      throw new AppError(
-        "MISSING_VERIFICATION",
-        "Provide either qr_token or pickup_otp",
-        400,
-      );
+      throw new AppError("MISSING_VERIFICATION", "Provide either qr_token or pickup_otp", 400);
     }
 
     const updated = await this.orderRepo.updateStatus(orderId, "PICKED_UP");

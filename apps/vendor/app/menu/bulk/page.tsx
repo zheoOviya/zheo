@@ -1,182 +1,162 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Skeleton } from "@snakzap/ui";
-import { RESTAURANT_ID } from "@/lib/constants";
-
-interface MenuItem {
-  id: string;
-  name: string;
-  price: number;
-  description: string | null;
-  is_available: boolean;
-}
+import { fetchMenu, bulkUpdateMenu, type VendorMenuItem } from "@/lib/api";
+import { formatINR } from "@/lib/format";
+import {
+  PageHeader,
+  SectionCard,
+  ErrorBanner,
+  Spinner,
+  EmptyPanel,
+  PrimaryButton,
+} from "@/components/ui";
 
 export default function BulkMenuPage() {
-  const [items, setItems] = useState<MenuItem[]>([]);
+  const [items, setItems] = useState<VendorMenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  const fetchMenu = useCallback(async () => {
+  const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/vendor/menu?restaurant_id=${RESTAURANT_ID}`);
-      const body = await res.json();
-      if (body.success) setItems(body.data);
-    } catch {
-      setError("Failed to load menu");
+      setItems(await fetchMenu());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load menu");
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchMenu();
-  }, [fetchMenu]);
+    load();
+  }, [load]);
 
   function update(
     id: string,
     patch: Partial<{ price: number; is_available: boolean; description: string }>,
   ) {
-    setItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, ...patch } : item)),
-    );
+    setItems((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }
 
-  async function saveAll() {
+  async function handleSave() {
     setSaving(true);
     setError("");
     setSuccess("");
     try {
-      const res = await fetch(
-        `/api/vendor/menu/bulk?restaurant_id=${RESTAURANT_ID}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            items: items.map((item) => ({
-              item_id: item.id,
-              price: item.price,
-              is_available: item.is_available,
-              description: item.description ?? "",
-            })),
-          }),
-        },
+      const updated = await bulkUpdateMenu(
+        items.map((item) => ({
+          item_id: item.id,
+          price: item.price,
+          is_available: item.is_available,
+          description: item.description,
+        })),
       );
-      const body = await res.json();
-      if (body.success) {
-        setSuccess(`Saved ${body.data.length} menu items in one transaction.`);
-      } else {
-        setError(body.error?.message ?? "Save failed");
-      }
-    } catch {
-      setError("Save failed");
+      setItems(updated);
+      setSuccess(`Saved ${updated.length} menu items in one transaction.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed");
     } finally {
       setSaving(false);
     }
   }
 
+  const hasInvalidPrice = items.some((i) => !Number.isFinite(i.price) || i.price <= 0);
+
   return (
-    <main className="mx-auto max-w-3xl py-6">
-      <header className="mb-6 flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-primary-400">Bulk Menu Edit</h1>
-          <p className="mt-1 text-sm text-primary-600/60">
-            Edit prices, availability and descriptions in one go. All changes
-            are saved atomically.
-          </p>
-        </div>
-        <button
-          onClick={saveAll}
-          disabled={saving || loading}
-          className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:opacity-60"
-        >
-          {saving ? (
-            <span className="inline-flex items-center gap-2">
-              <Skeleton className="h-3 w-12" />
-              Saving…
-            </span>
-          ) : (
-            "Save All Changes"
-          )}
-        </button>
-      </header>
+    <div className="space-y-6">
+      <PageHeader
+        title="Bulk Menu Edit"
+        subtitle="Edit prices, availability and descriptions in one go. Changes are saved atomically."
+        actions={
+          <PrimaryButton onClick={handleSave} disabled={saving || loading || hasInvalidPrice}>
+            {saving ? "Saving..." : "Save All Changes"}
+          </PrimaryButton>
+        }
+      />
 
-      {error ? (
-        <p className="mb-4 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
-          {error}
-        </p>
-      ) : null}
-      {success ? (
-        <p className="mb-4 rounded-2xl border border-green-500/30 bg-green-500/10 p-4 text-sm text-green-300">
+      <ErrorBanner message={error} />
+
+      {success && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
           {success}
-        </p>
-      ) : null}
-
-      {loading ? (
-        <div className="space-y-2">
-          <Skeleton className="h-12" />
-          <Skeleton className="h-12" />
-          <Skeleton className="h-12" />
-          <Skeleton className="h-12" />
-        </div>
-      ) : (
-        <div className="overflow-x-auto rounded-2xl border border-primary-500/15 bg-primary-900/30">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-primary-500/15 text-left text-xs uppercase tracking-wide text-primary-600/60">
-                <th className="px-4 py-3">Item</th>
-                <th className="px-4 py-3">Price (INR)</th>
-                <th className="px-4 py-3">Available</th>
-                <th className="px-4 py-3">Description</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((item) => (
-                <tr
-                  key={item.id}
-                  className="border-b border-primary-500/10 last:border-0"
-                >
-                  <td className="px-4 py-2 text-primary-300">{item.name}</td>
-                  <td className="px-4 py-2">
-                    <input
-                      type="number"
-                      value={item.price}
-                      min={1}
-                      onChange={(e) =>
-                        update(item.id, { price: Number(e.target.value) })
-                      }
-                      className="w-24 rounded-lg border border-primary-500/20 bg-primary-950/60 px-2 py-1 text-sm text-primary-100 focus:border-primary-500 focus:outline-none"
-                    />
-                  </td>
-                  <td className="px-4 py-2">
-                    <input
-                      type="checkbox"
-                      checked={item.is_available}
-                      onChange={(e) =>
-                        update(item.id, { is_available: e.target.checked })
-                      }
-                      className="h-4 w-4 accent-primary-500"
-                    />
-                  </td>
-                  <td className="px-4 py-2">
-                    <input
-                      type="text"
-                      value={item.description ?? ""}
-                      maxLength={500}
-                      onChange={(e) =>
-                        update(item.id, { description: e.target.value })
-                      }
-                      className="w-full min-w-40 rounded-lg border border-primary-500/20 bg-primary-950/60 px-2 py-1 text-sm text-primary-100 focus:border-primary-500 focus:outline-none"
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
       )}
-    </main>
+
+      {loading ? (
+        <div className="flex h-64 items-center justify-center">
+          <Spinner className="h-8 w-8" />
+        </div>
+      ) : items.length === 0 ? (
+        <EmptyPanel title="No menu items" />
+      ) : (
+        <SectionCard>
+          <div className="-mx-4 overflow-x-auto px-4">
+            <table className="w-full min-w-[560px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-xs uppercase tracking-wide text-slate-400">
+                  <th className="py-2 pr-4 font-semibold">Item</th>
+                  <th className="py-2 pr-4 font-semibold">Price</th>
+                  <th className="py-2 pr-4 font-semibold">Available</th>
+                  <th className="py-2 pr-4 font-semibold">Description</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {items.map((item) => (
+                  <tr key={item.id}>
+                    <td className="py-2 pr-4 font-medium text-slate-800">{item.name}</td>
+                    <td className="py-2 pr-4">
+                      <label className="sr-only" htmlFor={`price-${item.id}`}>
+                        Price for {item.name}
+                      </label>
+                      <div className="flex items-center gap-1">
+                        <span className="text-slate-400">₹</span>
+                        <input
+                          id={`price-${item.id}`}
+                          type="number"
+                          value={item.price}
+                          min={1}
+                          onChange={(e) => update(item.id, { price: Number(e.target.value) })}
+                          className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+                        />
+                      </div>
+                    </td>
+                    <td className="py-2 pr-4">
+                      <label className="sr-only" htmlFor={`avail-${item.id}`}>
+                        Available toggle for {item.name}
+                      </label>
+                      <input
+                        id={`avail-${item.id}`}
+                        type="checkbox"
+                        checked={item.is_available}
+                        onChange={(e) => update(item.id, { is_available: e.target.checked })}
+                        className="h-4 w-4 accent-teal-600"
+                      />
+                    </td>
+                    <td className="py-2 pr-4">
+                      <label className="sr-only" htmlFor={`desc-${item.id}`}>
+                        Description for {item.name}
+                      </label>
+                      <input
+                        id={`desc-${item.id}`}
+                        type="text"
+                        value={item.description ?? ""}
+                        maxLength={500}
+                        onChange={(e) => update(item.id, { description: e.target.value })}
+                        className="w-full min-w-40 rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-xs text-slate-400">
+            Reference current price: {items[0] ? formatINR(items[0].price) : "—"}
+          </p>
+        </SectionCard>
+      )}
+    </div>
   );
 }

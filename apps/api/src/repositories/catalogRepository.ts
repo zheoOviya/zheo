@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, sql, type SQL } from "drizzle-orm";
-import {
-  menu_items,
-  restaurants,
-} from "@snakzap/db";
+import { menu_items, restaurants } from "@snakzap/db";
 
 // ============================================
 // Catalog context repository (catalog bounded context)
@@ -21,6 +18,8 @@ export interface RestaurantDTO {
   /** P04 traffic ETA uses the restaurant location as the pickup origin. */
   lat: number | null;
   lng: number | null;
+  /** Estimated prep/pickup time in minutes shown on consumer cards. */
+  pickup_eta_min: number;
 }
 
 export interface MenuItemDTO {
@@ -81,27 +80,18 @@ export interface CatalogRepository {
   getMenu(restaurantId: string): Promise<MenuItemDTO[]>;
   getMenuAll(restaurantId: string): Promise<MenuItemDTO[]>;
   getMenuItemById(id: string): Promise<MenuItemDTO | null>;
-  getMenuItemByPosItemId(
-    restaurantId: string,
-    posItemId: string,
-  ): Promise<MenuItemDTO | null>;
+  getMenuItemByPosItemId(restaurantId: string, posItemId: string): Promise<MenuItemDTO | null>;
   updateImageUrl(itemId: string, url: string): Promise<MenuItemDTO | null>;
   updateMenuItem(
     itemId: string,
     patch: { price?: number; is_available?: boolean; description?: string | null },
   ): Promise<MenuItemDTO | null>;
   /** V14: atomic all-or-nothing bulk update. Throws MenuBulkUpdateError on any invalid row. */
-  bulkUpdateMenuItems(
-    restaurantId: string,
-    items: BulkMenuItemPatch[],
-  ): Promise<MenuItemDTO[]>;
+  bulkUpdateMenuItems(restaurantId: string, items: BulkMenuItemPatch[]): Promise<MenuItemDTO[]>;
   autocomplete(query: string): Promise<SearchResultDTO[]>;
   filterByDietary(tags: string[]): Promise<MenuItemDTO[]>;
   /** V01 POS menu sync: upsert items keyed by (restaurant_id, pos_item_id). */
-  upsertPosMenuItems(
-    restaurantId: string,
-    items: PosMenuInput[],
-  ): Promise<MenuItemDTO[]>;
+  upsertPosMenuItems(restaurantId: string, items: PosMenuInput[]): Promise<MenuItemDTO[]>;
   /** A-04 Admin: list all restaurants (active and inactive). */
   getAllRestaurants(): Promise<RestaurantDTO[]>;
   /** A-04 Admin: toggle restaurant active status. */
@@ -149,6 +139,7 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       is_active: r.is_active,
       lat: r.lat ?? null,
       lng: r.lng ?? null,
+      pickup_eta_min: r.pickup_eta_min,
     }));
   }
 
@@ -168,6 +159,7 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       is_active: r.is_active,
       lat: r.lat ?? null,
       lng: r.lng ?? null,
+      pickup_eta_min: r.pickup_eta_min,
     };
   }
 
@@ -176,10 +168,7 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       .select()
       .from(menu_items)
       .where(
-        and(
-          eq(menu_items.restaurant_id, restaurantId),
-          eq(menu_items.is_available, true),
-        ),
+        and(eq(menu_items.restaurant_id, restaurantId), eq(menu_items.is_available, true)),
       )) as MenuItemDTO[];
     return rows.map((m) => ({
       ...m,
@@ -215,20 +204,14 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       .select()
       .from(menu_items)
       .where(
-        and(
-          eq(menu_items.restaurant_id, restaurantId),
-          eq(menu_items.pos_item_id, posItemId),
-        ),
+        and(eq(menu_items.restaurant_id, restaurantId), eq(menu_items.pos_item_id, posItemId)),
       )) as MenuItemDTO[];
     const item = rows[0];
     return item ? { ...item, price: Number(item.price) } : null;
   }
 
   async updateImageUrl(itemId: string, url: string): Promise<MenuItemDTO | null> {
-    await this.db
-      .update(menu_items)
-      .set({ image_url: url })
-      .where(eq(menu_items.id, itemId));
+    await this.db.update(menu_items).set({ image_url: url }).where(eq(menu_items.id, itemId));
     return this.getMenuItemById(itemId);
   }
 
@@ -240,10 +223,7 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       description?: string | null;
     },
   ): Promise<MenuItemDTO | null> {
-    await this.db
-      .update(menu_items)
-      .set(patch)
-      .where(eq(menu_items.id, itemId));
+    await this.db.update(menu_items).set(patch).where(eq(menu_items.id, itemId));
     return this.getMenuItemById(itemId);
   }
 
@@ -261,10 +241,7 @@ export class DrizzleCatalogRepository implements CatalogRepository {
           .select()
           .from(menu_items)
           .where(
-            and(
-              eq(menu_items.id, patch.item_id),
-              eq(menu_items.restaurant_id, restaurantId),
-            ),
+            and(eq(menu_items.id, patch.item_id), eq(menu_items.restaurant_id, restaurantId)),
           )) as MenuItemDTO[];
         if (!rows[0]) {
           throw new MenuBulkUpdateError(patch.item_id);
@@ -278,12 +255,8 @@ export class DrizzleCatalogRepository implements CatalogRepository {
           .update(menu_items)
           .set({
             ...(patch.price !== undefined ? { price: patch.price } : {}),
-            ...(patch.is_available !== undefined
-              ? { is_available: patch.is_available }
-              : {}),
-            ...(patch.description !== undefined
-              ? { description: patch.description }
-              : {}),
+            ...(patch.is_available !== undefined ? { is_available: patch.is_available } : {}),
+            ...(patch.description !== undefined ? { description: patch.description } : {}),
           })
           .where(eq(menu_items.id, patch.item_id));
       }
@@ -291,12 +264,8 @@ export class DrizzleCatalogRepository implements CatalogRepository {
         ...item,
         price: Number(item.price),
         ...(items[i]!.price !== undefined ? { price: items[i]!.price } : {}),
-        ...(items[i]!.is_available !== undefined
-          ? { is_available: items[i]!.is_available }
-          : {}),
-        ...(items[i]!.description !== undefined
-          ? { description: items[i]!.description }
-          : {}),
+        ...(items[i]!.is_available !== undefined ? { is_available: items[i]!.is_available } : {}),
+        ...(items[i]!.description !== undefined ? { description: items[i]!.description } : {}),
       }));
     });
   }
@@ -307,10 +276,7 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       .select()
       .from(restaurants)
       .where(
-        and(
-          eq(restaurants.is_active, true),
-          sql`lower(${restaurants.name}) LIKE ${pattern}`,
-        ),
+        and(eq(restaurants.is_active, true), sql`lower(${restaurants.name}) LIKE ${pattern}`),
       )) as RestaurantDTO[];
 
     const dishRows = (await this.db
@@ -334,18 +300,12 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       .select()
       .from(menu_items)
       .where(
-        and(
-          dietaryFilterCondition(tags),
-          eq(menu_items.is_available, true),
-        ),
+        and(dietaryFilterCondition(tags), eq(menu_items.is_available, true)),
       )) as MenuItemDTO[];
     return rows.map((m) => ({ ...m, price: Number(m.price) }));
   }
 
-  async upsertPosMenuItems(
-    restaurantId: string,
-    items: PosMenuInput[],
-  ): Promise<MenuItemDTO[]> {
+  async upsertPosMenuItems(restaurantId: string, items: PosMenuInput[]): Promise<MenuItemDTO[]> {
     const upserted: MenuItemDTO[] = [];
     for (const input of items) {
       const existingRows = (await this.db
@@ -403,10 +363,7 @@ export class DrizzleCatalogRepository implements CatalogRepository {
   }
 
   async getAllRestaurants(): Promise<RestaurantDTO[]> {
-    const rows = (await this.db
-      .select()
-      .from(restaurants)
-      .where(undefined!)) as RestaurantDTO[];
+    const rows = (await this.db.select().from(restaurants).where(undefined!)) as RestaurantDTO[];
     return rows.map((r) => ({
       id: r.id,
       name: r.name,
@@ -416,14 +373,12 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       is_active: r.is_active,
       lat: r.lat ?? null,
       lng: r.lng ?? null,
+      pickup_eta_min: r.pickup_eta_min,
     }));
   }
 
   async updateRestaurantStatus(id: string, isActive: boolean): Promise<RestaurantDTO | null> {
-    await this.db
-      .update(restaurants)
-      .set({ is_active: isActive })
-      .where(eq(restaurants.id, id));
+    await this.db.update(restaurants).set({ is_active: isActive }).where(eq(restaurants.id, id));
     return this.getRestaurantById(id);
   }
 }
@@ -447,15 +402,11 @@ export class MemoryCatalogRepository implements CatalogRepository {
   }
 
   async getRestaurantById(id: string): Promise<RestaurantDTO | null> {
-    return (
-      this.restaurantsData.find((r) => r.id === id) ?? null
-    );
+    return this.restaurantsData.find((r) => r.id === id) ?? null;
   }
 
   async getMenu(restaurantId: string): Promise<MenuItemDTO[]> {
-    return this.menuData.filter(
-      (m) => m.restaurant_id === restaurantId && m.is_available,
-    );
+    return this.menuData.filter((m) => m.restaurant_id === restaurantId && m.is_available);
   }
 
   async getMenuAll(restaurantId: string): Promise<MenuItemDTO[]> {
@@ -471,17 +422,12 @@ export class MemoryCatalogRepository implements CatalogRepository {
     posItemId: string,
   ): Promise<MenuItemDTO | null> {
     return (
-      this.menuData.find(
-        (m) =>
-          m.restaurant_id === restaurantId && m.pos_item_id === posItemId,
-      ) ?? null
+      this.menuData.find((m) => m.restaurant_id === restaurantId && m.pos_item_id === posItemId) ??
+      null
     );
   }
 
-  async updateImageUrl(
-    itemId: string,
-    url: string,
-  ): Promise<MenuItemDTO | null> {
+  async updateImageUrl(itemId: string, url: string): Promise<MenuItemDTO | null> {
     const item = this.menuData.find((m) => m.id === itemId);
     if (!item) return null;
     item.image_url = url;
@@ -530,11 +476,7 @@ export class MemoryCatalogRepository implements CatalogRepository {
 
   /** Resets the seeded menu back to its original state (test helper). */
   _reset(): void {
-    this.menuData.splice(
-      0,
-      this.menuData.length,
-      ...this.originalMenu.map((m) => ({ ...m })),
-    );
+    this.menuData.splice(0, this.menuData.length, ...this.originalMenu.map((m) => ({ ...m })));
   }
 
   async autocomplete(query: string): Promise<SearchResultDTO[]> {
@@ -555,20 +497,15 @@ export class MemoryCatalogRepository implements CatalogRepository {
 
   async filterByDietary(tags: string[]): Promise<MenuItemDTO[]> {
     return this.menuData.filter(
-      (m) =>
-        m.is_available && tags.every((tag) => m.dietary_tags[tag] === true),
+      (m) => m.is_available && tags.every((tag) => m.dietary_tags[tag] === true),
     );
   }
 
-  async upsertPosMenuItems(
-    restaurantId: string,
-    items: PosMenuInput[],
-  ): Promise<MenuItemDTO[]> {
+  async upsertPosMenuItems(restaurantId: string, items: PosMenuInput[]): Promise<MenuItemDTO[]> {
     const upserted: MenuItemDTO[] = [];
     for (const input of items) {
       const existing = this.menuData.find(
-        (m) =>
-          m.restaurant_id === restaurantId && m.pos_item_id === input.pos_item_id,
+        (m) => m.restaurant_id === restaurantId && m.pos_item_id === input.pos_item_id,
       );
       if (existing) {
         existing.name = input.name;

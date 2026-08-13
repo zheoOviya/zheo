@@ -2,91 +2,65 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import { Skeleton } from "@snakzap/ui";
+import Link from "next/link";
+import { fetchMenu, updateMenuItem, uploadMenuPhoto, type VendorMenuItem } from "@/lib/api";
 import { formatINR } from "@/lib/format";
-import { RESTAURANT_ID } from "@/lib/constants";
-
-interface MenuItem {
-  id: string;
-  name: string;
-  price: number;
-  dietary_tags: Record<string, boolean>;
-  image_url: string | null;
-  is_available: boolean;
-}
+import { PageHeader, ErrorBanner, Spinner, EmptyPanel, SecondaryButton } from "@/components/ui";
 
 const TAG_LABELS: Record<string, { label: string; className: string }> = {
-  VEG: { label: "VEG", className: "border-green-500/40 text-green-400" },
-  NON_VEG: { label: "NON VEG", className: "border-red-500/40 text-red-400" },
-  JAIN: { label: "JAIN", className: "border-amber-500/40 text-amber-400" },
-  HALAL: { label: "HALAL", className: "border-teal-500/40 text-teal-300" },
+  VEG: { label: "VEG", className: "border-emerald-500 text-emerald-600" },
+  NON_VEG: { label: "NON VEG", className: "border-red-500 text-red-600" },
+  JAIN: { label: "JAIN", className: "border-amber-500 text-amber-600" },
+  HALAL: { label: "HALAL", className: "border-teal-500 text-teal-600" },
 };
 
 export default function MenuPage() {
-  const [items, setItems] = useState<MenuItem[]>([]);
+  const [items, setItems] = useState<VendorMenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState<string | null>(null);
+  const [toggling, setToggling] = useState<string | null>(null);
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  const fetchMenu = useCallback(async () => {
+  const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/vendor/menu?restaurant_id=${RESTAURANT_ID}`);
-      const body = await res.json();
-      if (body.success) setItems(body.data);
-    } catch {
-      setError("Failed to load menu");
+      setItems(await fetchMenu());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load menu");
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchMenu();
-  }, [fetchMenu]);
+    load();
+  }, [load]);
 
-  async function toggleAvailability(item: MenuItem) {
+  async function toggleAvailability(item: VendorMenuItem) {
+    setToggling(item.id);
+    setError("");
     try {
-      const res = await fetch(`/api/vendor/menu/${item.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ is_available: !item.is_available }),
+      const updated = await updateMenuItem(item.id, {
+        is_available: !item.is_available,
       });
-      const body = await res.json();
-      if (body.success) {
-        setItems((prev) =>
-          prev.map((i) =>
-            i.id === item.id ? { ...i, is_available: body.data.is_available } : i,
-          ),
-        );
-      }
-    } catch {
-      // ignore
+      setItems((prev) => prev.map((i) => (i.id === item.id ? updated : i)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update item");
+    } finally {
+      setToggling(null);
     }
   }
 
-  async function uploadPhoto(item: MenuItem, file: File) {
+  async function handlePhoto(item: VendorMenuItem, file: File) {
     setUploading(item.id);
     setError("");
     try {
-      const form = new FormData();
-      form.append("photo", file);
-      const res = await fetch(`/api/vendor/menu/${item.id}/upload-photo`, {
-        method: "POST",
-        body: form,
-      });
-      const body = await res.json();
-      if (body.success) {
-        setItems((prev) =>
-          prev.map((i) =>
-            i.id === item.id ? { ...i, image_url: body.data.image_url } : i,
-          ),
-        );
-      } else {
-        setError(body.error?.message ?? "Upload failed");
-      }
-    } catch {
-      setError("Upload failed");
+      const result = await uploadMenuPhoto(item.id, file);
+      setItems((prev) =>
+        prev.map((i) => (i.id === item.id ? { ...i, image_url: result.image_url } : i)),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(null);
       const input = fileInputs.current[item.id];
@@ -94,109 +68,123 @@ export default function MenuPage() {
     }
   }
 
-  return (
-    <main className="mx-auto max-w-3xl py-6">
-      <header className="mb-6">
-        <h1 className="text-2xl font-bold text-primary-400">Menu Management</h1>
-        <p className="mt-1 text-sm text-primary-600/50">
-          Update prices, availability and food photos for your items
-        </p>
-      </header>
+  const availableCount = items.filter((i) => i.is_available).length;
 
-      {error && (
-        <p className="mb-4 rounded-xl bg-red-500/10 p-3 text-sm text-red-400">
-          {error}
-        </p>
-      )}
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Menu"
+        subtitle={`${availableCount} of ${items.length} items available`}
+        actions={
+          <Link
+            href="/menu/bulk"
+            className="inline-flex min-h-[40px] items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Bulk edit →
+          </Link>
+        }
+      />
+
+      <ErrorBanner message={error} />
 
       {loading ? (
-        <div className="space-y-3">
-          <Skeleton className="h-24" />
-          <Skeleton className="h-24" />
-          <Skeleton className="h-24" />
+        <div className="flex h-64 items-center justify-center">
+          <Spinner className="h-8 w-8" />
         </div>
       ) : items.length === 0 ? (
-        <p className="py-8 text-center text-sm text-primary-600/30">
-          No menu items yet
-        </p>
+        <EmptyPanel title="No menu items yet" description="Items will appear here once added." />
       ) : (
         <div className="space-y-3">
-          {items.map((item) => (
-            <div
-              key={item.id}
-              className="rounded-2xl bg-primary-900/30 border border-primary-500/10 p-4"
-            >
-              <div className="flex items-start gap-4">
-                {uploading === item.id ? (
-                  <Skeleton className="h-20 w-20 shrink-0 rounded-xl" />
-                ) : item.image_url ? (
-                  <Image
-                    src={item.image_url}
-                    alt={item.name}
-                    width={80}
-                    height={80}
-                    className="h-20 w-20 shrink-0 rounded-xl object-cover"
-                  />
-                ) : (
-                  <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl border border-dashed border-primary-500/30 bg-primary-900/40 text-xs text-primary-600/50">
-                    No photo
-                  </div>
-                )}
+          {items.map((item) => {
+            const tags = Object.entries(TAG_LABELS).filter(
+              ([tag]) => item.dietary_tags[tag] === true,
+            );
+            return (
+              <div
+                key={item.id}
+                className={`rounded-xl border bg-white p-4 shadow-sm ${
+                  item.is_available ? "border-slate-200" : "border-slate-200 opacity-70"
+                }`}
+              >
+                <div className="flex items-start gap-4">
+                  {uploading === item.id ? (
+                    <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl bg-slate-100">
+                      <Spinner className="h-5 w-5" />
+                    </div>
+                  ) : item.image_url ? (
+                    <Image
+                      src={item.image_url}
+                      alt={item.name}
+                      width={80}
+                      height={80}
+                      className="h-20 w-20 shrink-0 rounded-xl object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-xs text-slate-400">
+                      No photo
+                    </div>
+                  )}
 
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-medium text-neutral-200">{item.name}</p>
-                    {Object.entries(TAG_LABELS)
-                      .filter(([tag]) => item.dietary_tags[tag])
-                      .map(([tag, info]) => (
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-semibold text-slate-800">{item.name}</p>
+                      {tags.map(([tag, info]) => (
                         <span
                           key={tag}
-                          className={`rounded border px-1.5 py-0.5 text-2xs font-semibold ${info.className}`}
+                          className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${info.className}`}
                         >
                           {info.label}
                         </span>
                       ))}
-                  </div>
-                  <p className="mt-1 text-sm text-primary-300">{formatINR(item.price)}</p>
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <input
-                      ref={(el) => {
-                        fileInputs.current[item.id] = el;
-                      }}
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp,image/gif"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) void uploadPhoto(item, file);
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => fileInputs.current[item.id]?.click()}
-                      disabled={uploading === item.id}
-                      className="rounded-full border border-primary-500/30 px-3 py-1.5 text-xs font-medium text-primary-300 hover:bg-primary-500/10 disabled:opacity-40"
-                    >
-                      {uploading === item.id ? "Uploading..." : "Upload Photo"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => toggleAvailability(item)}
-                      className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
-                        item.is_available
-                          ? "bg-green-500/15 text-green-400 hover:bg-green-500/25"
-                          : "bg-red-500/15 text-red-400 hover:bg-red-500/25"
-                      }`}
-                    >
-                      {item.is_available ? "Available" : "Sold Out"}
-                    </button>
+                    </div>
+                    {item.description && (
+                      <p className="mt-0.5 text-xs text-slate-400">{item.description}</p>
+                    )}
+                    <p className="mt-1 text-sm font-bold text-teal-700">{formatINR(item.price)}</p>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <input
+                        ref={(el) => {
+                          fileInputs.current[item.id] = el;
+                        }}
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/gif"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) void handlePhoto(item, file);
+                        }}
+                      />
+                      <SecondaryButton
+                        onClick={() => fileInputs.current[item.id]?.click()}
+                        disabled={uploading === item.id}
+                        className="min-h-[32px] px-3 py-1 text-xs"
+                      >
+                        {uploading === item.id ? "Uploading..." : "Upload Photo"}
+                      </SecondaryButton>
+                      <button
+                        type="button"
+                        onClick={() => toggleAvailability(item)}
+                        disabled={toggling === item.id}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                          item.is_available
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                            : "border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                        }`}
+                      >
+                        {toggling === item.id
+                          ? "Updating..."
+                          : item.is_available
+                            ? "Available"
+                            : "Sold Out"}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
-    </main>
+    </div>
   );
 }

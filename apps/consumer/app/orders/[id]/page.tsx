@@ -9,13 +9,16 @@ import { useAuthStore } from "@/lib/store";
 
 const OrderTracker = dynamic(
   () => import("@/components/OrderTracker").then((m) => ({ default: m.OrderTracker })),
-  { ssr: false, loading: () => <div className="h-16 animate-skeleton-teal rounded-xl bg-primary-200" /> },
+  {
+    ssr: false,
+    loading: () => <div className="h-16 animate-skeleton-teal rounded-xl bg-primary-200" />,
+  },
 );
 
-const QrCode = dynamic(
-  () => import("@/components/QrCode").then((m) => ({ default: m.QrCode })),
-  { ssr: false, loading: () => <div className="h-40 animate-skeleton-teal rounded-xl bg-primary-200" /> },
-);
+const QrCode = dynamic(() => import("@/components/QrCode").then((m) => ({ default: m.QrCode })), {
+  ssr: false,
+  loading: () => <div className="h-40 animate-skeleton-teal rounded-xl bg-primary-200" />,
+});
 import {
   fetchRestaurants,
   fetchStampCard,
@@ -53,21 +56,30 @@ function TrackingContent() {
   const [stampCard, setStampCard] = useState<StampCard | null>(null);
 
   useEffect(() => {
+    if (!accessToken) return;
+    let cancelled = false;
     async function fetchOrder() {
       try {
         const res = await fetch(`/api/v1/orders/${orderId}`, {
           credentials: "include",
+          headers: { Authorization: `Bearer ${accessToken}` },
         });
         if (!res.ok) throw new Error("Order not found");
         const body = await res.json();
-        setOrder(body.data);
-        setCheckedIn(body.data.checked_in);
+        if (!body.success) throw new Error(body.error?.message ?? "Order not found");
+        if (!cancelled) {
+          setOrder(body.data);
+          setCheckedIn(body.data.checked_in);
+        }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load order");
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load order");
       }
     }
     fetchOrder();
-  }, [orderId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId, accessToken]);
 
   // P04 Traffic-based ETA: user location -> restaurant pickup location.
   useEffect(() => {
@@ -76,30 +88,26 @@ function TrackingContent() {
     (async () => {
       try {
         const restaurants = await fetchRestaurants();
-        const restaurant = restaurants.find(
-          (r) => r.id === order.restaurant_id,
-        );
+        const restaurant = restaurants.find((r) => r.id === order.restaurant_id);
         if (!restaurant?.lat || !restaurant.lng) {
           setEtaLoading(false);
           return;
         }
-        const origin = await new Promise<{ lat: number; lng: number }>(
-          (resolve) => {
-            if (typeof navigator === "undefined" || !navigator.geolocation) {
-              resolve(FALLBACK_LOCATION);
-              return;
-            }
-            navigator.geolocation.getCurrentPosition(
-              (pos) =>
-                resolve({
-                  lat: pos.coords.latitude,
-                  lng: pos.coords.longitude,
-                }),
-              () => resolve(FALLBACK_LOCATION),
-              { timeout: 4000 },
-            );
-          },
-        );
+        const origin = await new Promise<{ lat: number; lng: number }>((resolve) => {
+          if (typeof navigator === "undefined" || !navigator.geolocation) {
+            resolve(FALLBACK_LOCATION);
+            return;
+          }
+          navigator.geolocation.getCurrentPosition(
+            (pos) =>
+              resolve({
+                lat: pos.coords.latitude,
+                lng: pos.coords.longitude,
+              }),
+            () => resolve(FALLBACK_LOCATION),
+            { timeout: 4000 },
+          );
+        });
         const result = await fetchTrafficEta(origin, {
           lat: restaurant.lat,
           lng: restaurant.lng,
@@ -134,10 +142,11 @@ function TrackingContent() {
 
   async function handleCheckIn() {
     try {
-      const res = await fetch(
-        `/api/v1/orders/${orderId}/check-in`,
-        { method: "POST", credentials: "include" },
-      );
+      const res = await fetch(`/api/v1/orders/${orderId}/check-in`, {
+        method: "POST",
+        credentials: "include",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
       if (!res.ok) throw new Error("Check-in failed");
       setCheckedIn(true);
     } catch (err) {
@@ -201,9 +210,7 @@ function TrackingContent() {
         {/* P04 Traffic-based ETA: know exactly when to leave */}
         <div className="rounded-2xl bg-white p-6 shadow-sm">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-primary-700">
-              When to leave
-            </h2>
+            <h2 className="text-lg font-semibold text-primary-700">When to leave</h2>
             {eta && (
               <span
                 className={`rounded-full px-3 py-1 text-xs font-bold ${
@@ -223,9 +230,7 @@ function TrackingContent() {
             </div>
           ) : eta ? (
             <div className="mt-3">
-              <p className="text-3xl font-bold text-primary-700">
-                ~{eta.duration_text}
-              </p>
+              <p className="text-3xl font-bold text-primary-700">~{eta.duration_text}</p>
               <p className="mt-1 text-sm text-neutral-500">
                 travel time to the restaurant
                 {eta.distance_km > 0 ? ` (${eta.distance_km} km)` : ""}
@@ -237,17 +242,13 @@ function TrackingContent() {
               </p>
             </div>
           ) : (
-            <p className="mt-3 text-sm text-neutral-400">
-              ETA unavailable for this restaurant.
-            </p>
+            <p className="mt-3 text-sm text-neutral-400">ETA unavailable for this restaurant.</p>
           )}
         </div>
 
         {/* L01 Stamp card progress for this restaurant */}
         <div className="rounded-2xl bg-white p-6 shadow-sm">
-          <h2 className="mb-4 text-lg font-semibold text-primary-700">
-            Stamp Card
-          </h2>
+          <h2 className="mb-4 text-lg font-semibold text-primary-700">Stamp Card</h2>
           <StampCardProgress
             stampCount={stampCard?.stamp_count ?? 0}
             rewardsEarned={stampCard?.rewards_earned ?? 0}
@@ -259,7 +260,13 @@ function TrackingContent() {
           <div className="rounded-2xl bg-white p-6 shadow-sm">
             {checkedIn ? (
               <div className="flex items-center gap-2 text-sm text-green-600">
-                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <svg
+                  className="h-5 w-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
                   <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                 </svg>
                 You are checked in. Staff knows you are here.
@@ -301,7 +308,13 @@ function TrackingContent() {
         {isPickedUp && (
           <div className="rounded-2xl bg-green-50 p-6 text-center shadow-sm">
             <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-green-100">
-              <svg className="h-7 w-7 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+              <svg
+                className="h-7 w-7 text-green-600"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             </div>

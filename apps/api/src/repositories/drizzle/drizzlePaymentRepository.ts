@@ -65,14 +65,14 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     };
   }
 
-  async findByRazorpayPaymentId(
-    razorpayPaymentId: string,
-  ): Promise<PaymentDTO | null> {
+  async findByRazorpayPaymentId(razorpayPaymentId: string): Promise<PaymentDTO | null> {
     // razorpay_payment_id is stored inside metadata jsonb.
     // Scan all payments and match the metadata field in-memory.
-    const allRows = (await (this.db as unknown as {
-      select: () => { from: (t: unknown) => Promise<unknown[]> };
-    })
+    const allRows = (await (
+      this.db as unknown as {
+        select: () => { from: (t: unknown) => Promise<unknown[]> };
+      }
+    )
       .select()
       .from(payments)) as Record<string, unknown>[];
     for (const row of allRows) {
@@ -82,23 +82,25 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     return null;
   }
 
-  async findByRazorpayOrderId(
-    razorpayOrderId: string,
-  ): Promise<PaymentDTO | null> {
+  async findByRazorpayOrderId(razorpayOrderId: string): Promise<PaymentDTO | null> {
     const rows = (await this.db
       .select()
       .from(payments)
-      .where(
-        eq(payments.provider_transaction_id, razorpayOrderId),
-      )) as Record<string, unknown>[];
+      .where(eq(payments.provider_transaction_id, razorpayOrderId))) as Record<string, unknown>[];
     const row = rows[0];
     return row ? mapPaymentRow(row) : null;
   }
 
-  async updateWebhookResult(
-    id: string,
-    data: WebhookUpdate,
-  ): Promise<PaymentDTO | null> {
+  async getByOrderId(orderId: string): Promise<PaymentDTO | null> {
+    const rows = (await this.db
+      .select()
+      .from(payments)
+      .where(eq(payments.order_id, orderId))) as Record<string, unknown>[];
+    const row = rows[0];
+    return row ? mapPaymentRow(row) : null;
+  }
+
+  async updateWebhookResult(id: string, data: WebhookUpdate): Promise<PaymentDTO | null> {
     await this.db
       .update(payments)
       .set({
@@ -114,9 +116,7 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     return this.findByPaymentId(id);
   }
 
-  private async findByPaymentId(
-    paymentId: string,
-  ): Promise<PaymentDTO | null> {
+  private async findByPaymentId(paymentId: string): Promise<PaymentDTO | null> {
     const rows = (await this.db
       .select()
       .from(payments)

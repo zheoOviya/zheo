@@ -26,6 +26,8 @@ export interface CreatePaymentInput {
   razorpay_order_id: string;
   amount: number;
   currency?: string;
+  /** Payment method (upi | card | netbanking | wallet | cod). null until a webhook reports the real one. */
+  method?: string;
 }
 
 export interface WebhookUpdate {
@@ -38,6 +40,7 @@ export interface WebhookUpdate {
 
 export interface PaymentRepository {
   create(input: CreatePaymentInput): Promise<PaymentDTO>;
+  getByOrderId(orderId: string): Promise<PaymentDTO | null>;
   findByRazorpayPaymentId(razorpayPaymentId: string): Promise<PaymentDTO | null>;
   findByRazorpayOrderId(razorpayOrderId: string): Promise<PaymentDTO | null>;
   updateWebhookResult(id: string, data: WebhookUpdate): Promise<PaymentDTO | null>;
@@ -57,7 +60,7 @@ export class MemoryPaymentRepository implements PaymentRepository {
       amount: input.amount,
       currency: input.currency ?? "INR",
       status: "CREATED",
-      method: null,
+      method: input.method ?? null,
       webhook_event: null,
       webhook_raw: null,
       created_at: now,
@@ -77,6 +80,13 @@ export class MemoryPaymentRepository implements PaymentRepository {
   async findByRazorpayOrderId(razorpayOrderId: string): Promise<PaymentDTO | null> {
     for (const p of this.payments.values()) {
       if (p.razorpay_order_id === razorpayOrderId) return p;
+    }
+    return null;
+  }
+
+  async getByOrderId(orderId: string): Promise<PaymentDTO | null> {
+    for (const p of this.payments.values()) {
+      if (p.order_id === orderId) return p;
     }
     return null;
   }

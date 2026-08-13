@@ -20,6 +20,7 @@ export const EventNameSchema = z.enum([
   "OrderCreated",
   "PaymentSucceeded",
   "PaymentFailed",
+  "CashOnPickupSelected",
   "OrderPreparationStarted",
   "OrderReadyForPickup",
   "OrderPickedUp",
@@ -68,21 +69,24 @@ export const PaymentFailedEventSchema = z.object({
 });
 export type PaymentFailedEvent = z.infer<typeof PaymentFailedEventSchema>;
 
+export const CashOnPickupSelectedEventSchema = z.object({
+  order_id: z.string().uuid(),
+  payment_id: z.string().uuid(),
+  amount: z.number().nonnegative(),
+});
+export type CashOnPickupSelectedEvent = z.infer<typeof CashOnPickupSelectedEventSchema>;
+
 export const OrderPreparationStartedEventSchema = z.object({
   order_id: z.string().uuid(),
   restaurant_id: z.string().uuid(),
 });
-export type OrderPreparationStartedEvent = z.infer<
-  typeof OrderPreparationStartedEventSchema
->;
+export type OrderPreparationStartedEvent = z.infer<typeof OrderPreparationStartedEventSchema>;
 
 export const OrderReadyForPickupEventSchema = z.object({
   order_id: z.string().uuid(),
   restaurant_id: z.string().uuid(),
 });
-export type OrderReadyForPickupEvent = z.infer<
-  typeof OrderReadyForPickupEventSchema
->;
+export type OrderReadyForPickupEvent = z.infer<typeof OrderReadyForPickupEventSchema>;
 
 export const OrderPickedUpEventSchema = z.object({
   order_id: z.string().uuid(),
@@ -105,18 +109,14 @@ export const SettlementCalculatedEventSchema = z.object({
   total_commission: z.number().nonnegative(),
   total_payout: z.number().nonnegative(),
 });
-export type SettlementCalculatedEvent = z.infer<
-  typeof SettlementCalculatedEventSchema
->;
+export type SettlementCalculatedEvent = z.infer<typeof SettlementCalculatedEventSchema>;
 
 export const PosOrderImportedEventSchema = z.object({
   order_id: z.string().uuid(),
   pos_order_id: z.string(),
   restaurant_id: z.string().uuid(),
 });
-export type PosOrderImportedEvent = z.infer<
-  typeof PosOrderImportedEventSchema
->;
+export type PosOrderImportedEvent = z.infer<typeof PosOrderImportedEventSchema>;
 
 export const PosMenuSyncedEventSchema = z.object({
   restaurant_id: z.string().uuid(),
@@ -137,9 +137,7 @@ export const ReferralClaimedEventSchema = z.object({
   ip_address: z.string().optional(),
   device_fingerprint: z.string().optional(),
 });
-export type ReferralClaimedEvent = z.infer<
-  typeof ReferralClaimedEventSchema
->;
+export type ReferralClaimedEvent = z.infer<typeof ReferralClaimedEventSchema>;
 
 // ============================================
 // L01 Stamp Card Reward Unlocked (loyalty context)
@@ -153,9 +151,7 @@ export const StampCardRewardUnlockedEventSchema = z.object({
   stamp_count_before: z.number().int().nonnegative(),
   rewards_earned: z.number().int().nonnegative(),
 });
-export type StampCardRewardUnlockedEvent = z.infer<
-  typeof StampCardRewardUnlockedEventSchema
->;
+export type StampCardRewardUnlockedEvent = z.infer<typeof StampCardRewardUnlockedEventSchema>;
 
 // ============================================
 // P13 Early Ready Alert (fulfillment context)
@@ -169,9 +165,7 @@ export const EarlyReadyAlertEventSchema = z.object({
   scheduled_pickup_time: z.string(),
   ready_time: z.string(),
 });
-export type EarlyReadyAlertEvent = z.infer<
-  typeof EarlyReadyAlertEventSchema
->;
+export type EarlyReadyAlertEvent = z.infer<typeof EarlyReadyAlertEventSchema>;
 
 // ============================================
 // D07 Personalized Homepage Viewed (discovery context)
@@ -184,9 +178,7 @@ export const PersonalizedHomepageViewedEventSchema = z.object({
   is_cold_start: z.boolean(),
   result_count: z.number().int().nonnegative(),
 });
-export type PersonalizedHomepageViewedEvent = z.infer<
-  typeof PersonalizedHomepageViewedEventSchema
->;
+export type PersonalizedHomepageViewedEvent = z.infer<typeof PersonalizedHomepageViewedEventSchema>;
 
 // ============================================
 // D17 Trending Queried (discovery context)
@@ -211,9 +203,7 @@ export const GroupOrderCreatedEventSchema = z.object({
   created_by: z.string().uuid(),
   restaurant_id: z.string().uuid(),
 });
-export type GroupOrderCreatedEvent = z.infer<
-  typeof GroupOrderCreatedEventSchema
->;
+export type GroupOrderCreatedEvent = z.infer<typeof GroupOrderCreatedEventSchema>;
 
 // ============================================
 // O02 Group Order Item Added (ordering context)
@@ -228,9 +218,7 @@ export const GroupOrderItemAddedEventSchema = z.object({
   menu_item_id: z.string().uuid(),
   quantity: z.number().int().positive(),
 });
-export type GroupOrderItemAddedEvent = z.infer<
-  typeof GroupOrderItemAddedEventSchema
->;
+export type GroupOrderItemAddedEvent = z.infer<typeof GroupOrderItemAddedEventSchema>;
 
 // ============================================
 // P02 User Arrived At Restaurant (fulfillment context)
@@ -245,9 +233,7 @@ export const UserArrivedAtRestaurantEventSchema = z.object({
   distance_m: z.number().nonnegative(),
   auto_checked_in: z.boolean(),
 });
-export type UserArrivedAtRestaurantEvent = z.infer<
-  typeof UserArrivedAtRestaurantEventSchema
->;
+export type UserArrivedAtRestaurantEvent = z.infer<typeof UserArrivedAtRestaurantEventSchema>;
 
 // ============================================
 // O12 Wallet Cashback Credited (loyalty context)
@@ -261,9 +247,7 @@ export const WalletCashbackCreditedEventSchema = z.object({
   amount: z.number().nonnegative(),
   balance_after: z.number().nonnegative(),
 });
-export type WalletCashbackCreditedEvent = z.infer<
-  typeof WalletCashbackCreditedEventSchema
->;
+export type WalletCashbackCreditedEvent = z.infer<typeof WalletCashbackCreditedEventSchema>;
 
 // ============================================
 // L02 Streak Badge Unlocked (loyalty context)
@@ -277,9 +261,7 @@ export const StreakBadgeUnlockedEventSchema = z.object({
   coupon_code: z.string(),
   discount_rate: z.number().positive(),
 });
-export type StreakBadgeUnlockedEvent = z.infer<
-  typeof StreakBadgeUnlockedEventSchema
->;
+export type StreakBadgeUnlockedEvent = z.infer<typeof StreakBadgeUnlockedEventSchema>;
 
 // ============================================
 // D03 Spice Profile Updated (identity context)
@@ -291,9 +273,7 @@ export const SpiceProfileUpdatedEventSchema = z.object({
   user_id: z.string().uuid(),
   spice_tolerance: z.number().int().min(1).max(5),
 });
-export type SpiceProfileUpdatedEvent = z.infer<
-  typeof SpiceProfileUpdatedEventSchema
->;
+export type SpiceProfileUpdatedEvent = z.infer<typeof SpiceProfileUpdatedEventSchema>;
 
 // ============================================
 // W12 Catering Order Created (ordering context)
@@ -310,9 +290,7 @@ export const CateringOrderCreatedEventSchema = z.object({
   total_amount: z.number().nonnegative(),
   line_count: z.number().int().positive(),
 });
-export type CateringOrderCreatedEvent = z.infer<
-  typeof CateringOrderCreatedEventSchema
->;
+export type CateringOrderCreatedEvent = z.infer<typeof CateringOrderCreatedEventSchema>;
 
 // ============================================
 // D04 Heatmap Queried (discovery context)
@@ -324,9 +302,7 @@ export const HeatmapQueriedEventSchema = z.object({
   cell_count: z.number().int().nonnegative(),
   total_orders: z.number().int().nonnegative(),
 });
-export type HeatmapQueriedEvent = z.infer<
-  typeof HeatmapQueriedEventSchema
->;
+export type HeatmapQueriedEvent = z.infer<typeof HeatmapQueriedEventSchema>;
 
 // ============================================
 // W14 Wear Order Listed (fulfillment context)
@@ -337,9 +313,7 @@ export const WearOrderListedEventSchema = z.object({
   user_id: z.string().uuid(),
   active_count: z.number().int().nonnegative(),
 });
-export type WearOrderListedEvent = z.infer<
-  typeof WearOrderListedEventSchema
->;
+export type WearOrderListedEvent = z.infer<typeof WearOrderListedEventSchema>;
 
 // ============================================
 // L15 VIP Ticket Created (support context)
@@ -354,9 +328,7 @@ export const VipTicketCreatedEventSchema = z.object({
   assignee: z.string().nullable(),
   is_vip: z.boolean(),
 });
-export type VipTicketCreatedEvent = z.infer<
-  typeof VipTicketCreatedEventSchema
->;
+export type VipTicketCreatedEvent = z.infer<typeof VipTicketCreatedEventSchema>;
 
 // ============================================
 // Event Catalog - typed envelope factory
@@ -366,6 +338,7 @@ export type EventPayloadMap = {
   OrderCreated: OrderCreatedEvent;
   PaymentSucceeded: PaymentSucceededEvent;
   PaymentFailed: PaymentFailedEvent;
+  CashOnPickupSelected: CashOnPickupSelectedEvent;
   OrderPreparationStarted: OrderPreparationStartedEvent;
   OrderReadyForPickup: OrderReadyForPickupEvent;
   OrderPickedUp: OrderPickedUpEvent;

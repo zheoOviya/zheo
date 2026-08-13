@@ -5,6 +5,8 @@ export interface Restaurant {
   is_active: boolean;
   lat: number | null;
   lng: number | null;
+  /** Estimated prep/pickup time in minutes (shown on home cards). */
+  pickup_eta_min: number;
 }
 
 export interface MenuItem {
@@ -31,8 +33,7 @@ export interface SearchResult {
 // rewrite to the API server). Server-side fetches (RSC) need an absolute
 // origin, so fall back to the local API server when no env override is set.
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ??
-  (typeof window === "undefined" ? "http://localhost:3001" : "");
+  process.env.NEXT_PUBLIC_API_URL ?? (typeof window === "undefined" ? "http://localhost:3001" : "");
 
 async function fetcher<T>(
   path: string,
@@ -59,22 +60,12 @@ export function fetchRestaurants(): Promise<Restaurant[]> {
   return fetcher<Restaurant[]>("/api/v1/restaurants");
 }
 
-export function fetchRestaurantMenu(
-  restaurantId: string,
-): Promise<MenuItem[]> {
-  return fetcher<MenuItem[]>(
-    `/api/v1/restaurants/${encodeURIComponent(restaurantId)}/menu`,
-  );
+export function fetchRestaurantMenu(restaurantId: string): Promise<MenuItem[]> {
+  return fetcher<MenuItem[]>(`/api/v1/restaurants/${encodeURIComponent(restaurantId)}/menu`);
 }
 
-export function searchAutocomplete(
-  q: string,
-  signal?: AbortSignal,
-): Promise<SearchResult[]> {
-  return fetcher<SearchResult[]>(
-    `/api/v1/search/autocomplete?q=${encodeURIComponent(q)}`,
-    signal,
-  );
+export function searchAutocomplete(q: string, signal?: AbortSignal): Promise<SearchResult[]> {
+  return fetcher<SearchResult[]>(`/api/v1/search/autocomplete?q=${encodeURIComponent(q)}`, signal);
 }
 
 export function filterMenuByDietary(tags: string[]): Promise<MenuItem[]> {
@@ -112,11 +103,7 @@ export interface TrafficEta {
   source: "google" | "mock";
 }
 
-async function authedFetcher<T>(
-  path: string,
-  token: string,
-  init?: RequestInit,
-): Promise<T> {
+async function authedFetcher<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
@@ -156,10 +143,7 @@ export function fetchStampCards(token: string): Promise<StampCard[]> {
   return authedFetcher<StampCard[]>("/api/v1/loyalty/stamp-cards", token);
 }
 
-export function fetchStampCard(
-  token: string,
-  restaurantId: string,
-): Promise<StampCard> {
+export function fetchStampCard(token: string, restaurantId: string): Promise<StampCard> {
   return authedFetcher<StampCard>(
     `/api/v1/loyalty/stamp-cards/${encodeURIComponent(restaurantId)}`,
     token,
@@ -211,10 +195,7 @@ export interface SpiceProfile {
   spice_tolerance: number | null;
 }
 
-export function updateSpiceTolerance(
-  token: string,
-  spiceTolerance: number,
-): Promise<SpiceProfile> {
+export function updateSpiceTolerance(token: string, spiceTolerance: number): Promise<SpiceProfile> {
   return authedFetcher<SpiceProfile>("/api/v1/users/profile", token, {
     method: "PUT",
     body: JSON.stringify({ spice_tolerance: spiceTolerance }),
@@ -254,14 +235,10 @@ export function savePersistedCart(
     items: PersistedCartItem[];
   },
 ): Promise<{ saved: boolean; item_count: number }> {
-  return authedFetcher<{ saved: boolean; item_count: number }>(
-    "/api/v1/cart",
-    token,
-    {
-      method: "POST",
-      body: JSON.stringify(cart),
-    },
-  );
+  return authedFetcher<{ saved: boolean; item_count: number }>("/api/v1/cart", token, {
+    method: "POST",
+    body: JSON.stringify(cart),
+  });
 }
 
 export function clearPersistedCart(token: string): Promise<{ cleared: boolean }> {
@@ -322,31 +299,21 @@ export interface OrderHistoryEntry {
 
 export interface OrderHistoryPage {
   orders: OrderHistoryEntry[];
-  page: number;
-  limit: number;
-  total: number;
-  pages: number;
+  next_cursor: string | null;
 }
 
 export function fetchOrderHistory(
   token: string,
-  page = 1,
+  cursor?: string,
   limit = 10,
 ): Promise<OrderHistoryPage> {
-  return authedFetcher<OrderHistoryPage>(
-    `/api/v1/orders?page=${page}&limit=${limit}`,
-    token,
-  );
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor) params.set("cursor", cursor);
+  return authedFetcher<OrderHistoryPage>(`/api/v1/orders?${params.toString()}`, token);
 }
 
-export function fetchOrderById(
-  token: string,
-  orderId: string,
-): Promise<OrderHistoryEntry> {
-  return authedFetcher<OrderHistoryEntry>(
-    `/api/v1/orders/${encodeURIComponent(orderId)}`,
-    token,
-  );
+export function fetchOrderById(token: string, orderId: string): Promise<OrderHistoryEntry> {
+  return authedFetcher<OrderHistoryEntry>(`/api/v1/orders/${encodeURIComponent(orderId)}`, token);
 }
 
 export function reorderOrder(
@@ -367,8 +334,12 @@ export function reorderOrder(
 // Payments (client-side only - requires auth)
 // ============================================
 
+export type PaymentMethod = "upi" | "card" | "netbanking" | "wallet" | "cod";
+
 export interface CreateOrderResponse {
-  razorpay_order_id: string;
+  /** "cod" orders are paid at the counter and skip the Razorpay checkout. */
+  payment_method: PaymentMethod;
+  razorpay_order_id?: string;
   amount: number;
   currency: string;
 }
@@ -376,6 +347,7 @@ export interface CreateOrderResponse {
 export async function createPaymentOrder(
   orderId: string,
   token: string,
+  method: PaymentMethod = "upi",
 ): Promise<CreateOrderResponse> {
   const res = await fetch(`${API_BASE}/api/v1/payments/create-order`, {
     method: "POST",
@@ -383,7 +355,7 @@ export async function createPaymentOrder(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ order_id: orderId }),
+    body: JSON.stringify({ order_id: orderId, method }),
     credentials: "include",
   });
   const body = await res.json();
@@ -457,9 +429,7 @@ export interface PersonalizedHomepage {
   surprise_restaurant: PersonalizedRestaurant | null;
 }
 
-export function fetchPersonalizedHomepage(
-  token?: string,
-): Promise<PersonalizedHomepage> {
+export function fetchPersonalizedHomepage(token?: string): Promise<PersonalizedHomepage> {
   return fetcher<PersonalizedHomepage>(
     "/api/v1/discovery/personalized-homepage",
     undefined,
@@ -493,9 +463,7 @@ export function fetchTrending(params?: {
   if (params?.radius_km) qs.set("radius_km", String(params.radius_km));
   if (params?.minutes) qs.set("minutes", String(params.minutes));
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  return fetcher<TrendingResponse>(
-    `/api/v1/discovery/trending${suffix}`,
-  );
+  return fetcher<TrendingResponse>(`/api/v1/discovery/trending${suffix}`);
 }
 
 // ============================================
@@ -552,32 +520,27 @@ export function createGroupCart(
   token: string,
   restaurantId: string,
 ): Promise<GroupCartCreateResponse> {
-  return authedFetcher<GroupCartCreateResponse>(
-    "/api/v1/orders/group/create",
-    token,
-    {
-      method: "POST",
-      body: JSON.stringify({ restaurant_id: restaurantId }),
-    },
-  );
+  return authedFetcher<GroupCartCreateResponse>("/api/v1/orders/group/create", token, {
+    method: "POST",
+    body: JSON.stringify({ restaurant_id: restaurantId }),
+  });
 }
 
 export function addToGroupCart(
   token: string,
   groupCartToken: string,
   items: { menu_item_id: string; quantity: number; customizations: unknown[] }[],
-): Promise<{ order: unknown; cart: { item_count: number; total_amount: number; contributors: GroupCartContributor[] } }> {
-  return authedFetcher(
-    "/api/v1/orders/group/add",
-    token,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        group_cart_token: groupCartToken,
-        items,
-      }),
-    },
-  );
+): Promise<{
+  order: unknown;
+  cart: { item_count: number; total_amount: number; contributors: GroupCartContributor[] };
+}> {
+  return authedFetcher("/api/v1/orders/group/add", token, {
+    method: "POST",
+    body: JSON.stringify({
+      group_cart_token: groupCartToken,
+      items,
+    }),
+  });
 }
 
 export function fetchGroupCart(groupCartToken: string): Promise<GroupCartSnapshot> {

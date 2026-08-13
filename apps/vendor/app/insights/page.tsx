@@ -1,26 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Skeleton } from "@snakzap/ui";
+import { fetchInsights, type Insights } from "@/lib/api";
 import { formatINR } from "@/lib/format";
-import { RESTAURANT_ID } from "@/lib/constants";
-
-interface PeakHour {
-  hour: number;
-  label: string;
-  order_count: number;
-}
-
-interface Insights {
-  days: number;
-  order_count: number;
-  total_revenue: number;
-  aov: number;
-  repeat_rate: number;
-  repeat_customers: number;
-  total_customers: number;
-  peak_hours: PeakHour[];
-}
+import {
+  PageHeader,
+  SectionCard,
+  StatCard,
+  FilterChip,
+  ErrorBanner,
+  Spinner,
+  EmptyPanel,
+} from "@/components/ui";
 
 const PERIODS = [
   { days: 7, label: "7 days" },
@@ -28,182 +19,124 @@ const PERIODS = [
   { days: 90, label: "90 days" },
 ];
 
-function StatCard({
-  label,
-  value,
-  sub,
-  accent = false,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  accent?: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-2xl border p-4 ${
-        accent
-          ? "border-amber-500/30 bg-amber-500/10"
-          : "border-primary-500/15 bg-primary-900/30"
-      }`}
-    >
-      <p className="text-xs font-medium uppercase tracking-wide text-primary-600/60">
-        {label}
-      </p>
-      <p
-        className={`mt-1 text-2xl font-bold ${
-          accent ? "text-amber-300" : "text-primary-400"
-        }`}
-      >
-        {value}
-      </p>
-      {sub ? <p className="mt-1 text-xs text-primary-600/60">{sub}</p> : null}
-    </div>
-  );
-}
-
 export default function InsightsPage() {
   const [insights, setInsights] = useState<Insights | null>(null);
   const [days, setDays] = useState(30);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const fetchInsights = useCallback(async (windowDays: number) => {
+  const load = useCallback(async (windowDays: number) => {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(
-        `/api/vendor/insights?restaurant_id=${RESTAURANT_ID}&days=${windowDays}`,
-      );
-      const body = await res.json();
-      if (body.success) setInsights(body.data);
-      else setError(body.error?.message ?? "Failed to load insights");
-    } catch {
-      setError("Failed to load insights");
+      setInsights(await fetchInsights(windowDays));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load insights");
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchInsights(days);
-  }, [days, fetchInsights]);
+    load(days);
+  }, [days, load]);
 
-  const maxCount = Math.max(
-    1,
-    ...(insights?.peak_hours.map((b) => b.order_count) ?? [0]),
-  );
-  const topHour = insights
-    ? insights.peak_hours.reduce<PeakHour | null>(
-        (best, bucket) =>
-          !best || bucket.order_count > best.order_count ? bucket : best,
-        null,
-      )
-    : null;
+  const maxCount = Math.max(1, ...(insights?.peak_hours.map((b) => b.order_count) ?? [0]));
+
+  if (loading && !insights) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <Spinner className="h-8 w-8" />
+      </div>
+    );
+  }
 
   return (
-    <main className="mx-auto max-w-3xl py-6">
-      <header className="mb-6">
-        <h1 className="text-2xl font-bold text-primary-400">
-          Customer Insights
-        </h1>
-        <p className="mt-1 text-sm text-primary-600/60">
-          Repeat rate, average order value and peak hours from completed orders.
-        </p>
-      </header>
-
-      <div className="mb-4 flex items-center gap-2">
-        {PERIODS.map((period) => (
-          <button
-            key={period.days}
-            onClick={() => setDays(period.days)}
-            className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
-              days === period.days
-                ? "bg-primary-500/20 text-primary-300"
-                : "text-primary-600/60 hover:text-primary-400"
-            }`}
-          >
-            {period.label}
-          </button>
-        ))}
-      </div>
-
-      {loading ? (
-        <div className="grid gap-4">
-          <div className="grid grid-cols-2 gap-4">
-            <Skeleton className="h-24" />
-            <Skeleton className="h-24" />
-            <Skeleton className="h-24" />
-            <Skeleton className="h-24" />
+    <div className="space-y-6">
+      <PageHeader
+        title="Insights"
+        subtitle="Repeat rate, average order value and peak hours from completed orders"
+        actions={
+          <div className="flex gap-1.5">
+            {PERIODS.map((period) => (
+              <FilterChip
+                key={period.days}
+                label={period.label}
+                active={days === period.days}
+                onClick={() => setDays(period.days)}
+              />
+            ))}
           </div>
-          <Skeleton className="h-64" />
-        </div>
-      ) : error ? (
-        <p className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
-          {error}
-        </p>
-      ) : insights ? (
+        }
+      />
+
+      <ErrorBanner message={error} />
+
+      {!insights ? null : (
         <>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
             <StatCard
               label="Average Order Value"
               value={formatINR(insights.aov)}
-              sub={`${insights.order_count} orders`}
+              hint={`${insights.order_count} orders`}
+              accent="teal"
             />
             <StatCard
               label="Repeat Rate"
               value={`${Math.round(insights.repeat_rate * 100)}%`}
-              sub={`${insights.repeat_customers} of ${insights.total_customers} customers`}
-              accent
+              hint={`${insights.repeat_customers} of ${insights.total_customers} customers`}
+              accent="green"
             />
             <StatCard
               label="Revenue"
               value={formatINR(insights.total_revenue)}
-              sub={`last ${insights.days} days`}
+              hint={`last ${insights.days} days`}
+              accent="amber"
             />
             <StatCard
               label="Total Orders"
               value={String(insights.order_count)}
-              sub="completed only"
+              hint="completed only"
+              accent="blue"
             />
           </div>
 
-          <section className="mt-6 rounded-2xl border border-primary-500/15 bg-primary-900/30 p-4">
-            <h2 className="mb-3 text-sm font-semibold text-primary-400">
-              Peak Ordering Hours (IST)
-            </h2>
-            <div className="space-y-1.5">
-              {insights.peak_hours.map((bucket) => {
-                const isTop = topHour && bucket.hour === topHour.hour;
-                const width =
-                  bucket.order_count > 0
-                    ? (bucket.order_count / maxCount) * 100
-                    : 0;
-                return (
-                  <div key={bucket.hour} className="flex items-center gap-2">
-                    <span className="w-12 shrink-0 text-right text-xs text-primary-600/60">
+          <SectionCard
+            title="Peak Ordering Hours (IST)"
+            subtitle="Busiest hours in the selected window"
+          >
+            {maxCount <= 1 ? (
+              <EmptyPanel
+                title="Not enough data"
+                description="More completed orders will reveal peak hours."
+              />
+            ) : (
+              <div className="space-y-2">
+                {insights.peak_hours.map((bucket) => (
+                  <div key={bucket.hour} className="flex items-center gap-3">
+                    <span className="w-14 shrink-0 text-right text-xs tabular-nums text-slate-500">
                       {bucket.label}
                     </span>
-                    <div className="h-4 flex-1 overflow-hidden rounded bg-primary-500/10">
+                    <div className="h-4 flex-1 overflow-hidden rounded-full bg-slate-100">
                       <div
-                        className={`h-full rounded ${
-                          isTop
-                            ? "bg-amber-400/80"
-                            : "bg-primary-500/60"
+                        className={`h-full rounded-full ${
+                          bucket.order_count === maxCount ? "bg-amber-400" : "bg-teal-600/70"
                         }`}
-                        style={{ width: `${width}%` }}
+                        style={{
+                          width: `${(bucket.order_count / maxCount) * 100}%`,
+                        }}
                       />
                     </div>
-                    <span className="w-6 shrink-0 text-xs text-primary-400">
+                    <span className="w-6 shrink-0 text-xs tabular-nums text-slate-500">
                       {bucket.order_count || ""}
                     </span>
                   </div>
-                );
-              })}
-            </div>
-          </section>
+                ))}
+              </div>
+            )}
+          </SectionCard>
         </>
-      ) : null}
-    </main>
+      )}
+    </div>
   );
 }

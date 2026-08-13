@@ -1,369 +1,321 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
-import { m, AnimatePresence } from "framer-motion";
-import { Badge, CountdownTimer, EmptyState } from "@snakzap/ui";
-import { useOrdersWebSocket } from "@/hooks/useOrdersWebSocket";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { fetchOrders, fetchInsights, type VendorOrder, type Insights } from "@/lib/api";
+import { ACTIVE_ORDER_STATUSES } from "@/lib/status";
+import { formatINR, formatINRCompact, relativeTime, shortOrderId, isSameDay } from "@/lib/format";
 import {
-  isPickupOtpComplete,
-  pickupFailureMessage,
-  sanitizePickupOtp,
-} from "@/lib/kds";
-import { RESTAURANT_ID } from "@/lib/constants";
+  PageHeader,
+  SectionCard,
+  StatCard,
+  StatusBadge,
+  PaymentBadge,
+  EmptyPanel,
+  ErrorBanner,
+  Spinner,
+} from "@/components/ui";
 
-interface OrderItem {
-  name: string;
-  quantity: number;
+function countToday(orders: VendorOrder[]) {
+  return orders.filter((o) => isSameDay(o.created_at)).length;
 }
 
-interface DashboardOrder {
-  id: string;
-  status: string;
-  total_amount: number;
-  items: OrderItem[];
-  pickup_otp: string | null;
-  qr_token: string | null;
-  checked_in: boolean;
-  created_at: string;
+function revenue(orders: VendorOrder[]) {
+  const excluded = new Set(["CANCELLED", "PAYMENT_FAILED", "DRAFT", "REFUNDED"]);
+  return orders.filter((o) => !excluded.has(o.status)).reduce((sum, o) => sum + o.total_amount, 0);
 }
 
-function formatINR(amount: number): string {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amount);
-}
-
-interface ColumnConfig {
-  status: string;
-  title: string;
-  prepSeconds: number;
-}
-
-const COLUMNS: ColumnConfig[] = [
-  { status: "CONFIRMED", title: "New Orders", prepSeconds: 600 },
-  { status: "PREPARING", title: "Preparing", prepSeconds: 480 },
-  { status: "ALMOST_READY", title: "Almost Ready", prepSeconds: 120 },
-  { status: "READY_FOR_PICKUP", title: "Ready for Pickup", prepSeconds: 300 },
-];
-
-function timeElapsed(createdAt: string): number {
-  return Math.floor((Date.now() - new Date(createdAt).getTime()) / 1000);
-}
-
-function urgencyClass(elapsed: number, max: number): string {
-  const pct = max > 0 ? elapsed / max : 0;
-  if (pct < 0.3) return "border-l-urgency-green";
-  if (pct < 0.7) return "border-l-urgency-amber";
-  return "border-l-urgency-red";
-}
-
-function urgencyBgClass(elapsed: number, max: number): string {
-  const pct = max > 0 ? elapsed / max : 0;
-  if (pct < 0.3) return "bg-urgency-green/5 dark:bg-urgency-green/10";
-  if (pct < 0.7) return "bg-urgency-amber/5 dark:bg-urgency-amber/10";
-  return "bg-urgency-red/5 dark:bg-urgency-red/10";
-}
-
-function urgencyLabel(elapsed: number, max: number): string {
-  const pct = max > 0 ? elapsed / max : 0;
-  if (pct < 0.3) return "On time";
-  if (pct < 0.7) return "Running late";
-  return "Urgent";
-}
-
-const STATUS_ADVANCE: Record<string, string> = {
-  CONFIRMED: "PREPARING",
-  PREPARING: "ALMOST_READY",
-  ALMOST_READY: "READY_FOR_PICKUP",
-};
-
-const STATUS_BUTTON: Record<string, string> = {
-  CONFIRMED: "Start",
-  PREPARING: "Almost Ready",
-  ALMOST_READY: "Mark Ready",
-};
-
-export default function VendorDashboard() {
-  const [orders, setOrders] = useState<DashboardOrder[]>([]);
+export default function OverviewPage() {
+  const [orders, setOrders] = useState<VendorOrder[]>([]);
+  const [insights, setInsights] = useState<Insights | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [otpInput, setOtpInput] = useState<Record<string, string>>({});
-  const [otpError, setOtpError] = useState<Record<string, string>>({});
-  const [handingOver, setHandingOver] = useState<Record<string, boolean>>({});
-  const [now, setNow] = useState(Date.now());
-  const { updates, connected } = useOrdersWebSocket(RESTAURANT_ID);
-  const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
-  const fetchOrders = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/vendor/orders?restaurant_id=${RESTAURANT_ID}`);
-      const body = await res.json();
-      if (body.success) setOrders(body.data);
-    } catch {
-      setError("Failed to load orders");
-    }
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [all, insight] = await Promise.all([fetchOrders({ scope: "all" }), fetchInsights(7)]);
+        if (cancelled) return;
+        setOrders(all);
+        setInsights(insight);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load dashboard");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  useEffect(() => {
-    fetchOrders();
-    const interval = setInterval(fetchOrders, 10000);
-    timerRef.current = setInterval(() => setNow(Date.now()), 1000);
-    return () => {
-      clearInterval(interval);
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [fetchOrders]);
+  const stats = useMemo(() => {
+    const todays = orders.filter((o) => isSameDay(o.created_at));
+    const todaysRevenue = revenue(todays);
+    const active = orders.filter((o) => ACTIVE_ORDER_STATUSES.includes(o.status));
+    const aov = todays.length > 0 ? todaysRevenue / todays.length : 0;
+    return { todays, todaysRevenue, active, aov };
+  }, [orders]);
 
-  useEffect(() => {
-    if (updates.length === 0) return;
-    const latest = updates[0];
-    if (!latest) return;
-    setOrders((prev) =>
-      prev.map((o) =>
-        o.id === latest.data.order_id ? { ...o, status: latest.data.sql_status } : o,
-      ),
-    );
-  }, [updates]);
-
-  async function advanceOrder(orderId: string) {
-    try {
-      const res = await fetch(`/api/vendor/orders/${orderId}/status`, { method: "PUT" });
-      const body = await res.json();
-      if (body.success) {
-        setOrders((prev) =>
-          prev.map((o) => (o.id === orderId ? { ...o, status: body.data.status } : o)),
+  const trend = useMemo(() => {
+    const days: { label: string; total: number; count: number }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      d.setDate(d.getDate() - i);
+      const label = d.toLocaleDateString("en-IN", { weekday: "short" });
+      const dayOrders = orders.filter((o) => {
+        const t = new Date(o.created_at);
+        return (
+          t.getFullYear() === d.getFullYear() &&
+          t.getMonth() === d.getMonth() &&
+          t.getDate() === d.getDate()
         );
-      } else {
-        setError(body.error?.message ?? "Could not advance the order.");
-      }
-    } catch {
-      setError("Could not reach the server. Check your connection and try again.");
-    }
-  }
-
-  async function confirmPickup(orderId: string) {
-    const otp = otpInput[orderId];
-    if (!isPickupOtpComplete(otp)) return;
-
-    setHandingOver((p) => ({ ...p, [orderId]: true }));
-    setOtpError((p) => ({ ...p, [orderId]: "" }));
-    try {
-      const res = await fetch(`/api/v1/orders/${orderId}/confirm-pickup`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pickup_otp: otp }),
       });
-      const body = await res.json();
-      if (body.success) {
-        setOrders((prev) => prev.filter((o) => o.id !== orderId));
-        setOtpInput((p) => {
-          const next = { ...p };
-          delete next[orderId];
-          return next;
-        });
-      } else {
-        // Fallback for failed/expired OTP (INVALID_OTP), already picked up,
-        // or order no longer ready. Keep the order card, surface the error,
-        // and clear the input so staff can re-enter the code.
-        setOtpError((p) => ({
-          ...p,
-          [orderId]: pickupFailureMessage(body.error?.code, body.error?.message),
-        }));
-        setOtpInput((p) => ({ ...p, [orderId]: "" }));
-      }
-    } catch {
-      setOtpError((p) => ({
-        ...p,
-        [orderId]: pickupFailureMessage(undefined),
-      }));
-    } finally {
-      setHandingOver((p) => {
-        const next = { ...p };
-        delete next[orderId];
-        return next;
-      });
+      days.push({ label, total: revenue(dayOrders), count: countToday(dayOrders) });
     }
-  }
+    const max = Math.max(1, ...days.map((d) => d.total));
+    return { days, max };
+  }, [orders]);
 
-  const activeOrders = orders.filter((o) => o.status !== "READY_FOR_PICKUP");
-  const readyOrders = orders.filter((o) => o.status === "READY_FOR_PICKUP");
+  const paymentSplit = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const o of stats.todays) {
+      const key = o.payment_method ?? "unknown";
+      map.set(key, (map.get(key) ?? 0) + 1);
+    }
+    return Array.from(map.entries())
+      .map(([method, count]) => ({ method, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [stats.todays]);
+
+  const statusBreakdown = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const o of orders) {
+      counts.set(o.status, (counts.get(o.status) ?? 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .map(([status, count]) => ({ status, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [orders]);
+
+  const recent = useMemo(
+    () =>
+      [...orders]
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .slice(0, 6),
+    [orders],
+  );
+
+  const peakHours = insights?.peak_hours ?? [];
+  const peakMax = Math.max(1, ...peakHours.map((p) => p.order_count));
+
+  if (loading) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <Spinner className="h-8 w-8" />
+      </div>
+    );
+  }
 
   return (
-    <main className="flex h-dvh flex-col bg-neutral-950 text-neutral-200">
-      <header className="flex items-center justify-between shrink-0 border-b border-primary-500/10 px-5 py-3">
-        <div>
-          <h1 className="text-xl font-bold text-primary-400">Kitchen Display</h1>
-          <p className="text-xs text-neutral-500" aria-live="polite">
-            {orders.length} orders
-            <span className={`ml-2 inline-block h-2 w-2 rounded-full ${connected ? "bg-urgency-green" : "bg-urgency-red"}`} aria-hidden="true" />
-            <span className="ml-1">{connected ? "Connected" : "Offline"}</span>
-          </p>
-        </div>
-        <span className="font-mono text-sm text-neutral-400 tabular-nums">
-          {new Date(now).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
-        </span>
-      </header>
+    <div className="space-y-6">
+      <PageHeader
+        title="Overview"
+        subtitle="How the kitchen is doing today"
+        actions={
+          <Link
+            href="/orders"
+            className="inline-flex min-h-[40px] items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            View all orders
+          </Link>
+        }
+      />
 
-      {error && (
-        <p className="m-4 rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-sm text-red-400">
-          {error}
-        </p>
-      )}
+      <ErrorBanner message={error} />
 
-      <div className="flex-1 overflow-y-auto">
-        <div className="grid h-full grid-cols-2 gap-3 p-4 md:grid-cols-3 xl:grid-cols-4">
-          {COLUMNS.map((col) => {
-            const colOrders = col.status === "READY_FOR_PICKUP"
-              ? readyOrders
-              : activeOrders.filter((o) => o.status === col.status);
-
-            return (
-              <div key={col.status} className="flex min-h-0 min-w-0 flex-col rounded-xl bg-neutral-900/50 border border-neutral-800/50">
-                <div className="flex items-center justify-between p-3 border-b border-neutral-800/50">
-                  <h2 className="text-sm font-bold text-neutral-300">{col.title}</h2>
-                  <Badge variant="default" size="sm">{colOrders.length}</Badge>
-                </div>
-
-                <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2" role="list">
-                  <AnimatePresence mode="popLayout">
-                    {colOrders.map((order) => {
-                      const elapsed = timeElapsed(order.created_at);
-                      const borderColor = urgencyClass(elapsed, col.prepSeconds);
-                      const bgTint = urgencyBgClass(elapsed, col.prepSeconds);
-                      const urgency = urgencyLabel(elapsed, col.prepSeconds);
-                      const canAdvance = col.status in STATUS_ADVANCE;
-
-                      return (
-                        <m.div
-                          key={order.id}
-                          layout
-                          role="listitem"
-                          aria-label={`Order #${order.id.slice(-4).toUpperCase()}, ${col.title.toLowerCase()}, ${urgency}`}
-                          initial={{ opacity: 0, scale: 0.95 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.95 }}
-                          transition={{ duration: 0.2 }}
-                          className={[
-                            "rounded-xl border-l-4 p-4",
-                            bgTint,
-                            borderColor,
-                            "border border-neutral-800/50",
-                            "flex flex-col justify-between",
-                          ].join(" ")}
-                        >
-                          <div className="flex items-start justify-between">
-                            <div>
-                              <p className="text-lg font-mono font-bold text-white">
-                                #{order.id.slice(-4).toUpperCase()}
-                              </p>
-                              {order.checked_in && (
-                                <Badge variant="green" size="sm" pulse className="mt-1">
-                                  Here
-                                </Badge>
-                              )}
-                              <span className="mt-1 block text-2xs text-neutral-500">
-                                {urgency}
-                              </span>
-                            </div>
-                            <CountdownTimer targetSeconds={col.prepSeconds} />
-                          </div>
-
-                          <ul className="flex-1 space-y-1 pt-3">
-                            {order.items.map((item) => (
-                              <li key={item.name} className="flex justify-between text-sm">
-                                <span className="text-neutral-300">{item.name}</span>
-                                <span className="font-mono text-neutral-500">x{item.quantity}</span>
-                              </li>
-                            ))}
-                          </ul>
-
-                          <p className="text-2xs text-neutral-600 mt-3">
-                            {formatINR(order.total_amount)} &middot; {new Date(order.created_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
-                          </p>
-
-                          {canAdvance ? (
-                            <button
-                              type="button"
-                              onClick={() => advanceOrder(order.id)}
-                              aria-label={`Advance order #${order.id.slice(-4).toUpperCase()} from ${col.title} to ${STATUS_BUTTON[col.status]}`}
-                              className="min-h-[44px] w-full rounded-lg bg-primary px-4 py-3 text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] hover:bg-primary-hover hover:-translate-y-px"
-                            >
-                              {STATUS_BUTTON[col.status]} &rarr;
-                            </button>
-                          ) : (
-                            <div className="space-y-2">
-                              {order.pickup_otp && (
-                                <p className="text-xs text-neutral-400">
-                                  Code:{" "}
-                                  <span className="font-mono text-lg font-bold tracking-widest text-primary-400">
-                                    {order.pickup_otp}
-                                  </span>
-                                </p>
-                              )}
-                              <label htmlFor={`otp-${order.id}`} className="sr-only">
-                                Pickup OTP for order #{order.id.slice(-4).toUpperCase()}
-                              </label>
-                              <input
-                                id={`otp-${order.id}`}
-                                type="text"
-                                inputMode="numeric"
-                                maxLength={4}
-                                placeholder="Enter OTP"
-                                value={otpInput[order.id] ?? ""}
-                                onChange={(e) => {
-                                  const value = sanitizePickupOtp(e.target.value);
-                                  setOtpInput((p) => ({ ...p, [order.id]: value }));
-                                  if (otpError[order.id]) {
-                                    setOtpError((p) => ({ ...p, [order.id]: "" }));
-                                  }
-                                }}
-                                className="min-h-[44px] w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600 outline-none focus:border-primary"
-                              />
-                              {otpError[order.id] && (
-                                <p role="alert" className="text-xs text-red-400">
-                                  {otpError[order.id]}
-                                </p>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => confirmPickup(order.id)}
-                                disabled={
-                                  !isPickupOtpComplete(otpInput[order.id]) ||
-                                  handingOver[order.id] === true
-                                }
-                                aria-label={`Hand over order #${order.id.slice(-4).toUpperCase()}`}
-                                className="min-h-[44px] w-full rounded-lg bg-urgency-green px-4 py-2.5 text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] hover:brightness-110 disabled:opacity-30"
-                              >
-                                {handingOver[order.id]
-                                  ? "Handing over..."
-                                  : "Hand Over"}
-                              </button>
-                            </div>
-                          )}
-                        </m.div>
-                      );
-                    })}
-                  </AnimatePresence>
-
-                  {colOrders.length === 0 && (
-                    <EmptyState
-                      icon={
-                        <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-3-3v6" />
-                        </svg>
-                      }
-                      title="No orders"
-                      description={`No ${col.title.toLowerCase()} orders yet`}
-                    />
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard
+          label="Today's Revenue"
+          value={formatINR(stats.todaysRevenue)}
+          hint={`${stats.todays.length} paid orders`}
+          accent="teal"
+        />
+        <StatCard
+          label="Today's Orders"
+          value={String(stats.todays.length)}
+          hint="placed today"
+          accent="blue"
+        />
+        <StatCard
+          label="Active Orders"
+          value={String(stats.active.length)}
+          hint="in the kitchen pipeline"
+          accent="amber"
+        />
+        <StatCard
+          label="Avg Order Value"
+          value={formatINR(stats.aov)}
+          hint="today"
+          accent="green"
+        />
       </div>
-    </main>
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <SectionCard
+          title="Revenue — last 7 days"
+          subtitle="Daily total of paid orders"
+          className="lg:col-span-2"
+        >
+          {trend.days.every((d) => d.total === 0) ? (
+            <EmptyPanel
+              title="No sales yet"
+              description="Orders placed this week will appear here."
+            />
+          ) : (
+            <div className="flex h-44 items-end gap-3">
+              {trend.days.map((d) => (
+                <div key={d.label} className="flex flex-1 flex-col items-center gap-1.5">
+                  <div className="flex w-full flex-1 items-end">
+                    <div
+                      className="w-full rounded-t-md bg-teal-600/80 transition-all"
+                      style={{ height: `${Math.max(4, (d.total / trend.max) * 100)}%` }}
+                      aria-hidden="true"
+                    />
+                  </div>
+                  <span className="text-[11px] font-medium text-slate-500">{d.label}</span>
+                  <span className="text-[11px] tabular-nums text-slate-400">
+                    {formatINRCompact(d.total)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard title="Today's payment split" subtitle="How customers paid">
+          {paymentSplit.length === 0 ? (
+            <EmptyPanel
+              title="No payments today"
+              description="Payment methods will show up here."
+            />
+          ) : (
+            <ul className="space-y-3">
+              {paymentSplit.map((p) => (
+                <li key={p.method} className="flex items-center justify-between">
+                  <PaymentBadge method={p.method as VendorOrder["payment_method"]} />
+                  <span className="text-sm font-semibold tabular-nums text-slate-700">
+                    {p.count}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <SectionCard title="Orders by status" subtitle="Across all history">
+          {statusBreakdown.length === 0 ? (
+            <EmptyPanel
+              title="No orders yet"
+              description="Place an order on the consumer app to see it here."
+            />
+          ) : (
+            <ul className="space-y-2">
+              {statusBreakdown.map((s) => (
+                <li key={s.status} className="flex items-center justify-between">
+                  <StatusBadge status={s.status as VendorOrder["status"]} />
+                  <span className="text-sm font-semibold tabular-nums text-slate-700">
+                    {s.count}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Peak hours"
+          subtitle="Order volume in the last 7 days"
+          className="lg:col-span-2"
+        >
+          {peakMax <= 1 ? (
+            <EmptyPanel title="Not enough data" description="More orders will reveal peak hours." />
+          ) : (
+            <div className="space-y-2">
+              {peakHours.map((p) => (
+                <div key={p.hour} className="flex items-center gap-3">
+                  <span className="w-14 shrink-0 text-xs tabular-nums text-slate-500">
+                    {p.label}
+                  </span>
+                  <div className="h-3 flex-1 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-teal-600/70"
+                      style={{ width: `${(p.order_count / peakMax) * 100}%` }}
+                    />
+                  </div>
+                  <span className="w-6 shrink-0 text-right text-xs tabular-nums text-slate-500">
+                    {p.order_count}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+      </div>
+
+      <SectionCard
+        title="Recent orders"
+        subtitle="Latest activity"
+        actions={
+          <Link href="/kds" className="text-sm font-semibold text-teal-600 hover:text-teal-700">
+            Live orders →
+          </Link>
+        }
+      >
+        {recent.length === 0 ? (
+          <EmptyPanel
+            title="No orders yet"
+            description="Place a test order from the SnakZap consumer app and it will show up here."
+            cta={
+              <Link href="/kds" className="text-sm font-semibold text-teal-600 hover:text-teal-700">
+                Open the kitchen display
+              </Link>
+            }
+          />
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {recent.map((o) => (
+              <li key={o.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="font-mono text-sm font-bold text-slate-800">
+                    #{shortOrderId(o.id)}
+                  </span>
+                  <span className="hidden text-xs text-slate-400 sm:inline">
+                    {o.items.length} item{o.items.length !== 1 ? "s" : ""}
+                    {o.is_catering ? " · Catering" : ""}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="hidden text-xs text-slate-400 md:inline">
+                    {relativeTime(o.created_at)}
+                  </span>
+                  <PaymentBadge method={o.payment_method} />
+                  <StatusBadge status={o.status} />
+                  <span className="text-sm font-semibold tabular-nums text-slate-700">
+                    {formatINR(o.total_amount)}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
+    </div>
   );
 }

@@ -5,7 +5,7 @@ import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
 import { sharedAuditRepo, sharedOrderRepo } from "../repositories/shared";
-import { sharedPaymentRepo } from "../repositories/shared";
+import { sharedPaymentRepo, sharedIdentityRepo } from "../repositories/shared";
 
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001";
@@ -34,7 +34,9 @@ function vendorAuthHeaders(userId?: string, role?: string) {
   };
 }
 
-async function createConfirmedOrder(app: Express): Promise<{ orderId: string; otp: string; qrToken: string }> {
+async function createConfirmedOrder(
+  app: Express,
+): Promise<{ orderId: string; otp: string; qrToken: string }> {
   // Create order
   const orderRes = await request(app)
     .post("/api/v1/orders")
@@ -52,20 +54,20 @@ async function createConfirmedOrder(app: Express): Promise<{ orderId: string; ot
   await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
 
   // Advance through state machine to READY_FOR_PICKUP
-      await request(app)
-        .put(`/api/vendor/orders/${orderId}/status`)
-        .set(vendorAuthHeaders())
-        .expect(200); // CONFIRMED -> PREPARING (generates OTP/QR)
+  await request(app)
+    .put(`/api/vendor/orders/${orderId}/status`)
+    .set(vendorAuthHeaders())
+    .expect(200); // CONFIRMED -> PREPARING (generates OTP/QR)
 
-      await request(app)
-        .put(`/api/vendor/orders/${orderId}/status`)
-        .set(vendorAuthHeaders())
-        .expect(200); // PREPARING -> ALMOST_READY
+  await request(app)
+    .put(`/api/vendor/orders/${orderId}/status`)
+    .set(vendorAuthHeaders())
+    .expect(200); // PREPARING -> ALMOST_READY
 
-      await request(app)
-        .put(`/api/vendor/orders/${orderId}/status`)
-        .set(vendorAuthHeaders())
-        .expect(200); // ALMOST_READY -> READY_FOR_PICKUP
+  await request(app)
+    .put(`/api/vendor/orders/${orderId}/status`)
+    .set(vendorAuthHeaders())
+    .expect(200); // ALMOST_READY -> READY_FOR_PICKUP
 
   const finalOrder = await sharedOrderRepo.getById(orderId);
   return {
@@ -83,6 +85,7 @@ describe("Fulfillment routes", () => {
     sharedOrderRepo._reset();
     sharedPaymentRepo._reset();
     sharedAuditRepo._reset();
+    sharedIdentityRepo._reset();
     app = createApp();
   });
 
@@ -386,8 +389,14 @@ describe("Fulfillment routes", () => {
 
       const orderId = orderRes.body.data.id;
       await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
+      await request(app)
+        .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
+        .expect(200);
+      await request(app)
+        .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
+        .expect(200);
 
       const res = await request(app)
         .put(`/api/vendor/orders/${orderId}/status`)
@@ -419,8 +428,14 @@ describe("Fulfillment routes", () => {
 
       const orderId = orderRes.body.data.id;
       await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
+      await request(app)
+        .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
+        .expect(200);
+      await request(app)
+        .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
+        .expect(200);
 
       const res = await request(app)
         .put(`/api/vendor/orders/${orderId}/status`)
@@ -445,8 +460,14 @@ describe("Fulfillment routes", () => {
 
       const orderId = orderRes.body.data.id;
       await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
-      await request(app).put(`/api/vendor/orders/${orderId}/status`).set(vendorAuthHeaders()).expect(200);
+      await request(app)
+        .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
+        .expect(200);
+      await request(app)
+        .put(`/api/vendor/orders/${orderId}/status`)
+        .set(vendorAuthHeaders())
+        .expect(200);
 
       const res = await request(app)
         .put(`/api/vendor/orders/${orderId}/status`)
@@ -477,6 +498,206 @@ describe("Fulfillment routes", () => {
 
       expect(res.body.data).toHaveLength(1);
       expect(res.body.data[0].id).toBe(orderRes.body.data.id);
+    });
+
+    it("defaults to active scope: hides payment-pending and terminal orders", async () => {
+      const pendingRes = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+      await sharedOrderRepo.updateStatus(pendingRes.body.data.id, "PAYMENT_PENDING");
+
+      const pickedRes = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+      await sharedOrderRepo.updateStatus(pickedRes.body.data.id, "PICKED_UP");
+
+      const res = await request(app)
+        .get(`/api/vendor/orders?restaurant_id=${REST_ID}`)
+        .set(vendorAuthHeaders())
+        .expect(200);
+
+      expect(res.body.data).toHaveLength(0);
+    });
+
+    it("scope=all returns full history including pending and picked-up orders", async () => {
+      const pendingRes = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+      await sharedOrderRepo.updateStatus(pendingRes.body.data.id, "PAYMENT_PENDING");
+
+      const pickedRes = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+      await sharedOrderRepo.updateStatus(pickedRes.body.data.id, "PICKED_UP");
+
+      const res = await request(app)
+        .get(`/api/vendor/orders?restaurant_id=${REST_ID}&scope=all`)
+        .set(vendorAuthHeaders())
+        .expect(200);
+
+      const ids = res.body.data.map((o: { id: string }) => o.id).sort();
+      expect(ids).toEqual([pendingRes.body.data.id, pickedRes.body.data.id].sort());
+    });
+
+    it("supports a single-status filter", async () => {
+      const confirmedRes = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+      await sharedOrderRepo.updateStatus(confirmedRes.body.data.id, "CONFIRMED");
+
+      const cancelledRes = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+      await sharedOrderRepo.updateStatus(cancelledRes.body.data.id, "CANCELLED");
+
+      const res = await request(app)
+        .get(`/api/vendor/orders?restaurant_id=${REST_ID}&scope=all&status=CANCELLED`)
+        .set(vendorAuthHeaders())
+        .expect(200);
+
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0].id).toBe(cancelledRes.body.data.id);
+    });
+
+    it("enriches orders with payment method/status and customer phone", async () => {
+      sharedIdentityRepo._seed({
+        id: USER_ID,
+        phone: "+919876543210",
+        role: "CONSUMER",
+        is_suspended: false,
+        created_at: new Date().toISOString(),
+      });
+      const orderRes = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+      const orderId = orderRes.body.data.id;
+      await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
+      await sharedPaymentRepo.create({
+        order_id: orderId,
+        razorpay_order_id: "order_mock_cod",
+        amount: 242.8,
+        method: "cod",
+      });
+
+      const res = await request(app)
+        .get(`/api/vendor/orders?restaurant_id=${REST_ID}`)
+        .set(vendorAuthHeaders())
+        .expect(200);
+
+      expect(res.body.data[0]).toMatchObject({
+        id: orderId,
+        payment_method: "cod",
+        payment_status: "CREATED",
+        customer_phone: "+919876543210",
+      });
+      expect(res.body.data[0].items[0]).toHaveProperty("base_price");
+    });
+
+    it("rejects an invalid scope", async () => {
+      const res = await request(app)
+        .get(`/api/vendor/orders?restaurant_id=${REST_ID}&scope=bogus`)
+        .set(vendorAuthHeaders())
+        .expect(400);
+
+      expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    });
+  });
+
+  describe("Vendor order cancellation", () => {
+    it("cancels a CONFIRMED order", async () => {
+      const orderRes = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+      await sharedOrderRepo.updateStatus(orderRes.body.data.id, "CONFIRMED");
+
+      const res = await request(app)
+        .put(`/api/vendor/orders/${orderRes.body.data.id}/cancel`)
+        .set(vendorAuthHeaders())
+        .expect(200);
+
+      expect(res.body.data.status).toBe("CANCELLED");
+      const order = await sharedOrderRepo.getById(orderRes.body.data.id);
+      expect(order?.status).toBe("CANCELLED");
+    });
+
+    it("rejects cancelling an order that is already ready for pickup", async () => {
+      const { orderId } = await createConfirmedOrder(app);
+
+      const res = await request(app)
+        .put(`/api/vendor/orders/${orderId}/cancel`)
+        .set(vendorAuthHeaders())
+        .expect(400);
+
+      expect(res.body.error.code).toBe("INVALID_TRANSITION");
+    });
+
+    it("rejects cancelling a foreign restaurant's order (403)", async () => {
+      const FOREIGN_OWNER = "e0000000-0000-4000-a000-000000000002";
+      const orderRes = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+      await sharedOrderRepo.updateStatus(orderRes.body.data.id, "CONFIRMED");
+
+      const res = await request(app)
+        .put(`/api/vendor/orders/${orderRes.body.data.id}/cancel`)
+        .set(vendorAuthHeaders(FOREIGN_OWNER))
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
+    });
+
+    it("returns 404 for nonexistent order", async () => {
+      const res = await request(app)
+        .put("/api/vendor/orders/00000000-0000-4000-8000-000000000099/cancel")
+        .set(vendorAuthHeaders())
+        .expect(404);
+
+      expect(res.body.error.code).toBe("ORDER_NOT_FOUND");
     });
   });
 

@@ -16,9 +16,7 @@ vi.mock("@/lib/api", () => ({
   fetchOrderById: mocks.fetchOrderById,
   reorderOrder: mocks.reorderOrder,
   clearPersistedCart: vi.fn(() => Promise.resolve({ cleared: true })),
-  savePersistedCart: vi.fn(() =>
-    Promise.resolve({ saved: true, item_count: 0 }),
-  ),
+  savePersistedCart: vi.fn(() => Promise.resolve({ saved: true, item_count: 0 })),
   fetchPersistedCart: vi.fn(() =>
     Promise.resolve({
       items: [],
@@ -35,13 +33,9 @@ vi.mock("@/components/AuthGate", () => ({
 }));
 
 vi.mock("next/link", () => ({
-  default: ({
-    href,
-    children,
-  }: {
-    href: string;
-    children: React.ReactNode;
-  }) => <a href={typeof href === "string" ? href : "#"}>{children}</a>,
+  default: ({ href, children }: { href: string; children: React.ReactNode }) => (
+    <a href={typeof href === "string" ? href : "#"}>{children}</a>
+  ),
 }));
 
 const ORDER: OrderHistoryEntry = {
@@ -115,69 +109,43 @@ describe("Order History page (I-03)", () => {
   it("renders order cards after the fetch resolves", async () => {
     mocks.fetchOrderHistory.mockResolvedValue({
       orders: [ORDER],
-      page: 1,
-      limit: 10,
-      total: 1,
-      pages: 1,
+      next_cursor: null,
     });
     renderPage();
 
-    await waitFor(() =>
-      expect(screen.getByText("Biryani House")).toBeInTheDocument(),
-    );
-    expect(
-      screen.getByText("Chicken Biryani x1, Raita x1"),
-    ).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Biryani House")).toBeInTheDocument());
+    expect(screen.getByText("Chicken Biryani x1, Raita x1")).toBeInTheDocument();
     expect(screen.getByText("Confirmed")).toBeInTheDocument();
     expect(screen.getByText("₹450.00")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reorder" })).toBeInTheDocument();
-    expect(mocks.fetchOrderHistory).toHaveBeenCalledWith("test-token", 1, 10);
+    expect(mocks.fetchOrderHistory).toHaveBeenCalledWith("test-token", undefined, 10);
   });
 
   it("shows an empty state when there are no orders", async () => {
     mocks.fetchOrderHistory.mockResolvedValue({
       orders: [],
-      page: 1,
-      limit: 10,
-      total: 0,
-      pages: 1,
+      next_cursor: null,
     });
     renderPage();
-    await waitFor(() =>
-      expect(screen.getByText("No orders yet")).toBeInTheDocument(),
-    );
-    expect(
-      screen.getByRole("link", { name: "Browse Restaurants" }),
-    ).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("No orders yet")).toBeInTheDocument());
+    expect(screen.getByRole("link", { name: "Browse Restaurants" })).toBeInTheDocument();
   });
 
   it("shows an error state and lets the user retry", async () => {
-    mocks.fetchOrderHistory
-      .mockRejectedValueOnce(new Error("Network down"))
-      .mockResolvedValueOnce({
-        orders: [ORDER],
-        page: 1,
-        limit: 10,
-        total: 1,
-        pages: 1,
-      });
+    mocks.fetchOrderHistory.mockRejectedValueOnce(new Error("Network down")).mockResolvedValueOnce({
+      orders: [ORDER],
+      next_cursor: null,
+    });
     renderPage();
-    await waitFor(() =>
-      expect(screen.getByText("Network down")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText("Network down")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() =>
-      expect(screen.getByText("Biryani House")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText("Biryani House")).toBeInTheDocument());
   });
 
   it("reorders: re-places the order and pre-fills the cart", async () => {
     mocks.fetchOrderHistory.mockResolvedValue({
       orders: [ORDER],
-      page: 1,
-      limit: 10,
-      total: 1,
-      pages: 1,
+      next_cursor: null,
     });
     mocks.reorderOrder.mockResolvedValue({
       id: "order-new",
@@ -192,9 +160,7 @@ describe("Order History page (I-03)", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Reorder" }));
 
-    await waitFor(() =>
-      expect(mocks.reorderOrder).toHaveBeenCalledWith("test-token", "order-1"),
-    );
+    await waitFor(() => expect(mocks.reorderOrder).toHaveBeenCalledWith("test-token", "order-1"));
     expect(mocks.fetchOrderById).toHaveBeenCalledWith("test-token", "order-1");
 
     const cart = useCartStore.getState();
@@ -204,34 +170,50 @@ describe("Order History page (I-03)", () => {
     expect(cart.items[0]!.name).toBe("Chicken Biryani");
 
     await waitFor(() =>
-      expect(
-        screen.getByText("Order placed. Items added to your cart."),
-      ).toBeInTheDocument(),
+      expect(screen.getByText("Order placed. Items added to your cart.")).toBeInTheDocument(),
     );
   });
 
-  it("paginates when there are multiple pages", async () => {
-    mocks.fetchOrderHistory.mockImplementation((_token, page) =>
-      Promise.resolve({
+  it("loads more orders via the cursor", async () => {
+    const ORDER2: OrderHistoryEntry = {
+      ...ORDER,
+      id: "order-2",
+      status: "PICKED_UP",
+    };
+    mocks.fetchOrderHistory
+      .mockResolvedValueOnce({
         orders: [ORDER],
-        page,
-        limit: 1,
-        total: 3,
-        pages: 3,
-      }),
-    );
+        next_cursor: "cursor-1",
+      })
+      .mockResolvedValueOnce({
+        orders: [ORDER2],
+        next_cursor: null,
+      });
     renderPage();
-    await waitFor(() =>
-      expect(screen.getByText("Page 1 of 3")).toBeInTheDocument(),
-    );
-    expect(
-      screen.getByRole("button", { name: /Previous/ }),
-    ).toBeDisabled();
+    await waitFor(() => expect(screen.getByText("Biryani House")).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
-    await waitFor(() =>
-      expect(screen.getByText("Page 2 of 3")).toBeInTheDocument(),
-    );
-    expect(mocks.fetchOrderHistory).toHaveBeenCalledWith("test-token", 2, 10);
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(screen.getByText("Picked up")).toBeInTheDocument());
+    expect(mocks.fetchOrderHistory).toHaveBeenLastCalledWith("test-token", "cursor-1", 10);
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+  });
+
+  it("groups active orders ahead of past orders", async () => {
+    const PAST: OrderHistoryEntry = {
+      ...ORDER,
+      id: "order-past",
+      status: "PICKED_UP",
+    };
+    mocks.fetchOrderHistory.mockResolvedValue({
+      orders: [PAST, ORDER],
+      next_cursor: null,
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("In progress")).toBeInTheDocument());
+    expect(screen.getByText("Past orders")).toBeInTheDocument();
+    const activeSection = screen.getByRole("region", { name: "Active orders" });
+    const pastSection = screen.getByRole("region", { name: "Past orders" });
+    expect(activeSection.querySelector("a[href='/orders/order-1']")).toBeInTheDocument();
+    expect(pastSection.querySelector("a[href='/orders/order-past']")).not.toBeInTheDocument();
   });
 });

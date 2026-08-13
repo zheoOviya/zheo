@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import AuthGate from "@/components/AuthGate";
 import StampCardProgress from "@/components/StampCardProgress";
+import { useTheme } from "@/components/ThemeProvider";
 import { useAuthStore } from "@/lib/store";
 import {
   applyReferral,
@@ -24,13 +25,7 @@ import {
   type WalletData,
 } from "@/lib/api";
 
-const SPICE_LABELS = [
-  "Mild",
-  "Gently spicy",
-  "Balanced",
-  "Fiery",
-  "Volcano",
-] as const;
+const SPICE_LABELS = ["Mild", "Gently spicy", "Balanced", "Fiery", "Volcano"] as const;
 
 function FlameIcon({ filled }: { filled: boolean }) {
   return (
@@ -60,9 +55,7 @@ function SpiceToleranceCard({
 }) {
   const accessToken = useAuthStore((s) => s.accessToken);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(
-    null,
-  );
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
   async function handleSelect(level: number) {
     if (!accessToken || saving) return;
@@ -87,14 +80,15 @@ function SpiceToleranceCard({
   return (
     <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-primary-900/40 dark:shadow-primary-900/20">
       <div className="mb-1 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-primary-700 dark:text-primary-300">Spice Profile</h2>
+        <h2 className="text-lg font-semibold text-primary-700 dark:text-primary-300">
+          Spice Profile
+        </h2>
         <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-bold text-red-600 dark:bg-red-900/30 dark:text-red-400">
           {tolerance ? SPICE_LABELS[tolerance - 1] : "Not set"}
         </span>
       </div>
       <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">
-        Set your heat tolerance (1-5). Menus will automatically hide dishes
-        spicier than this level.
+        Set your heat tolerance (1-5). Menus will automatically hide dishes spicier than this level.
       </p>
 
       <div className="flex items-center justify-center gap-2">
@@ -121,9 +115,7 @@ function SpiceToleranceCard({
         })}
       </div>
       {message && (
-        <p
-          className={`mt-3 text-center text-sm ${message.ok ? "text-green-600" : "text-red-500"}`}
-        >
+        <p className={`mt-3 text-center text-sm ${message.ok ? "text-green-600" : "text-red-500"}`}>
           {message.text}
         </p>
       )}
@@ -131,13 +123,7 @@ function SpiceToleranceCard({
   );
 }
 
-function WalletRewardsSection({
-  wallet,
-  streak,
-}: {
-  wallet: WalletData;
-  streak: StreakData;
-}) {
+function WalletRewardsSection({ wallet, streak }: { wallet: WalletData; streak: StreakData }) {
   const badgesEarned = Math.floor(streak.best_streak / 7);
 
   return (
@@ -197,8 +183,8 @@ function WalletRewardsSection({
       )}
       {streak.current_streak >= 7 && (
         <p className="mt-3 rounded-lg bg-green-50 p-2 text-xs text-green-700">
-          Active streak: pick up 1% cashback per order and a 10%-off coupon
-          lands in your wallet every 7 consecutive days.
+          Active streak: pick up 1% cashback per order and a 10%-off coupon lands in your wallet
+          every 7 consecutive days.
         </p>
       )}
 
@@ -219,9 +205,7 @@ function WalletRewardsSection({
               >
                 <div>
                   <p className="font-medium text-neutral-700">
-                    {tx.reason === "pickup_cashback"
-                      ? "Pickup cashback"
-                      : "Referral bonus"}
+                    {tx.reason === "pickup_cashback" ? "Pickup cashback" : "Referral bonus"}
                   </p>
                   <p className="text-xs text-neutral-400">
                     {new Date(tx.created_at).toLocaleDateString()}
@@ -247,9 +231,7 @@ function ReferEarnCard({
   const accessToken = useAuthStore((s) => s.accessToken);
   const [copied, setCopied] = useState(false);
   const [code, setCode] = useState("");
-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(
-    null,
-  );
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const copyCode = useCallback(async () => {
@@ -289,7 +271,9 @@ function ReferEarnCard({
   return (
     <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-primary-900/40 dark:shadow-primary-900/20">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-primary-700 dark:text-primary-300">Refer &amp; Earn</h2>
+        <h2 className="text-lg font-semibold text-primary-700 dark:text-primary-300">
+          Refer &amp; Earn
+        </h2>
         <span className="rounded-full bg-accent-100 px-3 py-1 text-xs font-bold text-accent-700 dark:bg-accent-900/30 dark:text-accent-400">
           Earn Rs {profile.bonus_amount} per friend
         </span>
@@ -349,9 +333,7 @@ function ReferEarnCard({
           </button>
         </div>
         {message && (
-          <p
-            className={`mt-2 text-sm ${message.ok ? "text-green-600" : "text-red-500"}`}
-          >
+          <p className={`mt-2 text-sm ${message.ok ? "text-green-600" : "text-red-500"}`}>
             {message.text}
           </p>
         )}
@@ -370,8 +352,7 @@ function StampCardsSection({
   loading: boolean;
 }) {
   const restaurantName = useCallback(
-    (id: string) =>
-      restaurants.find((r) => r.id === id)?.name ?? `Restaurant ${id.slice(0, 8)}`,
+    (id: string) => restaurants.find((r) => r.id === id)?.name ?? `Restaurant ${id.slice(0, 8)}`,
     [restaurants],
   );
 
@@ -391,10 +372,12 @@ function StampCardsSection({
   if (cards.length === 0) {
     return (
       <section className="rounded-2xl bg-white p-6 text-center shadow-sm dark:bg-primary-900/40 dark:shadow-primary-900/20">
-        <h2 className="text-lg font-semibold text-primary-700 dark:text-primary-300">Stamp Cards</h2>
+        <h2 className="text-lg font-semibold text-primary-700 dark:text-primary-300">
+          Stamp Cards
+        </h2>
         <p className="mt-3 text-sm text-neutral-500 dark:text-neutral-400">
-          Pick up 10 orders from the same restaurant and unlock a free item.
-          Your stamp cards will appear here.
+          Pick up 10 orders from the same restaurant and unlock a free item. Your stamp cards will
+          appear here.
         </p>
         <Link
           href="/"
@@ -408,17 +391,16 @@ function StampCardsSection({
 
   return (
     <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-primary-900/40 dark:shadow-primary-900/20">
-      <h2 className="mb-4 text-lg font-semibold text-primary-700 dark:text-primary-300">Stamp Cards</h2>
+      <h2 className="mb-4 text-lg font-semibold text-primary-700 dark:text-primary-300">
+        Stamp Cards
+      </h2>
       <div className="space-y-4">
         {cards.map((card) => (
           <div key={card.restaurant_id} className="rounded-xl bg-surface-light p-4">
             <p className="mb-3 text-sm font-semibold text-primary-800">
               {restaurantName(card.restaurant_id)}
             </p>
-            <StampCardProgress
-              stampCount={card.stamp_count}
-              rewardsEarned={card.rewards_earned}
-            />
+            <StampCardProgress stampCount={card.stamp_count} rewardsEarned={card.rewards_earned} />
           </div>
         ))}
       </div>
@@ -439,9 +421,7 @@ function VipSupportCard({
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<SupportTicketResult | null>(null);
-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(
-    null,
-  );
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
   const orderPct = Math.min(100, Math.round((vip.order_count / vip.order_threshold) * 100));
   const spendPct = Math.min(100, Math.round((vip.total_spend / vip.spend_threshold) * 100));
@@ -474,10 +454,14 @@ function VipSupportCard({
         }`}
       >
         <div>
-          <h2 className={`text-lg font-semibold ${vip.is_vip ? "text-white" : "text-primary-700 dark:text-primary-300"}`}>
+          <h2
+            className={`text-lg font-semibold ${vip.is_vip ? "text-white" : "text-primary-700 dark:text-primary-300"}`}
+          >
             VIP Customer Support
           </h2>
-          <p className={`text-sm ${vip.is_vip ? "text-primary-100" : "text-neutral-500 dark:text-neutral-400"}`}>
+          <p
+            className={`text-sm ${vip.is_vip ? "text-primary-100" : "text-neutral-500 dark:text-neutral-400"}`}
+          >
             {vip.is_vip
               ? "You get HIGH-priority support with a dedicated operations agent."
               : "More orders and spend unlock priority support."}
@@ -497,7 +481,9 @@ function VipSupportCard({
           <div className="mb-5 space-y-3">
             <div>
               <div className="mb-1 flex justify-between text-xs text-neutral-500">
-                <span>Orders · {vip.order_count} / {vip.order_threshold}</span>
+                <span>
+                  Orders · {vip.order_count} / {vip.order_threshold}
+                </span>
                 <span>{orderPct}%</span>
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-neutral-100">
@@ -509,7 +495,10 @@ function VipSupportCard({
             </div>
             <div>
               <div className="mb-1 flex justify-between text-xs text-neutral-500">
-                <span>Spend · Rs {vip.total_spend.toLocaleString()} / Rs {vip.spend_threshold.toLocaleString()}</span>
+                <span>
+                  Spend · Rs {vip.total_spend.toLocaleString()} / Rs{" "}
+                  {vip.spend_threshold.toLocaleString()}
+                </span>
                 <span>{spendPct}%</span>
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-neutral-100">
@@ -581,6 +570,7 @@ function VipSupportCard({
 
 function ProfileContent() {
   const accessToken = useAuthStore((s) => s.accessToken);
+  const { theme, toggleTheme } = useTheme();
   const [profile, setProfile] = useState<ReferralProfile | null>(null);
   const [cards, setCards] = useState<StampCard[]>([]);
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
@@ -588,41 +578,60 @@ function ProfileContent() {
   const [streak, setStreak] = useState<StreakData | null>(null);
   const [tolerance, setTolerance] = useState<number | null>(null);
   const [vip, setVip] = useState<VipStatus | null>(null);
-  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [loadingFlags, setLoadingFlags] = useState<{
+    wallet: boolean;
+    streak: boolean;
+    vip: boolean;
+    profile: boolean;
+    cards: boolean;
+    restaurants: boolean;
+  }>({
+    wallet: true,
+    streak: true,
+    vip: true,
+    profile: true,
+    cards: true,
+    restaurants: true,
+  });
 
   useEffect(() => {
     if (!accessToken) return;
     let cancelled = false;
-    (async () => {
+    const failed: string[] = [];
+
+    // Each account section loads independently: one endpoint failing must not
+    // blank the whole profile (Baymard: users give up when paths vanish).
+    async function load<T>(label: string, fn: () => Promise<T>, apply: (value: T) => void) {
       try {
-        const [p, c, r, w, s, v] = await Promise.all([
-          fetchReferralProfile(accessToken),
-          fetchStampCards(accessToken),
-          fetchRestaurants(),
-          fetchWallet(accessToken),
-          fetchStreak(accessToken),
-          fetchVipStatus(accessToken),
-        ]);
+        const value = await fn();
         if (cancelled) return;
-        setProfile(p);
-        setCards(c);
-        setRestaurants(r);
-        setWallet(w);
-        setStreak(s);
-        setVip(v);
+        apply(value);
       } catch {
-        if (!cancelled) {
-          setLoadError(
-            "Some account details could not be loaded right now. Please try again later.",
-          );
-        }
+        if (!cancelled) failed.push(label);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setLoadingFlags((f) => ({ ...f, [label]: false }));
       }
-    })();
+    }
+
+    void load("wallet", () => fetchWallet(accessToken), setWallet);
+    void load("streak", () => fetchStreak(accessToken), setStreak);
+    void load("vip", () => fetchVipStatus(accessToken), setVip);
+    void load("profile", () => fetchReferralProfile(accessToken), setProfile);
+    void load("cards", () => fetchStampCards(accessToken), setCards);
+    void load("restaurants", () => fetchRestaurants(), setRestaurants);
+
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      if (failed.length > 0) {
+        setLoadError(
+          `Some account details could not be loaded (${failed.join(", ")}). The rest of your profile is still available.`,
+        );
+      }
+    }, 250);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [accessToken]);
 
@@ -632,10 +641,45 @@ function ProfileContent() {
         <div>
           <h1 className="text-2xl font-bold text-primary-700 dark:text-primary-300">My Account</h1>
           <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-            Set your spice level, track cashback and streaks, and refer
-            friends.
+            Set your spice level, track cashback and streaks, and refer friends.
           </p>
         </div>
+        <button
+          type="button"
+          onClick={toggleTheme}
+          aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-neutral-200 bg-white text-neutral-600 shadow-sm transition-colors hover:bg-surface-light dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+        >
+          {theme === "dark" ? (
+            <svg
+              className="h-5 w-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
+              />
+            </svg>
+          ) : (
+            <svg
+              className="h-5 w-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
+              />
+            </svg>
+          )}
+        </button>
       </header>
 
       {loadError && (
@@ -648,9 +692,7 @@ function ProfileContent() {
       )}
 
       <div className="space-y-6">
-        {wallet && streak ? (
-          <WalletRewardsSection wallet={wallet} streak={streak} />
-        ) : (
+        {loadingFlags.wallet || loadingFlags.streak ? (
           <section className="rounded-2xl bg-white p-6 shadow-sm">
             <div className="h-5 w-48 animate-skeleton-teal rounded bg-primary-200" />
             <div className="mt-4 grid grid-cols-2 gap-3">
@@ -658,36 +700,35 @@ function ProfileContent() {
               <div className="h-20 animate-skeleton-teal rounded-xl bg-primary-200" />
             </div>
           </section>
-        )}
+        ) : wallet && streak ? (
+          <WalletRewardsSection wallet={wallet} streak={streak} />
+        ) : null}
 
         <SpiceToleranceCard tolerance={tolerance} onSaved={setTolerance} />
 
-        {vip ? (
-          <VipSupportCard vip={vip} onRefreshed={setVip} />
-        ) : (
+        {loadingFlags.vip ? (
           <section className="rounded-2xl bg-white p-6 shadow-sm">
             <div className="h-5 w-48 animate-skeleton-teal rounded bg-primary-200" />
             <div className="mt-4 h-4 w-full animate-skeleton-teal rounded bg-primary-200" />
             <div className="mt-2 h-4 w-2/3 animate-skeleton-teal rounded bg-primary-200" />
           </section>
-        )}
+        ) : vip ? (
+          <VipSupportCard vip={vip} onRefreshed={setVip} />
+        ) : null}
 
-        {profile ? (
-          <ReferEarnCard
-            profile={profile}
-            onUpdated={setProfile}
-          />
-        ) : (
+        {loadingFlags.profile ? (
           <section className="rounded-2xl bg-white p-6 shadow-sm">
             <div className="h-5 w-40 animate-skeleton-teal rounded bg-primary-200" />
             <div className="mt-4 h-8 w-56 animate-skeleton-teal rounded bg-primary-200" />
           </section>
-        )}
+        ) : profile ? (
+          <ReferEarnCard profile={profile} onUpdated={setProfile} />
+        ) : null}
 
         <StampCardsSection
           cards={cards}
           restaurants={restaurants}
-          loading={loading}
+          loading={loadingFlags.cards || loadingFlags.restaurants}
         />
       </div>
     </main>

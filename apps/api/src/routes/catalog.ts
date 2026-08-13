@@ -69,6 +69,7 @@ const RestaurantResponseSchema = z.object({
   is_active: z.boolean(),
   lat: z.number().nullable(),
   lng: z.number().nullable(),
+  pickup_eta_min: z.number().int().min(1).max(120),
 });
 const MenuItemResponseSchema = z.object({
   id: z.string().uuid(),
@@ -96,9 +97,39 @@ const FilterResponseSchema = z.array(MenuItemResponseSchema);
 // Seeded fixture data for the offline/memory repository.
 // lat/lng are the P04 traffic-ETA pickup origins (Mumbai, IN).
 const SEED_RESTAURANTS: RestaurantDTO[] = [
-  { id: "a0000000-0000-4000-8000-000000000001", name: "Biryani House", gst_number: "27AABCB1234A1Z5", owner_id: "e0000000-0000-4000-a000-000000000001", commission_rate: 0.08, is_active: true, lat: 19.076, lng: 72.8777 },
-  { id: "a0000000-0000-4000-8000-000000000002", name: "Green Bowl", gst_number: "27AACCG5678B1Z3", owner_id: "e0000000-0000-4000-a000-000000000002", commission_rate: 0.08, is_active: true, lat: 19.1136, lng: 72.8697 },
-  { id: "a0000000-0000-4000-8000-000000000003", name: "Closed Kitchen", gst_number: "27AADDH9012C1Z7", owner_id: "e0000000-0000-4000-a000-000000000003", commission_rate: 0.05, is_active: false, lat: 18.9647, lng: 72.8258 },
+  {
+    id: "a0000000-0000-4000-8000-000000000001",
+    name: "Biryani House",
+    gst_number: "27AABCB1234A1Z5",
+    owner_id: "e0000000-0000-4000-a000-000000000001",
+    commission_rate: 0.08,
+    is_active: true,
+    lat: 19.076,
+    lng: 72.8777,
+    pickup_eta_min: 25,
+  },
+  {
+    id: "a0000000-0000-4000-8000-000000000002",
+    name: "Green Bowl",
+    gst_number: "27AACCG5678B1Z3",
+    owner_id: "e0000000-0000-4000-a000-000000000002",
+    commission_rate: 0.08,
+    is_active: true,
+    lat: 19.1136,
+    lng: 72.8697,
+    pickup_eta_min: 15,
+  },
+  {
+    id: "a0000000-0000-4000-8000-000000000003",
+    name: "Closed Kitchen",
+    gst_number: "27AADDH9012C1Z7",
+    owner_id: "e0000000-0000-4000-a000-000000000003",
+    commission_rate: 0.05,
+    is_active: false,
+    lat: 18.9647,
+    lng: 72.8258,
+    pickup_eta_min: 30,
+  },
 ];
 
 const SEED_MENU: MenuItemDTO[] = [
@@ -220,9 +251,7 @@ catalogRouter.get(
 
     // D03: filter out items that exceed the user's spice tolerance.
     const tolerance = await effectiveSpiceToleranceOf(req);
-    const filtered = tolerance
-      ? data.filter((m) => m.spice_level <= tolerance)
-      : data;
+    const filtered = tolerance ? data.filter((m) => m.spice_level <= tolerance) : data;
 
     MenuResponseSchema.parse(filtered);
     logger.info({

@@ -4,16 +4,22 @@ import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
 import { rateLimiter } from "../middleware/rateLimiter";
 import { sharedOrderRepo, sharedPaymentRepo } from "../repositories/shared";
-import { PaymentService } from "../services/payments";
+import { PaymentService, type PaymentMethod } from "../services/payments";
 
 // ============================================
 // Payments context routes - /api/v1/payments
 // O04 Pre-paid Button: create Razorpay order,
 // receive webhook callback with idempotency.
+// Indian market methods: UPI / card / netbanking /
+// wallet route through the Razorpay checkout; "cod"
+// means pay at the pickup counter (no gateway).
 // ============================================
+
+const PaymentMethodSchema = z.enum(["upi", "card", "netbanking", "wallet", "cod"]);
 
 const CreateOrderSchema = z.object({
   order_id: z.string().uuid(),
+  method: PaymentMethodSchema.default("upi"),
 });
 
 const paymentService = new PaymentService(sharedPaymentRepo, sharedOrderRepo);
@@ -39,7 +45,10 @@ paymentsRouter.post(
       throw new AppError("VALIDATION_ERROR", "Invalid request body", 400, body.error.flatten());
     }
 
-    const result = await paymentService.createRazorpayOrder(body.data.order_id);
+    const result = await paymentService.createPaymentOrder(
+      body.data.order_id,
+      body.data.method as PaymentMethod,
+    );
 
     ok(res, result, 200);
   }),

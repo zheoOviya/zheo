@@ -95,6 +95,50 @@ describe("Payments routes", () => {
 
       expect(res.body.error.code).toBe("UNAUTHORIZED");
     });
+
+    it("supports Cash on Pickup (COD): confirms order without a gateway", async () => {
+      const { orderId } = await createDraftOrder(app);
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders())
+        .send({ order_id: orderId, method: "cod" })
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.payment_method).toBe("cod");
+      expect(res.body.data.razorpay_order_id).toBeUndefined();
+      expect(res.body.data.amount).toBe(242.8);
+      expect(res.body.data.currency).toBe("INR");
+
+      const order = await sharedOrderRepo.getById(orderId);
+      expect(order?.status).toBe("CONFIRMED");
+    });
+
+    it("records the selected online method while keeping the Razorpay order", async () => {
+      const { orderId } = await createDraftOrder(app);
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders())
+        .send({ order_id: orderId, method: "netbanking" })
+        .expect(200);
+
+      expect(res.body.data.payment_method).toBe("netbanking");
+      expect(res.body.data.razorpay_order_id).toMatch(/^order_mock_/);
+    });
+
+    it("rejects an unknown payment method", async () => {
+      const { orderId } = await createDraftOrder(app);
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders())
+        .send({ order_id: orderId, method: "bitcoin" })
+        .expect(400);
+
+      expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    });
   });
 
   describe("POST /api/v1/payments/webhook", () => {

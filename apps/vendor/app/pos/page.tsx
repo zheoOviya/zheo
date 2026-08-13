@@ -1,29 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Skeleton } from "@snakzap/ui";
-import { RESTAURANT_ID } from "@/lib/constants";
+import { syncPosMenu, simulatePosOrder, type PosSimulateResult } from "@/lib/api";
+import { shortOrderId } from "@/lib/format";
+import {
+  PageHeader,
+  SectionCard,
+  ErrorBanner,
+  EmptyPanel,
+  PrimaryButton,
+  SecondaryButton,
+} from "@/components/ui";
+
 const STORE_KEY = "snakzap_pos_store";
 
-interface SyncResult {
-  synced: number;
-}
-
-interface ImportResult {
-  order_id: string;
-  order_status: string;
-  processed: boolean;
-  idempotent: boolean;
-}
-
-interface SimulateResult {
-  menu_synced: number;
-  import: ImportResult;
-}
-
 type Activity =
-  | { kind: "synced"; synced: number }
-  | { kind: "imported"; result: ImportResult }
+  | { kind: "synced"; synced: boolean }
+  | { kind: "imported"; result: PosSimulateResult["import"] }
   | { kind: "error"; message: string };
 
 export default function PosPage() {
@@ -52,71 +45,44 @@ export default function PosPage() {
     setConnected(true);
   }
 
-  async function syncMenu() {
+  async function handleSync() {
     setSyncing(true);
     setError("");
     try {
-      const res = await fetch(
-        `/api/vendor/pos/sync-menu?restaurant_id=${RESTAURANT_ID}`,
-        { method: "POST" },
-      );
-      const body = await res.json();
-      if (body.success) {
-        const result: SyncResult = body.data;
-        setActivity((prev) => [
-          { kind: "synced", synced: result.synced },
-          ...prev,
-        ]);
-      } else {
-        setError(body.error?.message ?? "Sync failed");
-      }
-    } catch {
-      setError("Sync failed");
+      const result = await syncPosMenu();
+      setActivity((prev) => [{ kind: "synced", synced: result.synced }, ...prev]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sync failed");
     } finally {
       setSyncing(false);
     }
   }
 
-  async function sendTestOrder() {
+  async function handleTestOrder() {
     setTesting(true);
     setError("");
     try {
-      const res = await fetch(
-        `/api/vendor/pos/simulate-order?restaurant_id=${RESTAURANT_ID}`,
-        { method: "POST" },
-      );
-      const body = await res.json();
-      if (body.success) {
-        const result: SimulateResult = body.data;
-        setActivity((prev) => [
-          { kind: "imported", result: result.import },
-          ...prev,
-        ]);
-      } else {
-        setError(body.error?.message ?? "Test order failed");
-      }
-    } catch {
-      setError("Test order failed");
+      const result = await simulatePosOrder();
+      setActivity((prev) => [{ kind: "imported", result: result.import }, ...prev]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Test order failed");
     } finally {
       setTesting(false);
     }
   }
 
   return (
-    <main className="mx-auto max-w-3xl py-6">
-      <header className="mb-6">
-        <h1 className="text-2xl font-bold text-primary-400">Petpooja POS</h1>
-        <p className="mt-1 text-sm text-primary-600/60">
-          Import orders and sync your menu from the Petpooja POS.
-        </p>
-      </header>
+    <div className="space-y-6">
+      <PageHeader
+        title="Petpooja POS"
+        subtitle="Import orders and sync your menu from the Petpooja POS"
+      />
+
+      <ErrorBanner message={error} />
 
       {!connected ? (
-        <div className="rounded-2xl border border-primary-500/15 bg-primary-900/30 p-4">
-          <label
-            htmlFor="store-name"
-            className="mb-1 block text-sm font-medium text-primary-400"
-          >
+        <SectionCard title="Connect your store">
+          <label className="sr-only" htmlFor="store-name">
             Petpooja store name
           </label>
           <div className="flex gap-2">
@@ -125,119 +91,75 @@ export default function PosPage() {
               value={storeName}
               onChange={(e) => setStoreName(e.target.value)}
               placeholder="e.g. Biryani House"
-              className="w-full rounded-lg border border-primary-500/20 bg-primary-950/60 px-3 py-2 text-sm text-primary-100 placeholder:text-primary-600/40 focus:border-primary-500 focus:outline-none"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder-slate-400 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
             />
-            <button
-              onClick={connect}
-              className="shrink-0 rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-600"
-            >
+            <PrimaryButton onClick={connect} disabled={!storeName.trim()}>
               Connect
-            </button>
+            </PrimaryButton>
           </div>
-          {error ? (
-            <p className="mt-2 text-sm text-red-300">{error}</p>
-          ) : null}
-        </div>
+          <p className="mt-3 text-xs text-slate-400">
+            Orders arrive over a webhook. In demo mode you can send a simulated order to see the
+            full flow.
+          </p>
+        </SectionCard>
       ) : (
         <>
-          <div className="mb-4 flex items-center justify-between rounded-2xl border border-primary-500/15 bg-primary-900/30 p-4">
+          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
             <div>
-              <p className="text-sm font-semibold text-primary-300">
-                {storeName}
-              </p>
-              <p className="text-xs text-primary-600/60">
-                Connected via webhook · <span className="text-green-400">live</span>
+              <p className="text-sm font-semibold text-slate-800">{storeName}</p>
+              <p className="text-xs text-slate-400">
+                Connected via webhook · <span className="font-medium text-emerald-600">live</span>
               </p>
             </div>
-            <button
+            <SecondaryButton
               onClick={() => {
                 window.localStorage.removeItem(STORE_KEY);
                 setConnected(false);
                 setStoreName("");
               }}
-              className="rounded-lg border border-primary-500/20 px-3 py-1.5 text-xs text-primary-600/60 hover:text-primary-400"
+              className="min-h-[32px] px-3 py-1 text-xs"
             >
               Disconnect
-            </button>
+            </SecondaryButton>
           </div>
 
-          <div className="mb-4 grid grid-cols-2 gap-4">
-            <button
-              onClick={syncMenu}
-              disabled={syncing}
-              className="rounded-xl bg-primary-500 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:opacity-60"
-            >
-              {syncing ? (
-                <span className="inline-flex items-center gap-2">
-                  <Skeleton className="h-3 w-12" />
-                  Syncing…
-                </span>
-              ) : (
-                "Sync Menu Now"
-              )}
-            </button>
-            <button
-              onClick={sendTestOrder}
-              disabled={testing}
-              className="rounded-xl bg-amber-500 px-4 py-3 text-sm font-semibold text-amber-950 transition-colors hover:bg-amber-400 disabled:opacity-60"
-            >
-              {testing ? (
-                <span className="inline-flex items-center gap-2">
-                  <Skeleton className="h-3 w-12" />
-                  Sending…
-                </span>
-              ) : (
-                "Send Test Order"
-              )}
-            </button>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <PrimaryButton onClick={handleSync} disabled={syncing}>
+              {syncing ? "Syncing..." : "Sync Menu Now"}
+            </PrimaryButton>
+            <SecondaryButton onClick={handleTestOrder} disabled={testing}>
+              {testing ? "Sending..." : "Send Test Order"}
+            </SecondaryButton>
           </div>
 
-          {error ? (
-            <p className="mb-4 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
-              {error}
-            </p>
-          ) : null}
-
-          <section className="rounded-2xl border border-primary-500/15 bg-primary-900/30 p-4">
-            <h2 className="mb-3 text-sm font-semibold text-primary-400">
-              Activity
-            </h2>
+          <SectionCard title="Activity" subtitle="Recent syncs and imported orders">
             {activity.length === 0 ? (
-              <p className="text-sm text-primary-600/60">
-                Nothing yet. Sync your menu or send a test order.
-              </p>
+              <EmptyPanel title="Nothing yet" description="Sync your menu or send a test order." />
             ) : (
-              <ul className="space-y-2">
+              <ul className="divide-y divide-slate-100">
                 {activity.map((entry, index) => (
-                  <li
-                    key={`${entry.kind}-${index}`}
-                    className="rounded-lg border border-primary-500/10 bg-primary-950/40 px-3 py-2 text-sm"
-                  >
+                  <li key={`${entry.kind}-${index}`} className="py-2.5 text-sm">
                     {entry.kind === "synced" ? (
-                      <span className="text-primary-300">
-                        Menu sync complete · <strong>{entry.synced}</strong> items
+                      <span className="text-slate-700">
+                        Menu sync complete · <strong className="text-teal-700">done</strong>
                       </span>
                     ) : entry.kind === "imported" ? (
-                      <span className="text-primary-300">
+                      <span className="text-slate-700">
                         Order imported ·{" "}
-                        <strong className="text-green-400">
-                          {entry.result.order_status}
-                        </strong>{" "}
-                        ·{" "}
-                        <span className="font-mono text-xs">
-                          {entry.result.order_id.slice(0, 8)}…
-                        </span>
+                        <strong className="text-emerald-600">{entry.result.order_status}</strong> ·{" "}
+                        <span className="font-mono">#{shortOrderId(entry.result.order_id)}</span>
+                        {entry.result.idempotent ? " (duplicate, ignored)" : ""}
                       </span>
                     ) : (
-                      <span className="text-red-300">{entry.message}</span>
+                      <span className="text-red-600">{entry.message}</span>
                     )}
                   </li>
                 ))}
               </ul>
             )}
-          </section>
+          </SectionCard>
         </>
       )}
-    </main>
+    </div>
   );
 }

@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import AuthGate from "@/components/AuthGate";
 import { useAuthStore } from "@/lib/store";
 import { useCartStore } from "@/lib/store";
-import { createPaymentOrder, simulatePaymentWebhook } from "@/lib/api";
+import { createPaymentOrder, simulatePaymentWebhook, type PaymentMethod } from "@/lib/api";
 import { loadRazorpayScript, createRazorpayInstance } from "@/lib/razorpay";
 import { computePriceBreakdown, formatINR } from "@/lib/pricing";
 import { EmptyState } from "@snakzap/ui";
@@ -18,6 +19,93 @@ interface PickupSlot {
   available: boolean;
   current_orders: number;
   max_capacity: number;
+}
+
+const PAYMENT_METHODS: {
+  id: PaymentMethod;
+  label: string;
+  description: string;
+  recommended?: boolean;
+}[] = [
+  {
+    id: "upi",
+    label: "UPI",
+    description: "GPay, PhonePe, Paytm & more",
+    recommended: true,
+  },
+  {
+    id: "card",
+    label: "Card",
+    description: "Credit, Debit & RuPay cards",
+  },
+  {
+    id: "netbanking",
+    label: "Net Banking",
+    description: "All major banks",
+  },
+  {
+    id: "wallet",
+    label: "Wallets",
+    description: "Paytm, Amazon Pay & more",
+  },
+  {
+    id: "cod",
+    label: "Cash on Pickup",
+    description: "Pay at the counter when you pick up",
+  },
+];
+
+function PaymentMethodSelector({
+  value,
+  onChange,
+}: {
+  value: PaymentMethod;
+  onChange: (method: PaymentMethod) => void;
+}) {
+  return (
+    <div className="rounded-2xl bg-white p-6 shadow-sm">
+      <h2 className="mb-1 text-lg font-semibold text-neutral-700">Payment Method</h2>
+      <p className="mb-4 text-sm text-neutral-500">Choose how you want to pay for your order.</p>
+      <div role="radiogroup" aria-label="Payment method selection" className="space-y-2">
+        {PAYMENT_METHODS.map((m) => {
+          const selected = value === m.id;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => onChange(m.id)}
+              className={`flex w-full items-center gap-3 rounded-xl border-2 p-4 text-left transition-colors ${
+                selected
+                  ? "border-primary-500 bg-primary-500/5"
+                  : "border-primary-500/15 bg-white hover:border-primary-500/40"
+              }`}
+            >
+              <span
+                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 ${
+                  selected ? "border-primary-500" : "border-neutral-300"
+                }`}
+              >
+                {selected && <span className="h-2.5 w-2.5 rounded-full bg-primary-500" />}
+              </span>
+              <span>
+                <span className="block text-sm font-semibold text-neutral-800">
+                  {m.label}
+                  {m.recommended && (
+                    <span className="ml-2 rounded-full bg-primary-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary-700">
+                      Recommended
+                    </span>
+                  )}
+                </span>
+                <span className="block text-xs text-neutral-500">{m.description}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function PickupSlotSelector({
@@ -41,9 +129,7 @@ function PickupSlotSelector({
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(
-        `/api/v1/restaurants/${restaurantId}/pickup-slots?date=${today}`,
-      );
+      const res = await fetch(`/api/v1/restaurants/${restaurantId}/pickup-slots?date=${today}`);
       if (!res.ok) throw new Error("Failed to load slots");
       const body = await res.json();
       setSlots(body.data.slots);
@@ -70,9 +156,7 @@ function PickupSlotSelector({
       setFocusedIndex((prev) => (prev + 1) % enabledSlots.length);
     } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
       e.preventDefault();
-      setFocusedIndex(
-        (prev) => (prev - 1 + enabledSlots.length) % enabledSlots.length,
-      );
+      setFocusedIndex((prev) => (prev - 1 + enabledSlots.length) % enabledSlots.length);
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       const slot = enabledSlots[focusedIndex];
@@ -85,9 +169,7 @@ function PickupSlotSelector({
 
   return (
     <div className="rounded-2xl bg-white p-6 shadow-sm">
-      <h2 className="mb-4 text-lg font-semibold text-neutral-700">
-        Pickup Time
-      </h2>
+      <h2 className="mb-4 text-lg font-semibold text-neutral-700">Pickup Time</h2>
 
       <div role="radiogroup" aria-label="Pickup time selection" onKeyDown={handleKeyDown}>
         <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-primary-500/20 p-4">
@@ -96,15 +178,14 @@ function PickupSlotSelector({
             name="pickup_slot"
             className="h-4 w-4 accent-primary-500"
             checked={selectedSlot === null}
-            onChange={() => { setShowGrid(false); onSelect(null); }}
+            onChange={() => {
+              setShowGrid(false);
+              onSelect(null);
+            }}
           />
           <div>
-            <p className="text-sm font-semibold text-neutral-700">
-              ASAP (~15 min)
-            </p>
-            <p className="text-xs text-neutral-400">
-              Pick up as soon as it is ready
-            </p>
+            <p className="text-sm font-semibold text-neutral-700">ASAP (~15 min)</p>
+            <p className="text-xs text-neutral-400">Pick up as soon as it is ready</p>
           </div>
         </label>
 
@@ -118,12 +199,8 @@ function PickupSlotSelector({
               onChange={() => setShowGrid(true)}
             />
             <div>
-              <p className="text-sm font-semibold text-neutral-700">
-                Schedule for later
-              </p>
-              <p className="text-xs text-neutral-400">
-                Choose a specific pickup time
-              </p>
+              <p className="text-sm font-semibold text-neutral-700">Schedule for later</p>
+              <p className="text-xs text-neutral-400">Choose a specific pickup time</p>
             </div>
           </label>
 
@@ -172,9 +249,7 @@ function PickupSlotSelector({
                         }`}
                       >
                         <div>{slot.label}</div>
-                        {!slot.available && (
-                          <div className="mt-0.5 text-2xs">Full</div>
-                        )}
+                        {!slot.available && <div className="mt-0.5 text-2xs">Full</div>}
                       </button>
                     );
                   })}
@@ -184,9 +259,7 @@ function PickupSlotSelector({
           )}
 
           {selectedSlot && (
-            <p className="mt-2 text-xs text-primary-600">
-              Pickup at: {selectedSlot}
-            </p>
+            <p className="mt-2 text-xs text-primary-600">Pickup at: {selectedSlot}</p>
           )}
         </div>
       </div>
@@ -207,6 +280,7 @@ function CheckoutContent() {
   const [error, setError] = useState("");
   const [processing, setProcessing] = useState(false);
   const [pickupSlot, setPickupSlot] = useState<string | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("upi");
   const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
@@ -291,8 +365,16 @@ function CheckoutContent() {
       const createdOrderId = body.data.id;
       setOrderId(createdOrderId);
 
-      const payment = await createPaymentOrder(createdOrderId, accessToken);
-      setRpOrderId(payment.razorpay_order_id);
+      const payment = await createPaymentOrder(createdOrderId, accessToken, paymentMethod);
+
+      if (payment.payment_method === "cod") {
+        setAmount(payment.amount);
+        clear();
+        setStep("success");
+        return;
+      }
+
+      setRpOrderId(payment.razorpay_order_id ?? null);
       setAmount(payment.amount);
       setStep("payment");
     } catch (err) {
@@ -309,24 +391,65 @@ function CheckoutContent() {
         </header>
         <div className="rounded-2xl bg-white p-8 text-center shadow-sm">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary-500/10">
-            <svg className="h-8 w-8 text-primary-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <svg
+              className="h-8 w-8 text-primary-500"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          <h2 className="text-xl font-semibold text-neutral-700">Order Confirmed!</h2>
-          <p className="mt-2 text-sm text-neutral-500">
-            Your order has been placed and payment is being processed.
-          </p>
-          <p className="mt-1 text-xs text-neutral-400">
-            You will receive a pickup OTP when your order is ready.
-          </p>
-          <button
-            type="button"
-            onClick={() => router.push("/")}
-            className="mt-6 min-h-[44px] rounded-full bg-primary-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
-          >
-            Back to Home
-          </button>
+          <h2 className="text-xl font-semibold text-neutral-700 dark:text-neutral-100">
+            Order Confirmed!
+          </h2>
+          {orderId && (
+            <p className="mt-2 text-sm text-neutral-500">
+              Order #
+              <span className="font-mono font-semibold text-primary-700">
+                {orderId.slice(-6).toUpperCase()}
+              </span>
+            </p>
+          )}
+          {paymentMethod === "cod" ? (
+            <>
+              <p className="mt-2 text-sm text-neutral-500">
+                Please pay{" "}
+                <span className="font-semibold text-primary-700">{formatINR(amount)}</span> in cash
+                at the pickup counter.
+              </p>
+              <p className="mt-1 text-xs text-neutral-400">
+                You will receive a pickup OTP when your order is ready.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="mt-2 text-sm text-neutral-500">
+                Your order has been placed and payment is being processed.
+              </p>
+              <p className="mt-1 text-xs text-neutral-400">
+                You will receive a pickup OTP when your order is ready.
+              </p>
+            </>
+          )}
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+            {orderId && (
+              <Link
+                href={`/orders/${orderId}`}
+                className="inline-flex min-h-[44px] items-center justify-center rounded-full bg-primary px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
+              >
+                Track Order →
+              </Link>
+            )}
+            <button
+              type="button"
+              onClick={() => router.push("/")}
+              className="min-h-[44px] rounded-full border border-primary-500/30 px-6 py-2.5 text-sm font-semibold text-primary-700 hover:bg-surface-light dark:text-primary-400"
+            >
+              Back to Home
+            </button>
+          </div>
         </div>
       </main>
     );
@@ -340,7 +463,13 @@ function CheckoutContent() {
         </header>
         <div className="rounded-2xl bg-white p-8 text-center shadow-sm">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-100">
-            <svg className="h-8 w-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <svg
+              className="h-8 w-8 text-red-500"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </div>
@@ -453,15 +582,10 @@ function CheckoutContent() {
             </h2>
             <ul className="space-y-3">
               {items.map((item) => {
-                const customTotal = item.customizations.reduce(
-                  (s, c) => s + c.price_delta, 0,
-                );
+                const customTotal = item.customizations.reduce((s, c) => s + c.price_delta, 0);
                 const unitPrice = item.basePrice + customTotal;
                 return (
-                  <li
-                    key={item.menuItemId}
-                    className="flex justify-between text-sm"
-                  >
+                  <li key={item.menuItemId} className="flex justify-between text-sm">
                     <span className="text-neutral-600">
                       {item.name} x{item.quantity}
                       {item.customizations.length > 0 &&
@@ -510,10 +634,10 @@ function CheckoutContent() {
             onSelect={setPickupSlot}
           />
 
+          <PaymentMethodSelector value={paymentMethod} onChange={setPaymentMethod} />
+
           {error && (
-            <p className="rounded-xl bg-red-50 p-3 text-center text-sm text-red-600">
-              {error}
-            </p>
+            <p className="rounded-xl bg-red-50 p-3 text-center text-sm text-red-600">{error}</p>
           )}
 
           <button
@@ -524,7 +648,9 @@ function CheckoutContent() {
           >
             {step === "creating"
               ? "Creating Order..."
-              : `Place Pickup Order (${formatINR(breakdown.total)})`}
+              : paymentMethod === "cod"
+                ? `Place Pickup Order (${formatINR(breakdown.total)}) — Pay at Counter`
+                : `Place Pickup Order & Pay (${formatINR(breakdown.total)})`}
           </button>
 
           <button
