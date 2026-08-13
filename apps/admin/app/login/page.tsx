@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { storeSession } from "../../lib/auth";
+import { sendAdminOtp, verifyAdminOtp } from "../../lib/authFlow";
 import { verifyTotpLogin } from "../../lib/totp";
 
 const FP_STORAGE_KEY = "snakzap_admin_device_fingerprint";
@@ -19,33 +20,32 @@ function getDeviceFingerprint(): string {
   }
 }
 
-type Step = "phone" | "otp" | "totp";
+type Step = "email" | "otp" | "totp";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [totpCode, setTotpCode] = useState("");
   const [totpTicket, setTotpTicket] = useState("");
-  const [step, setStep] = useState<Step>("phone");
+  const [phone, setPhone] = useState("");
+  const [phoneMasked, setPhoneMasked] = useState("");
+  const [step, setStep] = useState<Step>("email");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [demoOtp, setDemoOtp] = useState("");
+
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
   async function sendOtp() {
     setError("");
     setLoading(true);
     try {
-      const res = await fetch("/api/v1/auth/send-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone }),
-      });
-      const body = await res.json();
-      if (!body.success) throw new Error(body.error?.message ?? "Failed to send OTP");
-      if (body.data?.demoOtp) {
-        setDemoOtp(body.data.demoOtp);
-        setOtp(body.data.demoOtp);
+      const result = await sendAdminOtp(email);
+      setPhoneMasked(result.phoneMasked);
+      if (result.demoOtp) {
+        setDemoOtp(result.demoOtp);
+        setOtp(result.demoOtp);
       }
       setStep("otp");
     } catch (e) {
@@ -59,24 +59,19 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      const res = await fetch("/api/v1/auth/verify-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          phone,
-          otp,
-          device_fingerprint: getDeviceFingerprint(),
-        }),
+      const result = await verifyAdminOtp({
+        email,
+        otp,
+        device_fingerprint: getDeviceFingerprint(),
       });
-      const body = await res.json();
-      if (!body.success) throw new Error(body.error?.message ?? "Verification failed");
-      if (body.data.totp_required) {
-        // 2FA step-up: stash the short-lived ticket and ask for the code.
-        setTotpTicket(body.data.totp_ticket);
+      if (result.totp_required) {
+        // 2FA step-up: stash the ticket + phone, ask for the authenticator code.
+        setTotpTicket(result.totp_ticket ?? "");
+        setPhone(result.phone ?? "");
         setStep("totp");
         return;
       }
-      storeSession(body.data.access_token);
+      storeSession(result.access_token!);
       router.replace("/dashboard");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
@@ -111,38 +106,38 @@ export default function LoginPage() {
         <div className="mb-6 text-center">
           <h1 className="text-2xl font-bold text-primary-500">SnakZap Admin</h1>
           <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-            {step === "totp"
-              ? "Enter your authenticator code"
-              : "Sign in with your phone number"}
+            {step === "email" && "Sign in with your operator email"}
+            {step === "otp" && "Enter the OTP sent to your mobile"}
+            {step === "totp" && "Enter your authenticator code"}
           </p>
         </div>
 
-        {step === "phone" && (
+        {step === "email" && (
           <div className="space-y-4">
             <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-              Phone Number
+              Email Address
             </label>
             <input
-              type="tel"
-              placeholder="+919876543210"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              type="email"
+              placeholder="admin@snakzap.dev"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-4 py-3 text-sm text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none"
               disabled={loading}
             />
             {error && <p className="text-sm text-red-500">{error}</p>}
             <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 px-3 py-2.5 text-xs text-neutral-500 dark:text-neutral-400">
               <p className="font-semibold uppercase tracking-wide">Demo accounts</p>
-              <p className="mt-1 font-mono">+919876000000 — Admin</p>
-              <p className="font-mono">+919876000099 — Super Admin</p>
+              <p className="mt-1 font-mono">admin@snakzap.dev — Admin</p>
+              <p className="font-mono">superadmin@snakzap.dev — Super Admin</p>
               <p className="mt-1 text-neutral-400">
-                Any 6-digit code works in this preview; it auto-fills on the
-                next step.
+                The OTP is sent to the linked mobile number. Any 6-digit code
+                works in this preview and auto-fills on the next step.
               </p>
             </div>
             <button
               onClick={sendOtp}
-              disabled={loading || phone.length < 10}
+              disabled={loading || !emailValid}
               className="w-full rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 px-4 py-3 text-sm font-semibold text-white transition-colors"
             >
               {loading ? "Sending..." : "Send OTP"}
@@ -153,7 +148,8 @@ export default function LoginPage() {
         {step === "otp" && (
           <div className="space-y-4">
             <p className="text-sm text-neutral-600 dark:text-neutral-400 text-center">
-              Enter the 6-digit code sent to {phone}
+              OTP sent to {phoneMasked || "your linked mobile number"} for{" "}
+              <span className="font-medium">{email}</span>
             </p>
             {demoOtp && (
               <div className="rounded-xl border border-dashed border-primary-300 dark:border-primary-800 bg-primary-50 dark:bg-primary-950 px-4 py-3 text-center">
@@ -187,10 +183,10 @@ export default function LoginPage() {
               {loading ? "Verifying..." : "Continue"}
             </button>
             <button
-              onClick={() => { setStep("phone"); setError(""); }}
+              onClick={() => { setStep("email"); setError(""); setDemoOtp(""); }}
               className="w-full text-sm text-neutral-500 dark:text-neutral-400 hover:text-primary-500 transition-colors"
             >
-              Change phone number
+              Change email
             </button>
           </div>
         )}
@@ -220,10 +216,10 @@ export default function LoginPage() {
               {loading ? "Signing in..." : "Sign In"}
             </button>
             <button
-              onClick={() => { setStep("phone"); setError(""); setTotpCode(""); }}
+              onClick={() => { setStep("email"); setError(""); setTotpCode(""); }}
               className="w-full text-sm text-neutral-500 dark:text-neutral-400 hover:text-primary-500 transition-colors"
             >
-              Back to phone number
+              Back to email
             </button>
           </div>
         )}
