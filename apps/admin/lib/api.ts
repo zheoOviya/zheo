@@ -54,7 +54,7 @@ interface UserDTO {
   created_at: string;
 }
 
-interface UserListResponse {
+export interface UserListResponse {
   items: UserDTO[];
   total: number;
 }
@@ -76,7 +76,7 @@ interface TicketListResponse {
   total: number;
 }
 
-interface KillSwitchState {
+export interface KillSwitchState {
   name: string;
   description: string;
   enabled: boolean;

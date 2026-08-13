@@ -15,6 +15,7 @@
     "@snakzap/types": "workspace:*",
     "@snakzap/ui": "workspace:*",
     "next": "^15.1.0",
+    "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^3.23.0",
@@ -23,6 +24,7 @@
   "devDependencies": {
     "@testing-library/react": "^16.3.2",
     "@types/node": "^22.0.0",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "jsdom": "^30.0.1",

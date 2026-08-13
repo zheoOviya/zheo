@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { fetchDashboardMetrics, type DashboardMetrics } from "../../../lib/api";
+import { getAccessToken } from "../../../lib/auth";
+import { getTotpStatus } from "../../../lib/totp";
 import Link from "next/link";
 
 const fmt = (n: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
@@ -37,6 +39,7 @@ const TREND_DECREASING = [300, 290, 250, 220, 200, 180, 150];
 export default function DashboardPage() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [error, setError] = useState("");
+  const [totpEnabled, setTotpEnabled] = useState<boolean | null>(null);
 
   const load = useCallback(() => {
     fetchDashboardMetrics()
@@ -49,6 +52,14 @@ export default function DashboardPage() {
     const t = setInterval(load, 60000);
     return () => clearInterval(t);
   }, [load]);
+
+  useEffect(() => {
+    const token = getAccessToken();
+    if (!token) return;
+    getTotpStatus(token)
+      .then((s) => setTotpEnabled(s.totp_enabled))
+      .catch(() => setTotpEnabled(null));
+  }, []);
 
   if (error) {
     return (
@@ -104,6 +115,23 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {totpEnabled === false && (
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950 p-4">
+          <div className="flex items-center gap-3">
+            <span className="flex h-3 w-3 rounded-full bg-amber-500" aria-hidden="true" />
+            <p className="text-sm text-amber-700 dark:text-amber-400">
+              Two-factor authentication is not enabled on this account.
+            </p>
+          </div>
+          <Link
+            href="/security"
+            className="rounded-lg bg-amber-500 hover:bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-colors"
+          >
+            Enable 2FA
+          </Link>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-neutral-400 dark:text-neutral-500">
           Dashboard

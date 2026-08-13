@@ -2,6 +2,22 @@
 
 import { useState } from "react";
 import Sidebar from "../../components/Sidebar";
+import { getUserRole, logout } from "../../lib/auth";
+
+function RoleBadge() {
+  const role = getUserRole() ?? "ADMIN";
+  const roleColor =
+    role === "SUPER_ADMIN"
+      ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+      : role === "ADMIN"
+        ? "bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
+        : "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300";
+  return (
+    <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${roleColor}`}>
+      {role}
+    </span>
+  );
+}
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -25,7 +41,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </div>
       )}
       <div className="md:pl-64">
-        <header className="sticky top-0 z-20 flex h-16 items-center gap-4 border-b border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-950/80 backdrop-blur px-4 md:px-8">
+        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-950/80 backdrop-blur px-4 md:px-8">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="md:hidden rounded-lg p-2 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900"
@@ -38,6 +54,22 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <h1 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
             SnakZap Ops Console
           </h1>
+          <div className="ml-auto flex items-center gap-3">
+            <RoleBadge />
+            <button
+              onClick={async () => {
+                await logout();
+                window.location.href = "/login";
+              }}
+              className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-red-500 transition-colors"
+              aria-label="Sign out"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
+              </svg>
+              <span className="hidden sm:inline">Sign Out</span>
+            </button>
+          </div>
         </header>
         <main className="p-4 md:p-8">{children}</main>
       </div>

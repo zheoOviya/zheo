@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { storeSession } from "../../lib/auth";
+import { verifyTotpLogin } from "../../lib/totp";
 
 const FP_STORAGE_KEY = "snakzap_admin_device_fingerprint";
 
@@ -18,11 +19,15 @@ function getDeviceFingerprint(): string {
   }
 }
 
+type Step = "phone" | "otp" | "totp";
+
 export default function LoginPage() {
   const router = useRouter();
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
-  const [step, setStep] = useState<"phone" | "otp">("phone");
+  const [totpCode, setTotpCode] = useState("");
+  const [totpTicket, setTotpTicket] = useState("");
+  const [step, setStep] = useState<Step>("phone");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -60,10 +65,36 @@ export default function LoginPage() {
       });
       const body = await res.json();
       if (!body.success) throw new Error(body.error?.message ?? "Verification failed");
+      if (body.data.totp_required) {
+        // 2FA step-up: stash the short-lived ticket and ask for the code.
+        setTotpTicket(body.data.totp_ticket);
+        setStep("totp");
+        return;
+      }
       storeSession(body.data.access_token);
       router.replace("/dashboard");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function verifyTotp() {
+    setError("");
+    setLoading(true);
+    try {
+      const result = await verifyTotpLogin({
+        totp_ticket: totpTicket,
+        code: totpCode,
+        device_fingerprint: getDeviceFingerprint(),
+        phone,
+      });
+      storeSession(result.access_token);
+      router.replace("/dashboard");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Network error");
+      setTotpCode("");
     } finally {
       setLoading(false);
     }
@@ -75,11 +106,13 @@ export default function LoginPage() {
         <div className="mb-6 text-center">
           <h1 className="text-2xl font-bold text-primary-500">SnakZap Admin</h1>
           <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-            Sign in with your phone number
+            {step === "totp"
+              ? "Enter your authenticator code"
+              : "Sign in with your phone number"}
           </p>
         </div>
 
-        {step === "phone" ? (
+        {step === "phone" && (
           <div className="space-y-4">
             <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
               Phone Number
@@ -101,7 +134,9 @@ export default function LoginPage() {
               {loading ? "Sending..." : "Send OTP"}
             </button>
           </div>
-        ) : (
+        )}
+
+        {step === "otp" && (
           <div className="space-y-4">
             <p className="text-sm text-neutral-600 dark:text-neutral-400 text-center">
               Enter the 6-digit code sent to {phone}
@@ -122,13 +157,46 @@ export default function LoginPage() {
               disabled={loading || otp.length !== 6}
               className="w-full rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 px-4 py-3 text-sm font-semibold text-white transition-colors"
             >
-              {loading ? "Verifying..." : "Sign In"}
+              {loading ? "Verifying..." : "Continue"}
             </button>
             <button
               onClick={() => { setStep("phone"); setError(""); }}
               className="w-full text-sm text-neutral-500 dark:text-neutral-400 hover:text-primary-500 transition-colors"
             >
               Change phone number
+            </button>
+          </div>
+        )}
+
+        {step === "totp" && (
+          <div className="space-y-4">
+            <p className="text-sm text-neutral-600 dark:text-neutral-400 text-center">
+              This account requires a second factor. Enter the 6-digit code
+              from your authenticator app.
+            </p>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              placeholder="000000"
+              value={totpCode}
+              onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-4 py-3 text-center text-lg tracking-[0.5em] text-neutral-900 dark:text-neutral-100 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none"
+              disabled={loading}
+            />
+            {error && <p className="text-sm text-red-500 text-center">{error}</p>}
+            <button
+              onClick={verifyTotp}
+              disabled={loading || totpCode.length !== 6}
+              className="w-full rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 px-4 py-3 text-sm font-semibold text-white transition-colors"
+            >
+              {loading ? "Signing in..." : "Sign In"}
+            </button>
+            <button
+              onClick={() => { setStep("phone"); setError(""); setTotpCode(""); }}
+              className="w-full text-sm text-neutral-500 dark:text-neutral-400 hover:text-primary-500 transition-colors"
+            >
+              Back to phone number
             </button>
           </div>
         )}
