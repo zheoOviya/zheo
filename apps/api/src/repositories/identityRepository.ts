@@ -27,6 +27,11 @@ export interface IdentityUser {
   /** A-06: admin user suspension flag. */
   is_suspended: boolean;
   suspended_reason?: string | null;
+  /** TOTP 2FA: base32 secret. Present once enrollment is started. */
+  totp_secret?: string | null;
+  /** TOTP 2FA: whether the authenticator code was confirmed & active. */
+  totp_enabled: boolean;
+  totp_confirmed_at?: string | null;
   created_at: string;
 }
 
@@ -48,6 +53,12 @@ export interface IdentityRepository {
   reactivate(userId: string): Promise<IdentityUser | null>;
   /** A-06: update user role (SUPER_ADMIN only). */
   updateRole(userId: string, role: IdentityUser["role"]): Promise<IdentityUser | null>;
+  /** 2FA: persist a fresh TOTP secret (enrollment started, not yet active). */
+  setTotpSecret(userId: string, secret: string): Promise<IdentityUser | null>;
+  /** 2FA: mark TOTP as enabled+confirmed. */
+  enableTotp(userId: string): Promise<IdentityUser | null>;
+  /** 2FA: clear secret and disable TOTP. */
+  disableTotp(userId: string): Promise<IdentityUser | null>;
   /** Test helper: seeds a user with a known id/phone pair. */
   _seed(user: IdentityUser): void;
   _reset(): void;
@@ -76,11 +87,48 @@ export class MemoryIdentityRepository implements IdentityRepository {
       phone,
       role,
       is_suspended: false,
+      totp_enabled: false,
       created_at: new Date().toISOString(),
     };
     this.users.set(phone, user);
     this.usersById.set(user.id, user);
     return user;
+  }
+
+  async setTotpSecret(userId: string, secret: string): Promise<IdentityUser | null> {
+    const user = this.usersById.get(userId);
+    if (!user) return null;
+    const updated: IdentityUser = { ...user, totp_secret: secret };
+    this.users.set(user.phone, updated);
+    this.usersById.set(userId, updated);
+    return updated;
+  }
+
+  async enableTotp(userId: string): Promise<IdentityUser | null> {
+    const user = this.usersById.get(userId);
+    if (!user) return null;
+    const updated: IdentityUser = {
+      ...user,
+      totp_enabled: true,
+      totp_confirmed_at: new Date().toISOString(),
+    };
+    this.users.set(user.phone, updated);
+    this.usersById.set(userId, updated);
+    return updated;
+  }
+
+  async disableTotp(userId: string): Promise<IdentityUser | null> {
+    const user = this.usersById.get(userId);
+    if (!user) return null;
+    const updated: IdentityUser = {
+      ...user,
+      totp_enabled: false,
+      totp_secret: null,
+      totp_confirmed_at: null,
+    };
+    this.users.set(user.phone, updated);
+    this.usersById.set(userId, updated);
+    return updated;
   }
 
   _seed(user: IdentityUser): void {

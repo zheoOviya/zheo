@@ -30,6 +30,10 @@ export const users = pgTable(
     role: userRoleEnum("role").notNull().default("CONSUMER"),
     is_suspended: boolean("is_suspended").notNull().default(false),
     suspended_reason: text("suspended_reason"),
+    /** TOTP 2FA (authenticator app). Secret stored base32-encoded. */
+    totp_secret: text("totp_secret"),
+    totp_enabled: boolean("totp_enabled").notNull().default(false),
+    totp_confirmed_at: timestamp("totp_confirmed_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

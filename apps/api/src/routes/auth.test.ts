@@ -4,11 +4,16 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { ApiEnvelopeSchema } from "@snakzap/types";
 import { createApp } from "../app";
 import { getRedis, resetRedisForTests } from "../lib/redis";
+import { sharedIdentityRepo } from "../repositories/shared";
+import { generateTotpCode } from "../services/totp";
 
 const PHONE = "+919876543210";
 const LOGOUT_PHONE = "+919876000099";
 const FP_A = "fp-device-a-1234567890";
 const FP_B = "fp-device-b-1234567890";
+
+// RFC 6238 Appendix B test secret (ASCII "12345678901234567890").
+const RFC_SECRET_BASE32 = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 
 describe("Auth routes (integration)", () => {
   let app: Express;
@@ -186,5 +191,248 @@ describe("Auth routes (integration)", () => {
       .expect(429);
     expect(blocked.body.success).toBe(false);
     expect(blocked.body.error.code).toBe("RATE_LIMIT_EXCEEDED");
+  });
+});
+
+// ============================================
+// TOTP 2FA (2-step login)
+// ============================================
+
+describe("TOTP 2FA (2-step login)", () => {
+  const TOTP_PHONE = "+919876000050";
+  const ENROLL_PHONE = "+919876000051";
+  const TOTP_USER_ID = "u-totp-test-0000000000001";
+  const ENROLL_USER_ID = "u-totp-enroll-00000000001";
+
+  let app: Express;
+
+  beforeEach(() => {
+    resetRedisForTests();
+    sharedIdentityRepo._reset();
+    app = createApp();
+  });
+
+  async function requestOtp(phone: string) {
+    const res = await request(app)
+      .post("/api/v1/auth/send-otp")
+      .send({ phone })
+      .expect(200);
+    return res.body.data.demoOtp as string;
+  }
+
+  async function loginNormal(phone: string, device = FP_A): Promise<string> {
+    const otp = await requestOtp(phone);
+    const res = await request(app)
+      .post("/api/v1/auth/verify-otp")
+      .send({ phone, otp, device_fingerprint: device })
+      .expect(200);
+    return res.body.data.access_token as string;
+  }
+
+  function seedTotpEnabledUser() {
+    sharedIdentityRepo._seed({
+      id: TOTP_USER_ID,
+      phone: TOTP_PHONE,
+      role: "ADMIN",
+      is_suspended: false,
+      totp_secret: RFC_SECRET_BASE32,
+      totp_enabled: true,
+      totp_confirmed_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    });
+  }
+
+  function seedEnrollUser() {
+    sharedIdentityRepo._seed({
+      id: ENROLL_USER_ID,
+      phone: ENROLL_PHONE,
+      role: "CONSUMER",
+      is_suspended: false,
+      totp_secret: null,
+      totp_enabled: false,
+      created_at: new Date().toISOString(),
+    });
+  }
+
+  async function getTotpTicket(phone: string): Promise<string> {
+    const otp = await requestOtp(phone);
+    const res = await request(app)
+      .post("/api/v1/auth/verify-otp")
+      .send({ phone, otp, device_fingerprint: FP_A })
+      .expect(202);
+    expect(res.body.data.totp_required).toBe(true);
+    return res.body.data.totp_ticket as string;
+  }
+
+  it("verify-otp returns a 2FA ticket instead of tokens when TOTP is enabled", async () => {
+    seedTotpEnabledUser();
+    const ticket = await getTotpTicket(TOTP_PHONE);
+    expect(ticket.length).toBeGreaterThan(20);
+  });
+
+  it("totp/verify completes login with a valid code and sets the refresh cookie", async () => {
+    seedTotpEnabledUser();
+    const ticket = await getTotpTicket(TOTP_PHONE);
+    const code = generateTotpCode(RFC_SECRET_BASE32);
+
+    const res = await request(app)
+      .post("/api/v1/auth/totp/verify")
+      .send({
+        totp_ticket: ticket,
+        code,
+        device_fingerprint: FP_A,
+        phone: TOTP_PHONE,
+      })
+      .expect(200);
+    expect(res.body.data.access_token).toBeTruthy();
+    expect(res.body.data.user.role).toBe("ADMIN");
+    const setCookie = res.headers["set-cookie"] as string[] | undefined;
+    expect(setCookie).toBeDefined();
+    expect(setCookie![0]).toContain("HttpOnly");
+  });
+
+  it("totp/verify rejects an invalid code", async () => {
+    seedTotpEnabledUser();
+    const ticket = await getTotpTicket(TOTP_PHONE);
+    const res = await request(app)
+      .post("/api/v1/auth/totp/verify")
+      .send({
+        totp_ticket: ticket,
+        code: "000000",
+        device_fingerprint: FP_A,
+        phone: TOTP_PHONE,
+      })
+      .expect(401);
+    expect(res.body.error.code).toBe("INVALID_TOTP");
+  });
+
+  it("totp/verify rejects a ticket presented from another device", async () => {
+    seedTotpEnabledUser();
+    const ticket = await getTotpTicket(TOTP_PHONE);
+    const code = generateTotpCode(RFC_SECRET_BASE32);
+    const res = await request(app)
+      .post("/api/v1/auth/totp/verify")
+      .send({
+        totp_ticket: ticket,
+        code,
+        device_fingerprint: FP_B,
+        phone: TOTP_PHONE,
+      })
+      .expect(401);
+    expect(res.body.error.code).toBe("DEVICE_MISMATCH");
+  });
+
+  it("totp/status requires authentication", async () => {
+    const res = await request(app)
+      .post("/api/v1/auth/totp/status")
+      .expect(401);
+    expect(res.body.error.code).toBe("UNAUTHORIZED");
+  });
+
+  it("enroll -> confirm -> status -> disable self-service flow", async () => {
+    seedEnrollUser();
+    const token = await loginNormal(ENROLL_PHONE);
+
+    const statusBefore = await request(app)
+      .post("/api/v1/auth/totp/status")
+      .set("Authorization", `Bearer ${token}`)
+      .expect(200);
+    expect(statusBefore.body.data).toEqual({
+      totp_enabled: false,
+      enrolled: false,
+      totp_confirmed_at: null,
+    });
+
+    const enrollRes = await request(app)
+      .post("/api/v1/auth/totp/enroll")
+      .set("Authorization", `Bearer ${token}`)
+      .expect(201);
+    const secret = enrollRes.body.data.secret as string;
+    expect(secret).toMatch(/^[A-Z2-7]{32}$/);
+    expect(enrollRes.body.data.otpauth_url).toContain(`secret=${secret}`);
+    expect(enrollRes.body.data.otpauth_url).toContain("otpauth://totp/");
+
+    const statusEnrolled = await request(app)
+      .post("/api/v1/auth/totp/status")
+      .set("Authorization", `Bearer ${token}`)
+      .expect(200);
+    expect(statusEnrolled.body.data).toMatchObject({
+      totp_enabled: false,
+      enrolled: true,
+    });
+
+    const wrongConfirm = await request(app)
+      .post("/api/v1/auth/totp/confirm")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ code: "000000" })
+      .expect(401);
+    expect(wrongConfirm.body.error.code).toBe("INVALID_TOTP");
+
+    const confirmRes = await request(app)
+      .post("/api/v1/auth/totp/confirm")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ code: generateTotpCode(secret) })
+      .expect(200);
+    expect(confirmRes.body.data.totp_enabled).toBe(true);
+
+    const statusEnabled = await request(app)
+      .post("/api/v1/auth/totp/status")
+      .set("Authorization", `Bearer ${token}`)
+      .expect(200);
+    expect(statusEnabled.body.data.totp_enabled).toBe(true);
+
+    // Disabling requires a fresh valid code.
+    const disableRes = await request(app)
+      .post("/api/v1/auth/totp/disable")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ code: generateTotpCode(secret) })
+      .expect(200);
+    expect(disableRes.body.data.totp_enabled).toBe(false);
+
+    const statusDisabled = await request(app)
+      .post("/api/v1/auth/totp/status")
+      .set("Authorization", `Bearer ${token}`)
+      .expect(200);
+    expect(statusDisabled.body.data).toMatchObject({
+      totp_enabled: false,
+      enrolled: false,
+    });
+  });
+
+  it("re-enrolling an already-enabled account is rejected", async () => {
+    seedTotpEnabledUser();
+    const otp = await requestOtp(TOTP_PHONE);
+    const ticket = await request(app)
+      .post("/api/v1/auth/verify-otp")
+      .send({ phone: TOTP_PHONE, otp, device_fingerprint: FP_A })
+      .expect(202);
+    const code = generateTotpCode(RFC_SECRET_BASE32);
+    const loginRes = await request(app)
+      .post("/api/v1/auth/totp/verify")
+      .send({
+        totp_ticket: ticket.body.data.totp_ticket,
+        code,
+        device_fingerprint: FP_A,
+        phone: TOTP_PHONE,
+      })
+      .expect(200);
+    const token = loginRes.body.data.access_token as string;
+
+    const res = await request(app)
+      .post("/api/v1/auth/totp/enroll")
+      .set("Authorization", `Bearer ${token}`)
+      .expect(409);
+    expect(res.body.error.code).toBe("CONFLICT");
+  });
+
+  it("confirm before enrolling is rejected", async () => {
+    seedEnrollUser();
+    const token = await loginNormal(ENROLL_PHONE);
+    const res = await request(app)
+      .post("/api/v1/auth/totp/confirm")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ code: "123456" })
+      .expect(409);
+    expect(res.body.error.code).toBe("CONFLICT");
   });
 });

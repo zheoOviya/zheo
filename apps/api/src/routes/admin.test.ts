@@ -176,6 +176,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
         phone: TEST_USER_PHONE,
         role: "CONSUMER",
         is_suspended: false,
+        totp_enabled: false,
         created_at: new Date().toISOString(),
       });
     });

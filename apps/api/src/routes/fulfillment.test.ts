@@ -595,6 +595,7 @@ describe("Fulfillment routes", () => {
         phone: "+919876543210",
         role: "CONSUMER",
         is_suspended: false,
+        totp_enabled: false,
         created_at: new Date().toISOString(),
       });
       const orderRes = await request(app)

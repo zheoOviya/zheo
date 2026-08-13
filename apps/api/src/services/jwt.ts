@@ -17,11 +17,12 @@ export interface AuthClaims {
   phone: string;
   role: string;
   device_fingerprint: string;
-  type: "access" | "refresh";
+  type: "access" | "refresh" | "totp_ticket";
   jti?: string;
 }
 
 const REFRESH_BLACKLIST_PREFIX = "jwt:blacklist:";
+const TOTP_TICKET_TTL_SECONDS = 300;
 
 function toAuthClaims(payload: JwtPayload): AuthClaims {
   const { sub, phone, role, device_fingerprint, type, jti } = payload;
@@ -41,7 +42,7 @@ function toAuthClaims(payload: JwtPayload): AuthClaims {
       401,
     );
   }
-  if (type !== "access" && type !== "refresh") {
+  if (type !== "access" && type !== "refresh" && type !== "totp_ticket") {
     throw new AppError("INVALID_TOKEN", "Invalid token type claim", 401);
   }
   return {
@@ -116,6 +117,40 @@ export class JwtService {
     const claims = toAuthClaims(payload);
     if (claims.type !== "refresh" || !claims.jti) {
       throw new AppError("INVALID_TOKEN", "Not a refresh token", 401);
+    }
+    return claims;
+  }
+
+  /**
+   * 2FA step-up: short-lived single-purpose ticket minted after OTP passes,
+   * consumed by the TOTP verify endpoint to prove the authenticator factor.
+   */
+  signTotpTicket(claims: Omit<AuthClaims, "type" | "jti">): string {
+    const { sub, ...rest } = claims;
+    return jwt.sign(
+      { ...rest, type: "totp_ticket", jti: randomUUID() },
+      config.jwt.accessSecret,
+      {
+        subject: sub,
+        expiresIn: TOTP_TICKET_TTL_SECONDS,
+        issuer: "snakzap",
+      },
+    );
+  }
+
+  verifyTotpTicket(token: string): AuthClaims {
+    let payload: JwtPayload;
+    try {
+      payload = jwt.verify(token, config.jwt.accessSecret, {
+        algorithms: ["HS256"],
+        issuer: "snakzap",
+      }) as JwtPayload;
+    } catch (err) {
+      throw this.toTokenError(err);
+    }
+    const claims = toAuthClaims(payload);
+    if (claims.type !== "totp_ticket") {
+      throw new AppError("INVALID_TOKEN", "Not a 2FA ticket", 401);
     }
     return claims;
   }

@@ -21,6 +21,11 @@ function mapRow(row: Record<string, unknown>): IdentityUser {
     spice_tolerance: row.spice_tolerance as number | undefined,
     is_suspended: (row.is_suspended as boolean) ?? false,
     suspended_reason: (row.suspended_reason as string | null) ?? null,
+    totp_secret: (row.totp_secret as string | null) ?? null,
+    totp_enabled: (row.totp_enabled as boolean) ?? false,
+    totp_confirmed_at: row.totp_confirmed_at
+      ? (row.totp_confirmed_at as Date).toISOString()
+      : null,
     created_at: (row.created_at as Date).toISOString(),
   };
 }
@@ -67,6 +72,7 @@ export class DrizzleIdentityRepository implements IdentityRepository {
       phone,
       role,
       is_suspended: false,
+      totp_enabled: false,
       created_at: new Date().toISOString(),
     };
   }
@@ -123,6 +129,34 @@ export class DrizzleIdentityRepository implements IdentityRepository {
     return this.getById(userId);
   }
 
+  async setTotpSecret(userId: string, secret: string): Promise<IdentityUser | null> {
+    await this.db
+      .update(users)
+      .set({ totp_secret: secret })
+      .where(eq(users.id, userId));
+    return this.getById(userId);
+  }
+
+  async enableTotp(userId: string): Promise<IdentityUser | null> {
+    await this.db
+      .update(users)
+      .set({ totp_enabled: true, totp_confirmed_at: new Date() })
+      .where(eq(users.id, userId));
+    return this.getById(userId);
+  }
+
+  async disableTotp(userId: string): Promise<IdentityUser | null> {
+    await this.db
+      .update(users)
+      .set({
+        totp_enabled: false,
+        totp_secret: null,
+        totp_confirmed_at: null,
+      })
+      .where(eq(users.id, userId));
+    return this.getById(userId);
+  }
+
   _seed(user: IdentityUser): void {
     this.db.insert(users).values({
       id: user.id,
@@ -130,6 +164,8 @@ export class DrizzleIdentityRepository implements IdentityRepository {
       role: user.role,
       spice_tolerance: user.spice_tolerance ?? 3,
       is_suspended: user.is_suspended ?? false,
+      totp_secret: user.totp_secret ?? null,
+      totp_enabled: user.totp_enabled ?? false,
     }).catch((err) => {
       logger.warn({ message: "identity_seed_failed", error: err instanceof Error ? err.message : String(err) });
     });
