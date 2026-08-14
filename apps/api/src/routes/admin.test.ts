@@ -1,9 +1,10 @@
 import type { Express } from "express";
 import request from "supertest";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { jwtService } from "../services/jwt";
-import { sharedKillSwitchRepo, sharedIdentityRepo, sharedSupportRepo } from "../repositories/shared";
+import { sharedKillSwitchRepo, sharedIdentityRepo, sharedSupportRepo, sharedRoleRepo } from "../repositories/shared";
+import { resetRedisForTests } from "../lib/redis";
 
 function adminToken(role: string) {
   return `Bearer ${jwtService.signAccessToken({
@@ -28,6 +29,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
 
   beforeAll(async () => {
     sharedKillSwitchRepo._reset();
+    sharedRoleRepo._reset();
     app = createApp();
   });
 
@@ -308,6 +310,150 @@ describe("Admin RBAC (A-01, A-11)", () => {
         .set("Authorization", adminToken("SUPER_ADMIN"))
         .send({ role: "INVALID_ROLE" });
       expect(res.status).toBe(400);
+    });
+  });
+
+  // ============================================
+  // Custom Roles (admin console) — SUPER_ADMIN only
+  // ============================================
+
+  describe("Role Management (custom roles)", () => {
+    const CUSTOM_ROLE = "SUPPORT_LEAD";
+    const CUSTOM_USER_ID = "u-custom-role-000000000001";
+    const CUSTOM_USER_PHONE = "+910000000099";
+
+    beforeEach(async () => {
+      sharedRoleRepo._reset();
+      resetRedisForTests();
+    });
+
+    it("GET /admin/roles lists built-in roles with member counts", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/roles")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      const names = res.body.data.map((r: { name: string }) => r.name);
+      expect(names).toContain("CONSUMER");
+      expect(names).toContain("SUPER_ADMIN");
+      for (const r of res.body.data) {
+        expect(typeof r.member_count).toBe("number");
+        expect(r.is_builtin).toBe(true);
+      }
+    });
+
+    it("SUPER_ADMIN creates a custom role", async () => {
+      const res = await request(app)
+        .post("/api/v1/admin/roles")
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({
+          name: CUSTOM_ROLE,
+          label: "Support Lead",
+          description: "Leads the support pod",
+          permissions: ["Triage tickets", "Escalate"],
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.data.name).toBe(CUSTOM_ROLE);
+      expect(res.body.data.is_builtin).toBe(false);
+    });
+
+    it("creating a role requires SUPER_ADMIN", async () => {
+      const res = await request(app)
+        .post("/api/v1/admin/roles")
+        .set("Authorization", adminToken("ADMIN"))
+        .send({
+          name: "FINANCE",
+          label: "Finance",
+          description: "Finance team",
+          permissions: ["View payouts"],
+        });
+      expect(res.status).toBe(403);
+    });
+
+    it("creating a duplicate or built-in role conflicts", async () => {
+      await request(app)
+        .post("/api/v1/admin/roles")
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ name: CUSTOM_ROLE, label: "X", description: "y", permissions: [] })
+        .expect(201);
+      await request(app)
+        .post("/api/v1/admin/roles")
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ name: CUSTOM_ROLE, label: "X", description: "y", permissions: [] })
+        .expect(409);
+      await request(app)
+        .post("/api/v1/admin/roles")
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ name: "ADMIN", label: "X", description: "y", permissions: [] })
+        .expect(409);
+    });
+
+    it("custom role appears in the catalog and can be assigned to a user", async () => {
+      await request(app)
+        .post("/api/v1/admin/roles")
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ name: CUSTOM_ROLE, label: "Support Lead", description: "Support pod lead", permissions: ["Triage"] })
+        .expect(201);
+
+      sharedIdentityRepo._seed({
+        id: CUSTOM_USER_ID,
+        phone: CUSTOM_USER_PHONE,
+        role: "CONSUMER",
+        is_suspended: false,
+        totp_enabled: false,
+        created_at: new Date().toISOString(),
+      });
+      const assign = await request(app)
+        .put(`/api/v1/admin/users/${CUSTOM_USER_ID}/role`)
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ role: CUSTOM_ROLE });
+      expect(assign.status).toBe(200);
+      expect(assign.body.data.role).toBe(CUSTOM_ROLE);
+
+      const list = await request(app)
+        .get("/api/v1/admin/users?role=" + CUSTOM_ROLE)
+        .set("Authorization", adminToken("ADMIN"));
+      expect(list.status).toBe(200);
+      expect(list.body.data.total).toBe(1);
+    });
+
+    it("cannot delete a built-in role or a role in use", async () => {
+      await request(app)
+        .post("/api/v1/admin/roles")
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ name: CUSTOM_ROLE, label: "Support Lead", description: "Support pod lead", permissions: [] })
+        .expect(201);
+
+      await request(app)
+        .delete("/api/v1/admin/roles/CONSUMER")
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .expect(403);
+
+      sharedIdentityRepo._seed({
+        id: CUSTOM_USER_ID,
+        phone: CUSTOM_USER_PHONE,
+        role: CUSTOM_ROLE,
+        is_suspended: false,
+        totp_enabled: false,
+        created_at: new Date().toISOString(),
+      });
+      await request(app)
+        .delete(`/api/v1/admin/roles/${CUSTOM_ROLE}`)
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .expect(409);
+    });
+
+    it("deletes an unused custom role", async () => {
+      const roleName = "FINANCE";
+      await request(app)
+        .post("/api/v1/admin/roles")
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ name: roleName, label: "Finance", description: "Finance team", permissions: ["View payouts"] })
+        .expect(201);
+      const res = await request(app)
+        .delete(`/api/v1/admin/roles/${roleName}`)
+        .set("Authorization", adminToken("SUPER_ADMIN"));
+      expect(res.status).toBe(200);
+      expect(res.body.data.removed).toBe(roleName);
     });
   });
 

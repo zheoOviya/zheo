@@ -29,7 +29,12 @@ export const users = pgTable(
     /** Admin console login identifier (nullable for consumer/vendor users). */
     email: text("email"),
     spice_tolerance: integer("spice_tolerance").notNull().default(3),
-    role: userRoleEnum("role").notNull().default("CONSUMER"),
+    /**
+     * Role is free-text so SUPER_ADMINs can define custom roles at runtime.
+     * Built-in roles are the canonical values in `userRoleEnum`; the column
+     * intentionally stays `text` to accept new roles without a migration.
+     */
+    role: text("role").notNull().default("CONSUMER"),
     is_suspended: boolean("is_suspended").notNull().default(false),
     suspended_reason: text("suspended_reason"),
     /** TOTP 2FA (authenticator app). Secret stored base32-encoded. */

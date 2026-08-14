@@ -17,13 +17,12 @@ export interface IdentityUser {
   phone: string;
   /** Admin console login identifier. Nullable for consumer/vendor users. */
   email?: string | null;
-  role:
-    | "CONSUMER"
-    | "VENDOR_OWNER"
-    | "VENDOR_STAFF"
-    | "OPS_AGENT"
-    | "ADMIN"
-    | "SUPER_ADMIN";
+  /**
+   * Role identifier. Built-in values come from the canonical role catalog
+   * (CONSUMER, VENDOR_OWNER, ...); custom roles defined by a SUPER_ADMIN
+   * via the admin console are stored as free text.
+   */
+  role: string;
   /** D03 spice tolerance (1 = mild, 5 = extreme). Undefined until set. */
   spice_tolerance?: number;
   /** A-06: admin user suspension flag. */

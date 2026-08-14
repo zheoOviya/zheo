@@ -9,6 +9,7 @@ import type { GroupCartRepository } from "./groupCartRepository";
 import type { ChainRepository } from "./chainRepository";
 import type { SupportRepository } from "./supportRepository";
 import type { KillSwitchRepository } from "./killSwitchRepository";
+import type { RoleRepository } from "./roleRepository";
 
 import { MemoryOrderRepository } from "./orderRepository";
 import { MemoryPaymentRepository } from "./paymentRepository";
@@ -21,6 +22,7 @@ import { MemoryGroupCartRepository } from "./groupCartRepository";
 import { MemoryChainRepository } from "./chainRepository";
 import { MemorySupportRepository } from "./supportRepository";
 import { MemoryKillSwitchRepository } from "./killSwitchRepository";
+import { MemoryRoleRepository } from "./roleRepository";
 
 import { DrizzleOrderRepository } from "./drizzle/drizzleOrderRepository";
 import { DrizzlePaymentRepository } from "./drizzle/drizzlePaymentRepository";
@@ -71,6 +73,7 @@ interface RepoSet {
   sharedChainRepo: ChainRepository & { _reset(): void; _seed(chain: unknown, outletIds: string[]): void };
   sharedSupportRepo: SupportRepository & { _reset(): void };
   sharedKillSwitchRepo: KillSwitchRepository & { _reset(): void };
+  sharedRoleRepo: RoleRepository & { _reset(): void };
 }
 
 let _repos: RepoSet | null = null;
@@ -102,6 +105,7 @@ function getRepos(): RepoSet {
       sharedChainRepo: new MemoryChainRepository(),
       sharedSupportRepo: new MemorySupportRepository(),
       sharedKillSwitchRepo: new MemoryKillSwitchRepository(),
+      sharedRoleRepo: new MemoryRoleRepository(),
     };
   } else {
     const db = getDb();
@@ -118,6 +122,7 @@ function getRepos(): RepoSet {
         sharedChainRepo: new MemoryChainRepository(),
         sharedSupportRepo: new MemorySupportRepository(),
         sharedKillSwitchRepo: new DrizzleKillSwitchRepository(db) as unknown as RepoSet["sharedKillSwitchRepo"],
+        sharedRoleRepo: new MemoryRoleRepository(),
       };
     } catch {
       _repos = {
@@ -132,6 +137,7 @@ function getRepos(): RepoSet {
         sharedChainRepo: new MemoryChainRepository(),
         sharedSupportRepo: new MemorySupportRepository(),
         sharedKillSwitchRepo: new MemoryKillSwitchRepository(),
+        sharedRoleRepo: new MemoryRoleRepository(),
       };
     }
   }
@@ -150,3 +156,4 @@ export const sharedGroupCartRepo = getRepos().sharedGroupCartRepo;
 export const sharedChainRepo = getRepos().sharedChainRepo;
 export const sharedSupportRepo = getRepos().sharedSupportRepo;
 export const sharedKillSwitchRepo = getRepos().sharedKillSwitchRepo;
+export const sharedRoleRepo = getRepos().sharedRoleRepo;

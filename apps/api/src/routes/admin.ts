@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { adminReadOnly, adminWrite } from "../middleware/requireRoles";
@@ -9,6 +9,7 @@ import {
   sharedIdentityRepo,
   sharedKillSwitchRepo,
   sharedSupportRepo,
+  sharedRoleRepo,
   getStorageMode,
 } from "../repositories/shared";
 import { getRedis } from "../lib/redis";
@@ -113,6 +114,76 @@ function toKillSwitchState(dto: KillSwitchDTO): KillSwitchState {
     status: dto.is_triggered ? "triggered" : "ok",
   };
 }
+
+// ============================================
+// Role catalog (custom roles, admin console)
+// Built-in roles are static; SUPER_ADMINs may add/remove custom roles.
+// ============================================
+
+export const BUILTIN_ROLES: Array<{
+  name: string;
+  label: string;
+  description: string;
+  permissions: string[];
+}> = [
+  {
+    name: "CONSUMER",
+    label: "Consumer",
+    description: "End users who browse, order, and track food deliveries.",
+    permissions: ["Place & track orders", "Group ordering", "Loyalty & VIP tiers"],
+  },
+  {
+    name: "VENDOR_OWNER",
+    label: "Vendor Owner",
+    description: "Restaurant owners running their own outlet on the platform.",
+    permissions: ["Manage menu & catalog", "Accept orders", "View revenue & commissions"],
+  },
+  {
+    name: "VENDOR_STAFF",
+    label: "Vendor Staff",
+    description: "Outlet staff who prepare and hand off orders.",
+    permissions: ["Prepare orders", "Update order statuses", "POS terminal access"],
+  },
+  {
+    name: "OPS_AGENT",
+    label: "Ops Agent",
+    description: "Operations agents who triage support and keep things moving.",
+    permissions: ["Triage support tickets", "Escalate delays", "Read-only console views"],
+  },
+  {
+    name: "ADMIN",
+    label: "Admin",
+    description: "Console operators with day-to-day management controls.",
+    permissions: ["Suspend & reactivate users", "Manage vendors", "Oversee orders & tickets"],
+  },
+  {
+    name: "SUPER_ADMIN",
+    label: "Super Admin",
+    description: "Full control: roles, kill switches, order overrides, and audit.",
+    permissions: ["All Admin permissions", "Change user roles", "Override order status", "Toggle kill switches"],
+  },
+];
+
+const ROLE_NAME_REGEX = /^[A-Z][A-Z0-9_]*$/;
+
+function isBuiltinRole(name: string): boolean {
+  return BUILTIN_ROLES.some((b) => b.name === name);
+}
+
+async function roleExists(name: string): Promise<boolean> {
+  return isBuiltinRole(name) || (await sharedRoleRepo.getByName(name)) !== null;
+}
+
+const CreateRoleSchema = z.object({
+  name: z
+    .string()
+    .min(2)
+    .max(40)
+    .regex(ROLE_NAME_REGEX, "Role name must be SCREAMING_SNAKE_CASE, e.g. SUPPORT_LEAD"),
+  label: z.string().min(1).max(60),
+  description: z.string().min(1).max(200),
+  permissions: z.array(z.string().min(1).max(80)).max(20).default([]),
+});
 
 adminRouter.get(
   "/kill-switches",
@@ -403,6 +474,93 @@ adminRouter.get(
 );
 
 // ============================================
+// Role Management (custom roles) — SUPER_ADMIN only
+// ============================================
+
+function superAdminOnly(res: Response): void {
+  if (res.locals.userRole !== "SUPER_ADMIN") {
+    throw new AppError("FORBIDDEN", "Only SUPER_ADMIN can manage roles", 403);
+  }
+}
+
+adminRouter.get(
+  "/roles",
+  adminReadOnly,
+  asyncHandler(async (_req, res) => {
+    const custom = await sharedRoleRepo.list();
+    const catalog = [
+      ...BUILTIN_ROLES.map((b) => ({ ...b, is_builtin: true, member_count: 0 })),
+      ...custom.map((c) => ({
+        name: c.name,
+        label: c.label,
+        description: c.description,
+        permissions: c.permissions,
+        is_builtin: false,
+        member_count: 0,
+      })),
+    ];
+    for (const role of catalog) {
+      const { total } = await sharedIdentityRepo.listAll(1, 1, undefined, role.name);
+      role.member_count = total;
+    }
+    ok(res, catalog);
+  }),
+);
+
+adminRouter.post(
+  "/roles",
+  adminWriteLimiter, adminWrite,
+  asyncHandler(async (req, res) => {
+    superAdminOnly(res);
+    const body = CreateRoleSchema.safeParse(req.body);
+    if (!body.success) {
+      throw new AppError("VALIDATION_ERROR", "Invalid role payload", 400, body.error.flatten());
+    }
+    const { name, label, description, permissions } = body.data;
+    if (isBuiltinRole(name)) {
+      throw new AppError("CONFLICT", `'${name}' is a built-in role`, 409);
+    }
+    if (await sharedRoleRepo.getByName(name)) {
+      throw new AppError("CONFLICT", `Role '${name}' already exists`, 409);
+    }
+    const created = await sharedRoleRepo.create({ name, label, description, permissions });
+    const actorId = res.locals.userId as string;
+    await sharedAuditRepo.log(actorId, "role_created", {
+      role_name: name,
+      role_label: label,
+    });
+    ok(res, { ...created, is_builtin: false, member_count: 0 }, 201);
+  }),
+);
+
+adminRouter.delete(
+  "/roles/:name",
+  adminWriteLimiter, adminWrite,
+  asyncHandler(async (req, res) => {
+    superAdminOnly(res);
+    const name = req.params.name as string;
+    if (isBuiltinRole(name)) {
+      throw new AppError("FORBIDDEN", "Built-in roles cannot be deleted", 403);
+    }
+    const existing = await sharedRoleRepo.getByName(name);
+    if (!existing) {
+      throw new AppError("NOT_FOUND", `Role '${name}' not found`, 404);
+    }
+    const { total } = await sharedIdentityRepo.listAll(1, 1, undefined, name);
+    if (total > 0) {
+      throw new AppError("CONFLICT", `Role '${name}' is assigned to ${total} user(s)`, 409);
+    }
+    await sharedRoleRepo.remove(name);
+    const actorId = res.locals.userId as string;
+    await sharedAuditRepo.log(actorId, "role_deleted", {
+      role_name: name,
+      role_label: existing.label,
+    });
+    ok(res, { removed: name });
+  }),
+);
+
+// ============================================
 // User Management (A-06) — Sprint 5.2
 // ============================================
 
@@ -414,10 +572,7 @@ adminRouter.get(
     const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "20"), 10) || 20));
     const search = typeof req.query.search === "string" ? req.query.search : undefined;
     const role = typeof req.query.role === "string" ? req.query.role : undefined;
-    const roleParam = role && ALL_ROLES.includes(role as (typeof ALL_ROLES)[number])
-      ? (role as (typeof ALL_ROLES)[number])
-      : undefined;
-    const result = await sharedIdentityRepo.listAll(page, limit, search, roleParam);
+    const result = await sharedIdentityRepo.listAll(page, limit, search, role);
     ok(res, result);
   }),
 );
@@ -466,9 +621,12 @@ adminRouter.put(
   }),
 );
 
-const ALL_ROLES = ["CONSUMER", "VENDOR_OWNER", "VENDOR_STAFF", "OPS_AGENT", "ADMIN", "SUPER_ADMIN"] as const;
 const UpdateRoleSchema = z.object({
-  role: z.enum(ALL_ROLES),
+  role: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(ROLE_NAME_REGEX, "Role must be SCREAMING_SNAKE_CASE, e.g. SUPPORT_LEAD"),
 });
 
 adminRouter.put(
@@ -483,6 +641,9 @@ adminRouter.put(
     const user = await sharedIdentityRepo.getById(id);
     if (!user) {
       throw new AppError("NOT_FOUND", "User not found", 404);
+    }
+    if (!(await roleExists(body.data.role))) {
+      throw new AppError("VALIDATION_ERROR", `Unknown role '${body.data.role}'`, 400);
     }
     const actorId = res.locals.userId as string;
     const actorRole = res.locals.userRole as string;
