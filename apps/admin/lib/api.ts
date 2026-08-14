@@ -20,6 +20,60 @@ interface OrderDTO {
   created_at: string;
 }
 
+export interface OrderItemDTO {
+  id: string;
+  menu_item_id: string;
+  name: string;
+  base_price: number;
+  quantity: number;
+  customization_total: number;
+  item_subtotal: number;
+}
+
+export interface OrderPaymentDTO {
+  id: string;
+  status: string;
+  method: string | null;
+  amount: number;
+  currency: string;
+  razorpay_order_id: string;
+  razorpay_payment_id: string | null;
+  created_at: string;
+}
+
+export interface OrderCustomerDTO {
+  id: string;
+  phone: string;
+  role: string;
+  is_suspended: boolean;
+}
+
+export interface OrderRestaurantDTO {
+  id: string;
+  name: string;
+  commission_rate: number;
+}
+
+export interface OrderDetailDTO extends OrderDTO {
+  items?: OrderItemDTO[];
+  commission_amount?: number;
+  is_catering?: boolean;
+  headcount?: number | null;
+  scheduled_pickup_time?: string | null;
+  payment: OrderPaymentDTO | null;
+  customer: OrderCustomerDTO | null;
+  restaurant: OrderRestaurantDTO | null;
+}
+
+export interface VendorMetricsDTO extends VendorDTO {
+  owner_phone: string | null;
+  order_count: number;
+  completed_orders: number;
+  revenue: number;
+  commission: number;
+  active_orders: number;
+}
+
 interface VendorDTO {
   id: string;
   name: string;
@@ -45,7 +99,7 @@ interface AuditPage {
   total: number;
 }
 
-interface UserDTO {
+export interface UserDTO {
   id: string;
   phone: string;
   role: string;
@@ -59,7 +113,7 @@ export interface UserListResponse {
   total: number;
 }
 
-interface SupportTicketDTO {
+export interface SupportTicketDTO {
   id: string;
   user_id: string;
   subject: string;
@@ -157,8 +211,8 @@ export function fetchLiveOrders(status?: string): Promise<LiveOrdersResponse> {
   return adminFetch<LiveOrdersResponse>(`/orders${qs}`);
 }
 
-export function fetchOrderDetail(orderId: string): Promise<OrderDTO> {
-  return adminFetch<OrderDTO>(`/orders/${orderId}`);
+export function fetchOrderDetail(orderId: string): Promise<OrderDetailDTO> {
+  return adminFetch<OrderDetailDTO>(`/orders/${orderId}`);
 }
 
 export function overrideOrderStatus(orderId: string, status: string, reason?: string): Promise<OrderDTO> {
@@ -170,6 +224,10 @@ export function overrideOrderStatus(orderId: string, status: string, reason?: st
 
 export function fetchVendors(): Promise<(VendorDTO & { owner_phone: string | null })[]> {
   return adminFetch<VendorDTO[]>("/vendors");
+}
+
+export function fetchVendorMetrics(): Promise<VendorMetricsDTO[]> {
+  return adminFetch<VendorMetricsDTO[]>("/vendors/metrics");
 }
 
 export function suspendVendor(vendorId: string): Promise<VendorDTO> {
@@ -233,6 +291,96 @@ export function updateUserRole(userId: string, role: string): Promise<UserDTO> {
     method: "PUT",
     body: JSON.stringify({ role }),
   });
+}
+
+export interface VipStatusDTO {
+  is_vip: boolean;
+  order_count: number;
+  total_spend: number;
+  order_threshold: number;
+  spend_threshold: number;
+}
+
+export interface WalletDTO {
+  user_id: string;
+  balance: number;
+  total_earned: number;
+}
+
+export interface WalletTransactionDTO {
+  id: string;
+  user_id: string;
+  amount: number;
+  reason: string;
+  balance_after: number;
+  created_at: string;
+}
+
+export interface StampCardDTO {
+  user_id: string;
+  restaurant_id: string;
+  stamp_count: number;
+  total_orders: number;
+  rewards_earned: number;
+  reward_type: string;
+  updated_at: string;
+}
+
+export interface StreakDTO {
+  user_id: string;
+  current_streak: number;
+  best_streak: number;
+  last_pickup_day: string | null;
+  updated_at: string;
+}
+
+export interface ReferralClaimDTO {
+  id: string;
+  claimant_user_id: string;
+  referrer_user_id: string;
+  referral_code: string;
+  bonus_amount: number;
+  ip_address: string | null;
+  device_fingerprint: string | null;
+  created_at: string;
+}
+
+export interface Customer360DTO {
+  user: UserDTO;
+  vip: VipStatusDTO;
+  summary: { total_spend: number; order_count: number; average_order_value: number };
+  wallet: WalletDTO;
+  wallet_transactions: WalletTransactionDTO[];
+  stamp_cards: StampCardDTO[];
+  streak: StreakDTO;
+  referral_code: string;
+  referrals_given: ReferralClaimDTO[];
+  referrals_claimed: ReferralClaimDTO[];
+  tickets: SupportTicketDTO[];
+  orders: OrderDTO[];
+}
+
+export function fetchCustomer360(userId: string): Promise<Customer360DTO> {
+  return adminFetch<Customer360DTO>(`/customers/${userId}/360`);
+}
+
+export interface RevenueSeriesPoint {
+  date: string;
+  revenue: number;
+  orders: number;
+  commission: number;
+}
+
+export interface RevenueReportDTO {
+  days: number;
+  series: RevenueSeriesPoint[];
+  totals: { revenue: number; orders: number; commission: number; average_order_value: number };
+  payment_split: Record<string, number>;
+  top_vendors: { restaurant_id: string; name: string; revenue: number; orders: number }[];
+}
+
+export function fetchRevenue(days: number = 7): Promise<RevenueReportDTO> {
+  return adminFetch<RevenueReportDTO>(`/revenue?days=${days}`);
 }
 
 export interface RoleDefinition {

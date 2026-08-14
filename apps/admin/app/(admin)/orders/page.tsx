@@ -1,7 +1,8 @@
 "use client";
 
 import { Fragment, useEffect, useState, useCallback } from "react";
-import { fetchLiveOrders, fetchOrderDetail, overrideOrderStatus } from "../../../lib/api";
+import Link from "next/link";
+import { fetchLiveOrders, fetchOrderDetail, overrideOrderStatus, type OrderDetailDTO } from "../../../lib/api";
 
 const STATUS_LABELS: Record<string, string> = {
   CONFIRMED: "Confirmed",
@@ -17,21 +18,20 @@ const STATUS_COLORS: Record<string, string> = {
   READY_FOR_PICKUP: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
 };
 
-interface OrderDetail {
-  id: string;
-  status: string;
-  total_amount: number;
-  user_id: string;
-  restaurant_id: string;
-  created_at: string;
-}
+const PAYMENT_STATUS_COLORS: Record<string, string> = {
+  CREATED: "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400",
+  AUTHORIZED: "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400",
+  CAPTURED: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+  FAILED: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  REFUNDED: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+};
 
 export default function OrdersPage() {
   const [data, setData] = useState<Awaited<ReturnType<typeof fetchLiveOrders>> | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [error, setError] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<OrderDetail | null>(null);
+  const [detail, setDetail] = useState<OrderDetailDTO | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [overrideStatus, setOverrideStatusState] = useState("");
   const [overrideReason, setOverrideReason] = useState("");
@@ -171,25 +171,77 @@ export default function OrdersPage() {
                         {loadingDetail ? (
                           <div className="h-12 animate-pulse rounded bg-neutral-200 dark:bg-neutral-800" />
                         ) : detail ? (
-                          <div className="space-y-3">
+                          <div className="space-y-4">
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                               <div>
-                                <span className="text-neutral-500">User ID:</span>
-                                <p className="font-mono text-neutral-700 dark:text-neutral-300">{detail.user_id.slice(0, 16)}...</p>
+                                <span className="text-neutral-500">Customer:</span>
+                                <p className="font-mono text-neutral-700 dark:text-neutral-300">
+                                  {detail.customer ? (
+                                    <Link href={`/users/${detail.customer.id}`} className="hover:text-primary-500 hover:underline">
+                                      {detail.customer.phone}
+                                    </Link>
+                                  ) : detail.user_id.slice(0, 16)}
+                                </p>
                               </div>
                               <div>
                                 <span className="text-neutral-500">Restaurant:</span>
-                                <p className="font-mono text-neutral-700 dark:text-neutral-300">{detail.restaurant_id.slice(0, 16)}...</p>
+                                <p className="font-mono text-neutral-700 dark:text-neutral-300">{detail.restaurant?.name ?? detail.restaurant_id.slice(0, 16)}</p>
                               </div>
                               <div>
-                                <span className="text-neutral-500">Total:</span>
-                                <p className="font-mono text-neutral-700 dark:text-neutral-300">Rs.{Number(detail.total_amount).toFixed(0)}</p>
+                                <span className="text-neutral-500">Total / Commission:</span>
+                                <p className="font-mono text-neutral-700 dark:text-neutral-300">
+                                  Rs.{Number(detail.total_amount).toFixed(0)} / Rs.{Number(detail.commission_amount ?? 0).toFixed(0)}
+                                </p>
                               </div>
                               <div>
                                 <span className="text-neutral-500">Created:</span>
                                 <p className="text-neutral-700 dark:text-neutral-300">{new Date(detail.created_at).toLocaleString()}</p>
                               </div>
                             </div>
+
+                            {detail.items && detail.items.length > 0 && (
+                              <div>
+                                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">Items</p>
+                                <div className="overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-800">
+                                  <table className="w-full text-left text-xs">
+                                    <thead className="bg-neutral-50 dark:bg-neutral-950">
+                                      <tr>
+                                        <th className="px-3 py-2 text-neutral-500">Item</th>
+                                        <th className="px-3 py-2 text-neutral-500">Qty</th>
+                                        <th className="px-3 py-2 text-neutral-500">Price</th>
+                                        <th className="px-3 py-2 text-neutral-500">Customizations</th>
+                                        <th className="px-3 py-2 text-neutral-500">Subtotal</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
+                                      {detail.items.map((it) => (
+                                        <tr key={it.id}>
+                                          <td className="px-3 py-2 text-neutral-700 dark:text-neutral-300">{it.name}</td>
+                                          <td className="px-3 py-2 text-neutral-700 dark:text-neutral-300">{it.quantity}</td>
+                                          <td className="px-3 py-2 font-mono tabular-nums text-neutral-700 dark:text-neutral-300">Rs.{it.base_price.toFixed(0)}</td>
+                                          <td className="px-3 py-2 text-neutral-500">
+                                            {it.customization_total > 0 ? `+Rs.${it.customization_total.toFixed(0)}` : "—"}
+                                          </td>
+                                          <td className="px-3 py-2 font-mono tabular-nums text-neutral-700 dark:text-neutral-300">Rs.{it.item_subtotal.toFixed(0)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
+
+                            {detail.payment && (
+                              <div className="flex flex-wrap items-center gap-2 text-xs">
+                                <span className="text-neutral-500">Payment:</span>
+                                <span className={`inline-block rounded-full px-2 py-0.5 font-semibold ${PAYMENT_STATUS_COLORS[detail.payment.status] ?? "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400"}`}>
+                                  {detail.payment.status}
+                                </span>
+                                <span className="text-neutral-700 dark:text-neutral-300">{(detail.payment.method ?? "N/A").toUpperCase()}</span>
+                                <span className="text-neutral-500">Rs.{Number(detail.payment.amount).toFixed(0)}</span>
+                              </div>
+                            )}
+
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-xs text-neutral-500">Override Status:</span>
                               <select

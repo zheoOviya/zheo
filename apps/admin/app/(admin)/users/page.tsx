@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import { fetchUsers, suspendUser, reactivateUser, updateUserRole, getSessionRoles } from "../../../lib/api";
 
 const ALL_ROLES = ["CONSUMER", "VENDOR_OWNER", "VENDOR_STAFF", "OPS_AGENT", "ADMIN", "SUPER_ADMIN"] as const;
@@ -123,7 +124,11 @@ export default function UsersPage() {
               <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
                 {data.items.map((u) => (
                   <tr key={u.id} className="hover:bg-neutral-50 dark:hover:bg-neutral-950/50 transition-colors">
-                    <td className="px-4 py-3 font-mono text-sm text-neutral-900 dark:text-neutral-100">{u.phone}</td>
+                    <td className="px-4 py-3 font-mono text-sm text-neutral-900 dark:text-neutral-100">
+                      <Link href={`/users/${u.id}`} className="hover:text-primary-500 hover:underline" title="Open Customer 360">
+                        {u.phone}
+                      </Link>
+                    </td>
                     <td className="px-4 py-3">
                       {isSuperAdmin ? (
                         <select
