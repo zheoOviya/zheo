@@ -2,80 +2,58 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  fetchRoles,
   fetchUsers,
   suspendUser,
   reactivateUser,
   updateUserRole,
+  deleteRole,
+  createRole,
   getSessionRoles,
+  type RoleDefinition,
 } from "../../../lib/api";
 
-interface RoleMeta {
-  value: string;
-  label: string;
-  description: string;
-  permissions: string[];
-  accent: string;
-}
+const DEFAULT_ACCENT = "bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400";
 
-const ROLES: RoleMeta[] = [
-  {
-    value: "CONSUMER",
-    label: "Consumer",
-    description: "End users who browse, order, and track food deliveries.",
-    permissions: ["Place & track orders", "Group ordering", "Loyalty & VIP tiers"],
-    accent: "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400",
-  },
-  {
-    value: "VENDOR_OWNER",
-    label: "Vendor Owner",
-    description: "Restaurant owners running their own outlet on the platform.",
-    permissions: ["Manage menu & catalog", "Accept orders", "View revenue & commissions"],
-    accent: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
-  },
-  {
-    value: "VENDOR_STAFF",
-    label: "Vendor Staff",
-    description: "Outlet staff who prepare and hand off orders.",
-    permissions: ["Prepare orders", "Update order statuses", "POS terminal access"],
-    accent: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400",
-  },
-  {
-    value: "OPS_AGENT",
-    label: "Ops Agent",
-    description: "Operations agents who triage support and keep things moving.",
-    permissions: ["Triage support tickets", "Escalate delays", "Read-only console views"],
-    accent: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400",
-  },
-  {
-    value: "ADMIN",
-    label: "Admin",
-    description: "Console operators with day-to-day management controls.",
-    permissions: ["Suspend & reactivate users", "Manage vendors", "Oversee orders & tickets"],
-    accent: "bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400",
-  },
-  {
-    value: "SUPER_ADMIN",
-    label: "Super Admin",
-    description: "Full control: roles, kill switches, order overrides, and audit.",
-    permissions: ["All Admin permissions", "Change user roles", "Override order status", "Toggle kill switches"],
-    accent: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-  },
+const ACCENTS = [
+  "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400",
+  "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+  "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400",
+  "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400",
+  "bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400",
+  "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
 ];
+
+function accentFor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0;
+  return ACCENTS[Math.abs(hash) % ACCENTS.length] ?? DEFAULT_ACCENT;
+}
 
 type MemberItem = Awaited<ReturnType<typeof fetchUsers>>["items"][number];
 
 export default function RolesPage() {
-  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [roles, setRoles] = useState<RoleDefinition[]>([]);
   const [selected, setSelected] = useState("ADMIN");
   const [members, setMembers] = useState<MemberItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [error, setError] = useState("");
-  const [loadingCounts, setLoadingCounts] = useState(true);
+  const [loadingRoles, setLoadingRoles] = useState(true);
   const [loadingMembers, setLoadingMembers] = useState(false);
   const [toggling, setToggling] = useState<string | null>(null);
   const [changingRole, setChangingRole] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [sessionRoles, setSessionRoles] = useState<string[]>([]);
+  const [showCreate, setShowCreate] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState({
+    name: "",
+    label: "",
+    description: "",
+    permissions: "",
+  });
+  const [formError, setFormError] = useState("");
 
   useEffect(() => {
     getSessionRoles().then(setSessionRoles).catch(() => setSessionRoles([]));
@@ -83,25 +61,22 @@ export default function RolesPage() {
 
   const isSuperAdmin = sessionRoles.includes("SUPER_ADMIN");
 
-  const loadCounts = useCallback(() => {
-    setLoadingCounts(true);
-    Promise.all(
-      ROLES.map((r) =>
-        fetchUsers(1, undefined, r.value)
-          .then((d) => ({ role: r.value, total: d.total }))
-          .catch(() => ({ role: r.value, total: 0 })),
-      ),
-    )
-      .then((results) => {
-        const next: Record<string, number> = {};
-        for (const r of results) next[r.role] = r.total;
-        setCounts(next);
+  const loadRoles = useCallback(() => {
+    setLoadingRoles(true);
+    fetchRoles()
+      .then((r) => {
+        setRoles(r);
+        if (!r.some((x) => x.name === selected)) {
+          setSelected(r.some((x) => x.name === "ADMIN") ? "ADMIN" : (r[0]?.name ?? ""));
+        }
       })
-      .finally(() => setLoadingCounts(false));
-  }, []);
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load roles"))
+      .finally(() => setLoadingRoles(false));
+  }, [selected]);
 
   const loadMembers = useCallback(
     (role: string, p: number) => {
+      if (!role) return;
       setLoadingMembers(true);
       setError("");
       fetchUsers(p, undefined, role)
@@ -116,17 +91,13 @@ export default function RolesPage() {
   );
 
   useEffect(() => {
-    loadCounts();
-  }, [loadCounts]);
+    loadRoles();
+  }, [loadRoles]);
 
   useEffect(() => {
     setPage(1);
     loadMembers(selected, 1);
   }, [selected, loadMembers]);
-
-  function selectRole(role: string) {
-    setSelected(role);
-  }
 
   async function handleToggle(userId: string, isSuspended: boolean) {
     setToggling(userId);
@@ -137,7 +108,7 @@ export default function RolesPage() {
         await suspendUser(userId);
       }
       loadMembers(selected, page);
-      loadCounts();
+      loadRoles();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Toggle failed");
     } finally {
@@ -150,7 +121,7 @@ export default function RolesPage() {
     try {
       await updateUserRole(userId, newRole);
       loadMembers(selected, page);
-      loadCounts();
+      loadRoles();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Role change failed");
     } finally {
@@ -158,19 +129,77 @@ export default function RolesPage() {
     }
   }
 
+  async function handleDelete(name: string) {
+    setDeleting(name);
+    setError("");
+    try {
+      await deleteRole(name);
+      loadRoles();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  async function handleCreate() {
+    setFormError("");
+    const permissions = form.permissions
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (!form.name.trim() || !form.label.trim() || !form.description.trim()) {
+      setFormError("Name, label, and description are required");
+      return;
+    }
+    if (!/^[A-Z][A-Z0-9_]*$/.test(form.name.trim())) {
+      setFormError("Name must be SCREAMING_SNAKE_CASE, e.g. SUPPORT_LEAD");
+      return;
+    }
+    setCreating(true);
+    try {
+      await createRole({
+        name: form.name.trim().toUpperCase(),
+        label: form.label.trim(),
+        description: form.description.trim(),
+        permissions,
+      });
+      setShowCreate(false);
+      setForm({ name: "", label: "", description: "", permissions: "" });
+      loadRoles();
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Failed to create role");
+    } finally {
+      setCreating(false);
+    }
+  }
+
   const totalPages = Math.ceil(total / 20);
-  const activeMeta = ROLES.find((r) => r.value === selected);
+  const activeMeta = roles.find((r) => r.name === selected);
 
   return (
     <div className="space-y-6 max-w-5xl">
-      <div>
-        <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
-          Roles & Permissions
-        </h2>
-        <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-          Role definitions, member counts, and assignments. Role changes require
-          Super Admin.
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
+            Roles & Permissions
+          </h2>
+          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+            Role definitions, member counts, and assignments. Role changes
+            require Super Admin.
+          </p>
+        </div>
+        {isSuperAdmin && (
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-2 rounded-lg bg-primary-500 hover:bg-primary-600 px-3 py-2 text-sm font-semibold text-white transition-colors"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            Add Role
+          </button>
+        )}
       </div>
 
       {error && (
@@ -179,46 +208,75 @@ export default function RolesPage() {
         </div>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {ROLES.map((r) => {
-          const active = selected === r.value;
-          return (
-            <button
-              key={r.value}
-              onClick={() => selectRole(r.value)}
-              className={`text-left rounded-xl border p-4 transition-colors ${
-                active
-                  ? "border-primary-500 bg-primary-50 dark:bg-primary-950/40 ring-1 ring-primary-500"
-                  : "border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 hover:border-primary-300 dark:hover:border-primary-800"
-              }`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${r.accent}`}>
-                  {r.label}
-                </span>
-                <span className="text-xs text-neutral-400">
-                  {loadingCounts ? "…" : `${counts[r.value] ?? 0} members`}
-                </span>
+      {loadingRoles ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="h-44 animate-pulse rounded-xl bg-neutral-200 dark:bg-neutral-800" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {roles.map((r) => {
+            const active = selected === r.name;
+            return (
+              <div
+                key={r.name}
+                className={`rounded-xl border p-4 transition-colors ${
+                  active
+                    ? "border-primary-500 bg-primary-50 dark:bg-primary-950/40 ring-1 ring-primary-500"
+                    : "border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900"
+                }`}
+              >
+                <button onClick={() => setSelected(r.name)} className="w-full text-left">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${r.is_builtin ? accentFor(r.name) : DEFAULT_ACCENT}`}>
+                      {r.label}
+                      {!r.is_builtin && (
+                        <span className="ml-1.5 font-normal opacity-70">custom</span>
+                      )}
+                    </span>
+                    <span className="text-xs text-neutral-400">
+                      {r.member_count} members
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
+                    {r.description}
+                  </p>
+                  <ul className="mt-2 space-y-1">
+                    {r.permissions.map((p) => (
+                      <li key={p} className="flex items-start gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+                        <span className="mt-0.5 text-primary-500">•</span>
+                        {p}
+                      </li>
+                    ))}
+                    {r.permissions.length === 0 && (
+                      <li className="text-xs italic text-neutral-400">No permissions listed</li>
+                    )}
+                  </ul>
+                </button>
+                {!r.is_builtin && isSuperAdmin && (
+                  <button
+                    onClick={() => handleDelete(r.name)}
+                    disabled={deleting === r.name}
+                    className="mt-3 rounded-lg border border-red-200 dark:border-red-900 px-2.5 py-1 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 disabled:opacity-50 transition-colors"
+                  >
+                    {deleting === r.name ? "Deleting..." : "Delete role"}
+                  </button>
+                )}
               </div>
-              <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
-                {r.description}
-              </p>
-              <ul className="mt-2 space-y-1">
-                {r.permissions.map((p) => (
-                  <li key={p} className="flex items-start gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
-                    <span className="mt-0.5 text-primary-500">•</span>
-                    {p}
-                  </li>
-                ))}
-              </ul>
-            </button>
-          );
-        })}
-      </div>
+            );
+          })}
+          {roles.length === 0 && (
+            <div className="col-span-full rounded-xl border border-neutral-200 dark:border-neutral-800 p-8 text-center text-sm text-neutral-400">
+              No roles found.
+            </div>
+          )}
+        </div>
+      )}
 
       <div>
         <h3 className="mb-3 font-semibold text-neutral-900 dark:text-neutral-100">
-          {activeMeta?.label} members
+          {activeMeta?.label ?? "Select a role"} members
           <span className="ml-2 text-sm font-normal text-neutral-400">({total})</span>
         </h3>
         {loadingMembers ? (
@@ -251,8 +309,8 @@ export default function RolesPage() {
                           disabled={changingRole === u.id}
                           className="rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none disabled:opacity-50"
                         >
-                          {ROLES.map((r) => (
-                            <option key={r.value} value={r.value}>{r.label}</option>
+                          {roles.map((r) => (
+                            <option key={r.name} value={r.name}>{r.label}</option>
                           ))}
                         </select>
                       ) : (
@@ -331,6 +389,73 @@ export default function RolesPage() {
           </div>
         )}
       </div>
+
+      {showCreate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Add role">
+          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-neutral-900 p-6 shadow-xl border border-neutral-200 dark:border-neutral-800">
+            <h3 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
+              Add Role
+            </h3>
+            <div className="mt-4 space-y-3">
+              <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                Name (SCREAMING_SNAKE_CASE)
+              </label>
+              <input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="SUPPORT_LEAD"
+                className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:border-primary-500 outline-none"
+              />
+              <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                Label
+              </label>
+              <input
+                value={form.label}
+                onChange={(e) => setForm({ ...form, label: e.target.value })}
+                placeholder="Support Lead"
+                className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:border-primary-500 outline-none"
+              />
+              <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                Description
+              </label>
+              <textarea
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                placeholder="What does this role do?"
+                rows={2}
+                className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:border-primary-500 outline-none"
+              />
+              <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                Permissions (comma-separated)
+              </label>
+              <input
+                value={form.permissions}
+                onChange={(e) => setForm({ ...form, permissions: e.target.value })}
+                placeholder="Triage tickets, Escalate"
+                className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:border-primary-500 outline-none"
+              />
+              {formError && (
+                <p className="text-sm text-red-500">{formError}</p>
+              )}
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setShowCreate(false)}
+                className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-2 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreate}
+                disabled={creating}
+                className="rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white transition-colors"
+              >
+                {creating ? "Creating..." : "Create Role"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

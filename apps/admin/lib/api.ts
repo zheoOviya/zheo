@@ -235,6 +235,37 @@ export function updateUserRole(userId: string, role: string): Promise<UserDTO> {
   });
 }
 
+export interface RoleDefinition {
+  name: string;
+  label: string;
+  description: string;
+  permissions: string[];
+  is_builtin: boolean;
+  member_count: number;
+}
+
+export function fetchRoles(): Promise<RoleDefinition[]> {
+  return adminFetch<RoleDefinition[]>("/roles");
+}
+
+export function createRole(input: {
+  name: string;
+  label: string;
+  description: string;
+  permissions: string[];
+}): Promise<RoleDefinition> {
+  return adminFetch<RoleDefinition>("/roles", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteRole(name: string): Promise<{ removed: string }> {
+  return adminFetch<{ removed: string }>(`/roles/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}
+
 export function fetchSupportTickets(params: {
   page: number;
   status?: string;
