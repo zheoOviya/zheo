@@ -10,6 +10,8 @@ import {
   sharedKillSwitchRepo,
   sharedSupportRepo,
   sharedRoleRepo,
+  sharedPaymentRepo,
+  sharedLoyaltyRepo,
   getStorageMode,
 } from "../repositories/shared";
 import { getRedis } from "../lib/redis";
@@ -17,6 +19,8 @@ import { config } from "../config";
 import { getCatalogRepository } from "./catalog";
 import type { RestaurantDTO } from "../repositories/catalogRepository";
 import type { KillSwitchDTO } from "../repositories/killSwitchRepository";
+import type { OrderDTO } from "../repositories/orderRepository";
+import { VipSupportService } from "../services/vipSupport";
 
 const adminRouter: Router = Router();
 
@@ -27,6 +31,9 @@ const adminWriteLimiter = rateLimiter({
   identifier: (req) => req.ip ?? "unknown",
   failClosed: true,
 });
+
+/** Orders that count toward completed revenue / settlement math. */
+const REVENUE_COMPLETED_STATUSES = new Set(["PICKED_UP", "SETTLED"]);
 
 // ============================================
 // System Health (A-11) — live component status
@@ -283,7 +290,31 @@ adminRouter.get(
     if (!order) {
       throw new AppError("NOT_FOUND", "Order not found", 404);
     }
-    ok(res, order);
+    const payment = await sharedPaymentRepo.getByOrderId(id).catch(() => null);
+    const customer = await sharedIdentityRepo.getById(order.user_id).catch(() => null);
+    const repo = getCatalogRepository();
+    const restaurant = await repo.getRestaurantById(order.restaurant_id).catch(() => null);
+    ok(res, {
+      ...order,
+      payment: payment
+        ? {
+            id: payment.id,
+            status: payment.status,
+            method: payment.method,
+            amount: payment.amount,
+            currency: payment.currency,
+            razorpay_order_id: payment.razorpay_order_id,
+            razorpay_payment_id: payment.razorpay_payment_id,
+            created_at: payment.created_at,
+          }
+        : null,
+      customer: customer
+        ? { id: customer.id, phone: customer.phone, role: customer.role, is_suspended: customer.is_suspended }
+        : null,
+      restaurant: restaurant
+        ? { id: restaurant.id, name: restaurant.name, commission_rate: restaurant.commission_rate }
+        : null,
+    });
   }),
 );
 
@@ -430,6 +461,51 @@ adminRouter.put(
 );
 
 // ============================================
+// Vendor Performance & Settlement (A-09)
+// Per-vendor orders, revenue, and platform commission.
+// Read-only for all admin roles.
+// ============================================
+
+adminRouter.get(
+  "/vendors/metrics",
+  adminReadOnly,
+  asyncHandler(async (_req, res) => {
+    const repo = getCatalogRepository();
+    const restaurants = await repo.getAllRestaurants();
+    const allOrders = await sharedOrderRepo.getAll();
+    const revenueOrders = allOrders.filter((o) => REVENUE_COMPLETED_STATUSES.has(o.status));
+
+    const rows = await Promise.all(
+      restaurants.map(async (r) => {
+        const vendorOrders = allOrders.filter((o) => o.restaurant_id === r.id);
+        const vendorRevenue = revenueOrders.filter((o) => o.restaurant_id === r.id);
+        const revenue = vendorRevenue.reduce((sum, o) => sum + Number(o.total_amount), 0);
+        const commission = vendorRevenue.reduce(
+          (sum, o) => sum + Number(o.commission_amount ?? 0),
+          0,
+        );
+        const activeOrders = vendorOrders.filter((o) =>
+          ["CONFIRMED", "PREPARING", "ALMOST_READY", "READY_FOR_PICKUP"].includes(o.status),
+        ).length;
+        const owner = await sharedIdentityRepo.getById(r.owner_id).catch(() => null);
+        return {
+          ...r,
+          owner_phone: owner?.phone ?? null,
+          order_count: vendorOrders.length,
+          completed_orders: vendorRevenue.length,
+          revenue: Math.round(revenue),
+          commission: Math.round(commission),
+          active_orders: activeOrders,
+        };
+      }),
+    );
+
+    rows.sort((a, b) => b.revenue - a.revenue);
+    ok(res, rows);
+  }),
+);
+
+// ============================================
 // Dashboard Metrics (A-10) — Sprint 5.1: CAC/LTV
 // ============================================
 
@@ -469,6 +545,90 @@ adminRouter.get(
       cac_amount: cacAmount,
       ltv_amount: ltvAmount,
       cac_ltv_ratio: cacLtvRatio,
+    });
+  }),
+);
+
+// ============================================
+// Revenue Analytics (A-12) — daily series, payment split, top vendors
+// ============================================
+
+adminRouter.get(
+  "/revenue",
+  adminReadOnly,
+  asyncHandler(async (req, res) => {
+    const days = Math.min(30, Math.max(1, parseInt(String(req.query.days ?? "7"), 10) || 7));
+    const allOrders = await sharedOrderRepo.getAll();
+    const completed = allOrders.filter((o) => REVENUE_COMPLETED_STATUSES.has(o.status));
+
+    const buckets: Record<string, { date: string; revenue: number; orders: number; commission: number }> = {};
+    const today = new Date();
+    for (let i = days - 1; i >= 0; i -= 1) {
+      const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - i));
+      const key = d.toISOString().slice(0, 10);
+      buckets[key] = { date: key, revenue: 0, orders: 0, commission: 0 };
+    }
+
+    for (const o of completed) {
+      const key = new Date(o.created_at).toISOString().slice(0, 10);
+      if (buckets[key]) {
+        buckets[key].revenue += Number(o.total_amount);
+        buckets[key].orders += 1;
+        buckets[key].commission += Number(o.commission_amount ?? 0);
+      }
+    }
+    const series = Object.values(buckets).sort((a, b) => a.date.localeCompare(b.date));
+
+    const paymentSplit: Record<string, number> = {};
+    for (const o of completed) {
+      const p = await sharedPaymentRepo.getByOrderId(o.id).catch(() => null);
+      const method = p?.method ?? "UNKNOWN";
+      paymentSplit[method] = (paymentSplit[method] ?? 0) + 1;
+    }
+
+    const repo = getCatalogRepository();
+    const restaurants = await repo.getAllRestaurants();
+    const nameById = new Map(restaurants.map((r) => [r.id, r.name]));
+    const vendorAgg: Record<string, { restaurant_id: string; name: string; revenue: number; orders: number }> = {};
+    for (const o of completed) {
+      const agg = vendorAgg[o.restaurant_id] ?? {
+        restaurant_id: o.restaurant_id,
+        name: nameById.get(o.restaurant_id) ?? o.restaurant_id,
+        revenue: 0,
+        orders: 0,
+      };
+      agg.revenue += Number(o.total_amount);
+      agg.orders += 1;
+      vendorAgg[o.restaurant_id] = agg;
+    }
+    const topVendors = Object.values(vendorAgg)
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10);
+
+    const totals = series.reduce(
+      (acc, s) => ({
+        revenue: acc.revenue + s.revenue,
+        orders: acc.orders + s.orders,
+        commission: acc.commission + s.commission,
+      }),
+      { revenue: 0, orders: 0, commission: 0 },
+    );
+    const averageOrderValue = totals.orders > 0 ? totals.revenue / totals.orders : 0;
+
+    ok(res, {
+      days,
+      series,
+      totals: {
+        revenue: Math.round(totals.revenue),
+        orders: totals.orders,
+        commission: Math.round(totals.commission),
+        average_order_value: Math.round(averageOrderValue),
+      },
+      payment_split: paymentSplit,
+      top_vendors: topVendors.map((v) => ({
+        ...v,
+        revenue: Math.round(v.revenue),
+      })),
     });
   }),
 );
@@ -574,6 +734,55 @@ adminRouter.get(
     const role = typeof req.query.role === "string" ? req.query.role : undefined;
     const result = await sharedIdentityRepo.listAll(page, limit, search, role);
     ok(res, result);
+  }),
+);
+
+// ============================================
+// Customer 360 (A-12) — aggregate a user's full footprint
+// ============================================
+
+adminRouter.get(
+  "/customers/:id/360",
+  adminReadOnly,
+  asyncHandler(async (req, res) => {
+    const id = req.params.id as string;
+    const user = await sharedIdentityRepo.getById(id);
+    if (!user) {
+      throw new AppError("NOT_FOUND", "User not found", 404);
+    }
+    const orders = await sharedOrderRepo.getByUser(id);
+    const completed = orders.filter((o) => REVENUE_COMPLETED_STATUSES.has(o.status));
+    const vip = new VipSupportService(sharedOrderRepo, sharedSupportRepo).computeVip(orders);
+    const wallet = await sharedLoyaltyRepo.getWallet(id);
+    const walletTransactions = await sharedLoyaltyRepo.getWalletTransactions(id);
+    const stampCards = await sharedLoyaltyRepo.getStampCards(id);
+    const streak = await sharedLoyaltyRepo.getStreak(id);
+    const referralCode = await sharedLoyaltyRepo.getReferralCode(id);
+    const referralsGiven = await sharedLoyaltyRepo.getReferralClaimsByReferrer(id);
+    const referralsClaimed = await sharedLoyaltyRepo.getReferralClaimsByClaimant(id);
+    const tickets = await sharedSupportRepo.findByUser(id);
+
+    const totalSpend = completed.reduce((sum, o) => sum + Number(o.total_amount), 0);
+    const summary = {
+      total_spend: Math.round(totalSpend),
+      order_count: completed.length,
+      average_order_value: completed.length > 0 ? Math.round(totalSpend / completed.length) : 0,
+    };
+
+    ok(res, {
+      user,
+      vip,
+      summary,
+      wallet,
+      wallet_transactions: walletTransactions,
+      stamp_cards: stampCards,
+      streak,
+      referral_code: referralCode,
+      referrals_given: referralsGiven,
+      referrals_claimed: referralsClaimed,
+      tickets,
+      orders: orders.slice(0, 20),
+    });
   }),
 );
 

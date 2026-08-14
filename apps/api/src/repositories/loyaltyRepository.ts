@@ -73,6 +73,10 @@ export interface LoyaltyRepository {
   hasClaimedByDevice(deviceFingerprint: string): Promise<boolean>;
   hasUserClaimed(userId: string): Promise<boolean>;
   recordClaim(claim: Omit<ReferralClaim, "id" | "created_at">): Promise<ReferralClaim>;
+  /** A-12 Customer 360: all claims credited against this user's referral code. */
+  getReferralClaimsByReferrer(referrerUserId: string): Promise<ReferralClaim[]>;
+  /** A-12 Customer 360: all claims where this user redeemed a referral code. */
+  getReferralClaimsByClaimant(claimantUserId: string): Promise<ReferralClaim[]>;
   getWallet(userId: string): Promise<LoyaltyWallet>;
   creditWallet(
     userId: string,
@@ -157,6 +161,18 @@ export class MemoryLoyaltyRepository implements LoyaltyRepository {
     };
     this.claims.push(entry);
     return entry;
+  }
+
+  async getReferralClaimsByReferrer(referrerUserId: string): Promise<ReferralClaim[]> {
+    return this.claims
+      .filter((c) => c.referrer_user_id === referrerUserId)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+
+  async getReferralClaimsByClaimant(claimantUserId: string): Promise<ReferralClaim[]> {
+    return this.claims
+      .filter((c) => c.claimant_user_id === claimantUserId)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
 
   async getWallet(userId: string): Promise<LoyaltyWallet> {

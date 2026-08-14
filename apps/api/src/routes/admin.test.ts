@@ -3,7 +3,8 @@ import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { jwtService } from "../services/jwt";
-import { sharedKillSwitchRepo, sharedIdentityRepo, sharedSupportRepo, sharedRoleRepo } from "../repositories/shared";
+import { sharedKillSwitchRepo, sharedIdentityRepo, sharedSupportRepo, sharedRoleRepo, sharedOrderRepo, sharedPaymentRepo, sharedLoyaltyRepo } from "../repositories/shared";
+import type { OrderDTO } from "../repositories/orderRepository";
 import { resetRedisForTests } from "../lib/redis";
 
 function adminToken(role: string) {
@@ -41,6 +42,8 @@ describe("Admin RBAC (A-01, A-11)", () => {
       { method: "get" as const, path: "/api/v1/admin/audit-logs" },
       { method: "get" as const, path: "/api/v1/admin/orders" },
       { method: "get" as const, path: "/api/v1/admin/vendors" },
+      { method: "get" as const, path: "/api/v1/admin/vendors/metrics" },
+      { method: "get" as const, path: "/api/v1/admin/revenue" },
     ];
 
     for (const ep of readEndpoints) {
@@ -580,6 +583,368 @@ describe("Admin RBAC (A-01, A-11)", () => {
         .set("Authorization", adminToken("OPS_AGENT"))
         .send({ status: "RESOLVED" });
       expect(res.status).toBe(403);
+    });
+  });
+
+  // ============================================
+  // A-12: Customer 360, Revenue Analytics, Vendor Metrics
+  // ============================================
+
+  describe("Customer 360 (A-12)", () => {
+    const CUSTOMER_ID = "c360-test-0000000000000001";
+    const CUSTOMER_PHONE = "+919999111111";
+    const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
+    let settledOrderId: string;
+    let ticketId: string;
+
+    function orderSeed(id: string, status: OrderDTO["status"], total: number, commission: number, created: string) {
+      return {
+        id,
+        user_id: CUSTOMER_ID,
+        restaurant_id: RESTAURANT_ID,
+        restaurant_name: "Test Cafe",
+        items: [],
+        total_amount: total,
+        status,
+        commission_rate: 0.1,
+        commission_amount: commission,
+        is_catering: false,
+        headcount: null,
+        pickup_otp: null,
+        qr_token: null,
+        checked_in: false,
+        scheduled_pickup_time: null,
+        created_at: created,
+        updated_at: created,
+      };
+    }
+
+    beforeAll(async () => {
+      sharedIdentityRepo._reset();
+      sharedOrderRepo._reset();
+      sharedPaymentRepo._reset();
+      sharedLoyaltyRepo._reset();
+      sharedSupportRepo._reset();
+      sharedIdentityRepo._seed({
+        id: CUSTOMER_ID,
+        phone: CUSTOMER_PHONE,
+        role: "CONSUMER",
+        is_suspended: false,
+        totp_enabled: false,
+        created_at: new Date().toISOString(),
+      });
+      settledOrderId = "c360-order-0000000000000001";
+      sharedOrderRepo._seed(orderSeed(settledOrderId, "SETTLED", 1200, 120, new Date().toISOString()));
+      sharedOrderRepo._seed(orderSeed("c360-order-0000000000000002", "CANCELLED", 500, 0, new Date().toISOString()));
+      sharedOrderRepo._seed(orderSeed("c360-order-0000000000000003", "PREPARING", 300, 30, new Date().toISOString()));
+      await sharedPaymentRepo.create({
+        order_id: settledOrderId,
+        razorpay_order_id: "rp_c360",
+        amount: 1200,
+        method: "upi",
+      });
+      await sharedLoyaltyRepo.creditWallet(CUSTOMER_ID, 100, "referral_bonus");
+      await sharedLoyaltyRepo.incrementStamp(CUSTOMER_ID, RESTAURANT_ID);
+      await sharedLoyaltyRepo.recordClaim({
+        claimant_user_id: "c360-claimant-0000000000000001",
+        referrer_user_id: CUSTOMER_ID,
+        referral_code: "SNKZ-TEST01",
+        bonus_amount: 100,
+        ip_address: "127.0.0.1",
+        device_fingerprint: "fp-c360",
+      });
+      const ticket = await sharedSupportRepo.create({
+        user_id: CUSTOMER_ID,
+        subject: "Customer 360 ticket",
+        description: "help needed",
+        priority: "MEDIUM",
+        assignee: null,
+      });
+      ticketId = ticket.id;
+    });
+
+    it("returns 404 for unknown user", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/customers/nonexistent-id/360")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(404);
+    });
+
+    it("CONSUMER gets 403", async () => {
+      const res = await request(app)
+        .get(`/api/v1/admin/customers/${CUSTOMER_ID}/360`)
+        .set("Authorization", consumerToken());
+      expect(res.status).toBe(403);
+    });
+
+    it("returns user profile, VIP, and summary", async () => {
+      const res = await request(app)
+        .get(`/api/v1/admin/customers/${CUSTOMER_ID}/360`)
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      const d = res.body.data;
+      expect(d.user.id).toBe(CUSTOMER_ID);
+      expect(d.user.phone).toBe(CUSTOMER_PHONE);
+      expect(d.vip).toHaveProperty("is_vip");
+      expect(d.vip).toHaveProperty("order_count");
+      expect(d.summary.order_count).toBe(1);
+      expect(d.summary.total_spend).toBe(1200);
+      expect(d.summary.average_order_value).toBe(1200);
+    });
+
+    it("includes wallet, stamps, referrals, and tickets", async () => {
+      const res = await request(app)
+        .get(`/api/v1/admin/customers/${CUSTOMER_ID}/360`)
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      const d = res.body.data;
+      expect(d.wallet.balance).toBe(100);
+      expect(d.wallet_transactions.length).toBe(1);
+      expect(d.wallet_transactions[0].reason).toBe("referral_bonus");
+      expect(d.stamp_cards.length).toBe(1);
+      expect(d.stamp_cards[0].stamp_count).toBe(1);
+      expect(d.referral_code).toBeTruthy();
+      expect(d.referrals_given.length).toBe(1);
+      expect(d.referrals_given[0].referrer_user_id).toBe(CUSTOMER_ID);
+      expect(d.tickets.length).toBe(1);
+      expect(d.tickets[0].id).toBe(ticketId);
+      expect(d.orders.length).toBe(3);
+    });
+
+    it("OPS_AGENT can read customer 360", async () => {
+      const res = await request(app)
+        .get(`/api/v1/admin/customers/${CUSTOMER_ID}/360`)
+        .set("Authorization", adminToken("OPS_AGENT"));
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe("Revenue Analytics (A-12)", () => {
+    const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
+    const REVENUE_USER = "rev-test-000000000000000001";
+
+    function orderSeed(id: string, status: OrderDTO["status"], total: number, commission: number, daysAgo: number) {
+      const created = new Date(Date.now() - daysAgo * 86400000).toISOString();
+      return {
+        id,
+        user_id: REVENUE_USER,
+        restaurant_id: RESTAURANT_ID,
+        restaurant_name: "Test Cafe",
+        items: [],
+        total_amount: total,
+        status,
+        commission_rate: 0.1,
+        commission_amount: commission,
+        is_catering: false,
+        headcount: null,
+        pickup_otp: null,
+        qr_token: null,
+        checked_in: false,
+        scheduled_pickup_time: null,
+        created_at: created,
+        updated_at: created,
+      };
+    }
+
+    beforeAll(async () => {
+      sharedOrderRepo._reset();
+      sharedPaymentRepo._reset();
+      const todaySettled = "rev-order-000000000000001";
+      sharedOrderRepo._seed(orderSeed(todaySettled, "SETTLED", 1000, 100, 0));
+      sharedOrderRepo._seed(orderSeed("rev-order-000000000000002", "PICKED_UP", 500, 50, 0));
+      sharedOrderRepo._seed(orderSeed("rev-order-000000000000003", "SETTLED", 800, 80, 3));
+      sharedOrderRepo._seed(orderSeed("rev-order-000000000000004", "CANCELLED", 9000, 0, 0));
+      await sharedPaymentRepo.create({
+        order_id: todaySettled,
+        razorpay_order_id: "rp_rev_1",
+        amount: 1000,
+        method: "upi",
+      });
+    });
+
+    it("returns 7-day series with totals and payment split", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/revenue")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      const d = res.body.data;
+      expect(d.days).toBe(7);
+      expect(d.series.length).toBe(7);
+      expect(d.totals.orders).toBe(3);
+      expect(d.totals.revenue).toBe(2300);
+      expect(d.totals.commission).toBe(230);
+      expect(d.payment_split.upi).toBe(1);
+      expect(d.top_vendors.length).toBeGreaterThan(0);
+      expect(d.top_vendors[0].name).toBeTruthy();
+      // CANCELLED orders never count toward revenue
+      expect(d.totals.revenue).toBe(2300);
+    });
+
+    it("respects the days query param", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/revenue?days=30")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      expect(res.body.data.days).toBe(30);
+      expect(res.body.data.series.length).toBe(30);
+    });
+
+    it("clamps days to 30", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/revenue?days=999")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      expect(res.body.data.days).toBe(30);
+    });
+
+    it("CONSUMER gets 403", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/revenue")
+        .set("Authorization", consumerToken());
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe("Vendor Metrics (A-09)", () => {
+    const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
+    const VENDOR_USER = "vm-test-000000000000000001";
+
+    beforeAll(async () => {
+      sharedOrderRepo._reset();
+      const created = new Date().toISOString();
+      sharedOrderRepo._seed({
+        id: "vm-order-000000000000001",
+        user_id: VENDOR_USER,
+        restaurant_id: RESTAURANT_ID,
+        restaurant_name: "Test Cafe",
+        items: [],
+        total_amount: 400,
+        status: "SETTLED",
+        commission_rate: 0.1,
+        commission_amount: 40,
+        is_catering: false,
+        headcount: null,
+        pickup_otp: null,
+        qr_token: null,
+        checked_in: false,
+        scheduled_pickup_time: null,
+        created_at: created,
+        updated_at: created,
+      });
+      sharedOrderRepo._seed({
+        id: "vm-order-000000000000002",
+        user_id: VENDOR_USER,
+        restaurant_id: RESTAURANT_ID,
+        restaurant_name: "Test Cafe",
+        items: [],
+        total_amount: 100,
+        status: "PREPARING",
+        commission_rate: 0.1,
+        commission_amount: 10,
+        is_catering: false,
+        headcount: null,
+        pickup_otp: null,
+        qr_token: null,
+        checked_in: false,
+        scheduled_pickup_time: null,
+        created_at: created,
+        updated_at: created,
+      });
+    });
+
+    it("returns per-vendor aggregates", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/vendors/metrics")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      const rows = res.body.data;
+      expect(Array.isArray(rows)).toBe(true);
+      const vendor = rows.find((r: { id: string }) => r.id === RESTAURANT_ID);
+      expect(vendor).toBeTruthy();
+      expect(vendor.order_count).toBe(2);
+      expect(vendor.completed_orders).toBe(1);
+      expect(vendor.revenue).toBe(400);
+      expect(vendor.commission).toBe(40);
+      expect(vendor.active_orders).toBe(1);
+      expect(vendor.owner_phone).toBeDefined();
+    });
+
+    it("sorts by revenue descending", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/vendors/metrics")
+        .set("Authorization", adminToken("SUPER_ADMIN"));
+      expect(res.status).toBe(200);
+      const rows = res.body.data as { revenue: number }[];
+      for (let i = 1; i < rows.length; i += 1) {
+        const prev = rows[i - 1]!;
+        const curr = rows[i]!;
+        expect(prev.revenue).toBeGreaterThanOrEqual(curr.revenue);
+      }
+    });
+  });
+
+  // ============================================
+  // A-08: Order Detail enrichment (payment/customer/restaurant)
+  // ============================================
+
+  describe("Order Detail enrichment (A-08)", () => {
+    const ORDER_ID = "od-enrich-000000000000001";
+    const USER_ID = "od-user-000000000000000001";
+    const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
+
+    beforeAll(async () => {
+      sharedIdentityRepo._reset();
+      sharedOrderRepo._reset();
+      sharedPaymentRepo._reset();
+      sharedIdentityRepo._seed({
+        id: USER_ID,
+        phone: "+919999000000",
+        role: "CONSUMER",
+        is_suspended: false,
+        totp_enabled: false,
+        created_at: new Date().toISOString(),
+      });
+      const created = new Date().toISOString();
+      sharedOrderRepo._seed({
+        id: ORDER_ID,
+        user_id: USER_ID,
+        restaurant_id: RESTAURANT_ID,
+        restaurant_name: "Test Cafe",
+        items: [{ id: "od-item-000000000000001", menu_item_id: "m1", name: "Burger", base_price: 100, quantity: 2, customizations: [], customization_total: 0, item_subtotal: 200 }],
+        total_amount: 200,
+        status: "CONFIRMED",
+        commission_rate: 0.1,
+        commission_amount: 20,
+        is_catering: false,
+        headcount: null,
+        pickup_otp: null,
+        qr_token: null,
+        checked_in: false,
+        scheduled_pickup_time: null,
+        created_at: created,
+        updated_at: created,
+      });
+      await sharedPaymentRepo.create({
+        order_id: ORDER_ID,
+        razorpay_order_id: "rp_od",
+        amount: 200,
+        method: "card",
+      });
+    });
+
+    it("returns payment, customer, and restaurant enrichment", async () => {
+      const res = await request(app)
+        .get(`/api/v1/admin/orders/${ORDER_ID}`)
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      const d = res.body.data;
+      expect(d.payment.method).toBe("card");
+      expect(d.payment.status).toBe("CREATED");
+      expect(d.customer.phone).toBe("+919999000000");
+      expect(d.customer.role).toBe("CONSUMER");
+      expect(d.restaurant.name).toBe("Biryani House");
+      expect(d.items[0].name).toBe("Burger");
+      expect(d.commission_amount).toBe(20);
     });
   });
 });
