@@ -6,7 +6,8 @@
   "types": "./index.ts",
   "exports": {
     ".": "./index.ts",
-    "./tailwind": "./tailwind.config.ts"
+    "./tailwind": "./tailwind.config.ts",
+    "./ws": "./ws.ts"
   },
   "scripts": {
     "lint": "tsc --noEmit",

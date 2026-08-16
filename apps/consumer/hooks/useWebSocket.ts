@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { getWsUrl } from "@snakzap/config/ws";
 
 export interface OrderStatusUpdate {
   event: "ORDER_STATUS_UPDATE";
@@ -13,11 +14,7 @@ export interface OrderStatusUpdate {
   };
 }
 
-const WS_URL =
-  process.env.NEXT_PUBLIC_WS_URL ??
-  (typeof window !== "undefined"
-    ? `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/api/v1/ws`
-    : "ws://localhost:3001/api/v1/ws");
+const WS_URL = getWsUrl("/api/v1/ws");
 
 const BASE_RETRY_MS = 500;
 const MAX_RETRY_MS = 30_000;
