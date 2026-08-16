@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { fetchUsers, suspendUser, reactivateUser, updateUserRole, getSessionRoles } from "../../../lib/api";
+import { getUserRole, getCurrentUserId, canToggleSuspension } from "../../../lib/auth";
 
 const ALL_ROLES = ["CONSUMER", "VENDOR_OWNER", "VENDOR_STAFF", "OPS_AGENT", "ADMIN", "SUPER_ADMIN"] as const;
 
@@ -27,6 +28,8 @@ export default function UsersPage() {
   useEffect(() => { getRoles().then(setSessionRoles); }, []);
 
   const isSuperAdmin = sessionRoles.includes("SUPER_ADMIN");
+  const myRole = getUserRole() ?? "";
+  const myId = getCurrentUserId();
 
   const load = useCallback(() => {
     setError("");
@@ -163,17 +166,21 @@ export default function UsersPage() {
                     </td>
                     <td className="px-4 py-3 text-xs text-neutral-500">{new Date(u.created_at).toLocaleDateString()}</td>
                     <td className="px-4 py-3">
-                      <button
-                        onClick={() => handleToggle(u.id, u.is_suspended)}
-                        disabled={toggling === u.id}
-                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
-                          u.is_suspended
-                            ? "bg-green-50 text-green-600 hover:bg-green-100 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/40"
-                            : "bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/40"
-                        }`}
-                      >
-                        {toggling === u.id ? "..." : u.is_suspended ? "Reactivate" : "Suspend"}
-                      </button>
+                      {canToggleSuspension(myRole, myId, u.role, u.id) ? (
+                        <button
+                          onClick={() => handleToggle(u.id, u.is_suspended)}
+                          disabled={toggling === u.id}
+                          className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                            u.is_suspended
+                              ? "bg-green-50 text-green-600 hover:bg-green-100 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/40"
+                              : "bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/40"
+                          }`}
+                        >
+                          {toggling === u.id ? "..." : u.is_suspended ? "Reactivate" : "Suspend"}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-neutral-400">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}

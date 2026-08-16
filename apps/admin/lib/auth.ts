@@ -35,6 +35,33 @@ export function isAdmin(): boolean {
   return role === "ADMIN" || role === "SUPER_ADMIN";
 }
 
+export function getCurrentUserId(): string | null {
+  if (typeof window === "undefined") return null;
+  const token = getAccessToken();
+  if (!token) return null;
+  return (parseJwtPayload(token)?.sub as string | null) ?? null;
+}
+
+/** Whether the current role may change another user's role (SUPER_ADMIN only). */
+export function canChangeRole(actorRole: string | null): boolean {
+  return actorRole === "SUPER_ADMIN";
+}
+
+/** Whether the actor may suspend/reactivate the given target, mirroring the
+ *  API hierarchy: no self-service, ADMIN cannot touch operators, SUPER_ADMIN
+ *  cannot touch another SUPER_ADMIN. */
+export function canToggleSuspension(
+  actorRole: string | null,
+  actorId: string | null,
+  targetRole: string,
+  targetId: string,
+): boolean {
+  if (actorId && actorId === targetId) return false;
+  if (actorRole === "SUPER_ADMIN") return targetRole !== "SUPER_ADMIN";
+  if (actorRole === "ADMIN") return targetRole !== "ADMIN" && targetRole !== "SUPER_ADMIN";
+  return false;
+}
+
 export function clearSession(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(ROLE_KEY);

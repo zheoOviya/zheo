@@ -245,6 +245,66 @@ export function toggleVendorStatus(vendorId: string, isActive: boolean): Promise
   });
 }
 
+export type VendorApplicationStatus = "PENDING" | "APPROVED" | "REJECTED";
+export type VendorApplicationType = "SINGLE" | "CHAIN";
+
+export interface VendorApplicationDTO {
+  id: string;
+  applicant_id: string;
+  name: string;
+  gst_number: string;
+  fssai_license: string;
+  phone: string;
+  contact_email: string | null;
+  address: string | null;
+  city: string | null;
+  lat: number | null;
+  lng: number | null;
+  commission_rate: number;
+  status: VendorApplicationStatus;
+  type: VendorApplicationType;
+  outlet_count: number;
+  rejection_reason: string | null;
+  reviewer_id: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+}
+
+export function fetchVendorApplications(status?: VendorApplicationStatus): Promise<VendorApplicationDTO[]> {
+  const qs = status ? `?status=${status}` : "";
+  return adminFetch<VendorApplicationDTO[]>(`/vendor-applications${qs}`);
+}
+
+export interface VendorApplicationTrendPoint {
+  date: string;
+  submitted: number;
+  approved: number;
+  rejected: number;
+}
+
+export interface VendorApplicationMetrics {
+  total: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+  trend: VendorApplicationTrendPoint[];
+}
+
+export function fetchVendorApplicationMetrics(days = 14): Promise<VendorApplicationMetrics> {
+  return adminFetch<VendorApplicationMetrics>(`/vendor-applications/metrics?days=${days}`);
+}
+
+export function approveVendorApplication(id: string): Promise<{ application: VendorApplicationDTO; restaurant: { id: string; name: string } }> {
+  return adminFetch(`/vendor-applications/${id}/approve`, { method: "PUT" });
+}
+
+export function rejectVendorApplication(id: string, reason?: string): Promise<VendorApplicationDTO> {
+  return adminFetch(`/vendor-applications/${id}/reject`, {
+    method: "PUT",
+    body: reason ? JSON.stringify({ reason }) : undefined,
+  });
+}
+
 export function fetchAuditLogs(params?: {
   page?: number;
   limit?: number;
@@ -278,8 +338,11 @@ export function fetchUsers(page: number, search?: string, role?: string): Promis
   return adminFetch<UserListResponse>(`/users?${qs}`);
 }
 
-export function suspendUser(userId: string): Promise<UserDTO> {
-  return adminFetch<UserDTO>(`/users/${userId}/suspend`, { method: "PUT" });
+export function suspendUser(userId: string, reason?: string): Promise<UserDTO> {
+  return adminFetch<UserDTO>(`/users/${userId}/suspend`, {
+    method: "PUT",
+    body: reason ? JSON.stringify({ reason }) : undefined,
+  });
 }
 
 export function reactivateUser(userId: string): Promise<UserDTO> {

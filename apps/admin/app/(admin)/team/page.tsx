@@ -8,7 +8,12 @@ import {
   updateUserRole,
   type UserListResponse,
 } from "../../../lib/api";
-import { getUserRole } from "../../../lib/auth";
+import {
+  getUserRole,
+  getCurrentUserId,
+  canChangeRole,
+  canToggleSuspension,
+} from "../../../lib/auth";
 
 const ROLES = [
   "CONSUMER",
@@ -36,6 +41,8 @@ export default function TeamPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState("");
   const myRole = getUserRole() ?? "ADMIN";
+  const myId = getCurrentUserId();
+  const canManageRoles = canChangeRole(myRole);
   const canManage = myRole === "ADMIN" || myRole === "SUPER_ADMIN";
 
   const load = useCallback(() => {
@@ -132,7 +139,7 @@ export default function TeamPage() {
                     {user.phone}
                   </td>
                   <td className="px-4 py-3">
-                    {canManage ? (
+                    {canManageRoles ? (
                       <select
                         value={user.role}
                         disabled={busyId === user.id}
@@ -173,17 +180,21 @@ export default function TeamPage() {
                   </td>
                   {canManage && (
                     <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => toggleSuspension(user.id, user.is_suspended)}
-                        disabled={busyId === user.id}
-                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
-                          user.is_suspended
-                            ? "bg-emerald-50 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-400"
-                            : "bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400"
-                        }`}
-                      >
-                        {user.is_suspended ? "Reactivate" : "Suspend"}
-                      </button>
+                      {canToggleSuspension(myRole, myId, user.role, user.id) ? (
+                        <button
+                          onClick={() => toggleSuspension(user.id, user.is_suspended)}
+                          disabled={busyId === user.id}
+                          className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                            user.is_suspended
+                              ? "bg-emerald-50 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-400"
+                              : "bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400"
+                          }`}
+                        >
+                          {user.is_suspended ? "Reactivate" : "Suspend"}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-neutral-400">—</span>
+                      )}
                     </td>
                   )}
                 </tr>
