@@ -87,6 +87,28 @@ export class DrizzleIdentityRepository implements IdentityRepository {
     };
   }
 
+  async createByPhone(
+    phone: string,
+    role: IdentityUser["role"] = "CONSUMER",
+  ): Promise<IdentityUser | null> {
+    const existing = await this.getByPhone(phone);
+    if (existing) return null;
+    const newId = randomUUID();
+    await this.db.insert(users).values({
+      id: newId,
+      phone,
+      role,
+    });
+    return {
+      id: newId,
+      phone,
+      role,
+      is_suspended: false,
+      totp_enabled: false,
+      created_at: new Date().toISOString(),
+    };
+  }
+
   async updateSpiceTolerance(
     userId: string,
     tolerance: number,
@@ -118,10 +140,10 @@ export class DrizzleIdentityRepository implements IdentityRepository {
     return { items, total };
   }
 
-  async suspend(userId: string): Promise<IdentityUser | null> {
+  async suspend(userId: string, reason?: string | null): Promise<IdentityUser | null> {
     await this.db
       .update(users)
-      .set({ is_suspended: true })
+      .set({ is_suspended: true, suspended_reason: reason ?? null })
       .where(eq(users.id, userId));
     return this.getById(userId);
   }

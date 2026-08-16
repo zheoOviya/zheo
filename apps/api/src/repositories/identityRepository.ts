@@ -43,6 +43,8 @@ export interface IdentityRepository {
   getByEmail(email: string): Promise<IdentityUser | null>;
   /** Returns the existing user for a phone or creates one (idempotent). */
   ensureByPhone(phone: string, role?: IdentityUser["role"]): Promise<IdentityUser>;
+  /** Creates a user for a phone, returning null when the phone is already taken. */
+  createByPhone(phone: string, role?: IdentityUser["role"]): Promise<IdentityUser | null>;
   /** D03: sets the user's spice tolerance (1-5). */
   updateSpiceTolerance(
     userId: string,
@@ -50,8 +52,8 @@ export interface IdentityRepository {
   ): Promise<IdentityUser | null>;
   /** A-06: paginated user listing with optional phone search and role filter. */
   listAll(page: number, limit: number, searchPhone?: string, role?: IdentityUser["role"]): Promise<{ items: IdentityUser[]; total: number }>;
-  /** A-06: suspend a user by id. */
-  suspend(userId: string): Promise<IdentityUser | null>;
+  /** A-06: suspend a user by id, optionally recording a reason. */
+  suspend(userId: string, reason?: string | null): Promise<IdentityUser | null>;
   /** A-06: reactivate a suspended user by id. */
   reactivate(userId: string): Promise<IdentityUser | null>;
   /** A-06: update user role (SUPER_ADMIN only). */
@@ -107,6 +109,23 @@ export class MemoryIdentityRepository implements IdentityRepository {
   ): Promise<IdentityUser> {
     const existing = this.users.get(phone);
     if (existing) return existing;
+    const user: IdentityUser = {
+      id: randomUUID(),
+      phone,
+      role,
+      is_suspended: false,
+      totp_enabled: false,
+      created_at: new Date().toISOString(),
+    };
+    this.indexUser(user);
+    return user;
+  }
+
+  async createByPhone(
+    phone: string,
+    role: IdentityUser["role"] = "CONSUMER",
+  ): Promise<IdentityUser | null> {
+    if (this.users.has(phone)) return null;
     const user: IdentityUser = {
       id: randomUUID(),
       phone,
@@ -182,10 +201,14 @@ export class MemoryIdentityRepository implements IdentityRepository {
     return { items, total };
   }
 
-  async suspend(userId: string): Promise<IdentityUser | null> {
+  async suspend(userId: string, reason?: string | null): Promise<IdentityUser | null> {
     const user = this.usersById.get(userId);
     if (!user) return null;
-    const updated: IdentityUser = { ...user, is_suspended: true };
+    const updated: IdentityUser = {
+      ...user,
+      is_suspended: true,
+      suspended_reason: reason ?? null,
+    };
     this.indexUser(updated);
     return updated;
   }

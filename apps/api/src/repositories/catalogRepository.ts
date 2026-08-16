@@ -12,6 +12,8 @@ export interface RestaurantDTO {
   id: string;
   name: string;
   gst_number: string | null;
+  /** FSSAI license number (required at onboarding, captured on approval). */
+  fssai_license?: string | null;
   owner_id: string;
   commission_rate: number;
   is_active: boolean;
@@ -20,6 +22,21 @@ export interface RestaurantDTO {
   lng: number | null;
   /** Estimated prep/pickup time in minutes shown on consumer cards. */
   pickup_eta_min: number;
+  /** Multi-outlet chain linkage (NULL for standalone restaurants). */
+  chain_id?: string | null;
+}
+
+/** Input required to create a restaurant (vendor onboarding approval). */
+export interface CreateRestaurantInput {
+  name: string;
+  gst_number: string | null;
+  fssai_license: string | null;
+  owner_id: string;
+  commission_rate: number;
+  lat: number | null;
+  lng: number | null;
+  pickup_eta_min: number;
+  chain_id?: string | null;
 }
 
 export interface MenuItemDTO {
@@ -96,10 +113,12 @@ export interface CatalogRepository {
   getAllRestaurants(): Promise<RestaurantDTO[]>;
   /** A-04 Admin: toggle restaurant active status. */
   updateRestaurantStatus(id: string, isActive: boolean): Promise<RestaurantDTO | null>;
+  /** Vendor onboarding: create a restaurant (used on application approval). */
+  createRestaurant(input: CreateRestaurantInput): Promise<RestaurantDTO>;
 }
 
 // Allowed dietary tags (validated upstream via Zod enum)
-export const ALLOWED_DIETARY_TAGS = ["VEG", "JAIN", "HALAL"] as const;
+export const ALLOWED_DIETARY_TAGS = ["VEG", "JAIN"] as const;
 export type DietaryTag = (typeof ALLOWED_DIETARY_TAGS)[number];
 
 // ============================================
@@ -381,6 +400,36 @@ export class DrizzleCatalogRepository implements CatalogRepository {
     await this.db.update(restaurants).set({ is_active: isActive }).where(eq(restaurants.id, id));
     return this.getRestaurantById(id);
   }
+
+  async createRestaurant(input: CreateRestaurantInput): Promise<RestaurantDTO> {
+    const id = randomUUID();
+    await this.db.insert(restaurants).values({
+      id,
+      name: input.name,
+      gst_number: input.gst_number ?? "",
+      fssai_license: input.fssai_license ?? "",
+      owner_id: input.owner_id,
+      commission_rate: String(input.commission_rate),
+      is_active: true,
+      lat: input.lat ?? undefined,
+      lng: input.lng ?? undefined,
+      pickup_eta_min: input.pickup_eta_min,
+      chain_id: input.chain_id ?? undefined,
+    });
+    return {
+      id,
+      name: input.name,
+      gst_number: input.gst_number,
+      fssai_license: input.fssai_license,
+      owner_id: input.owner_id,
+      commission_rate: input.commission_rate,
+      is_active: true,
+      lat: input.lat,
+      lng: input.lng,
+      pickup_eta_min: input.pickup_eta_min,
+      chain_id: input.chain_id ?? null,
+    };
+  }
 }
 
 // ============================================
@@ -545,5 +594,23 @@ export class MemoryCatalogRepository implements CatalogRepository {
     if (!rest) return null;
     rest.is_active = isActive;
     return { ...rest };
+  }
+
+  async createRestaurant(input: CreateRestaurantInput): Promise<RestaurantDTO> {
+    const created: RestaurantDTO = {
+      id: randomUUID(),
+      name: input.name,
+      gst_number: input.gst_number,
+      fssai_license: input.fssai_license,
+      owner_id: input.owner_id,
+      commission_rate: input.commission_rate,
+      is_active: true,
+      lat: input.lat,
+      lng: input.lng,
+      pickup_eta_min: input.pickup_eta_min,
+      chain_id: input.chain_id ?? null,
+    };
+    this.restaurantsData.push(created);
+    return created;
   }
 }

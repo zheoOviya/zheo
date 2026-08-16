@@ -10,6 +10,9 @@ import type { ChainRepository } from "./chainRepository";
 import type { SupportRepository } from "./supportRepository";
 import type { KillSwitchRepository } from "./killSwitchRepository";
 import type { RoleRepository } from "./roleRepository";
+import type { VendorApplicationRepository } from "./vendorApplicationRepository";
+import type { NotificationRepository } from "./notificationRepository";
+import type { UserRoleRepository } from "./userRoleRepository";
 
 import { MemoryOrderRepository } from "./orderRepository";
 import { MemoryPaymentRepository } from "./paymentRepository";
@@ -19,16 +22,22 @@ import { MemoryPosOrderRepository } from "./posRepository";
 import { MemoryPromotionRepository } from "./promotionRepository";
 import { MemoryLoyaltyRepository } from "./loyaltyRepository";
 import { MemoryGroupCartRepository } from "./groupCartRepository";
-import { MemoryChainRepository } from "./chainRepository";
+import { MemoryChainRepository, DrizzleChainRepository } from "./chainRepository";
 import { MemorySupportRepository } from "./supportRepository";
 import { MemoryKillSwitchRepository } from "./killSwitchRepository";
 import { MemoryRoleRepository } from "./roleRepository";
+import { MemoryVendorApplicationRepository } from "./vendorApplicationRepository";
+import { MemoryNotificationRepository } from "./notificationRepository";
+import { MemoryUserRoleRepository } from "./userRoleRepository";
 
 import { DrizzleOrderRepository } from "./drizzle/drizzleOrderRepository";
 import { DrizzlePaymentRepository } from "./drizzle/drizzlePaymentRepository";
 import { DrizzleAuditRepository } from "./drizzle/drizzleAuditRepository";
 import { DrizzleIdentityRepository } from "./drizzle/drizzleIdentityRepository";
 import { DrizzleKillSwitchRepository } from "./killSwitchRepository";
+import { DrizzleVendorApplicationRepository } from "./vendorApplicationRepository";
+import { DrizzleNotificationRepository } from "./notificationRepository";
+import { DrizzleUserRoleRepository } from "./userRoleRepository";
 
 import { getDb } from "../lib/db";
 
@@ -74,6 +83,9 @@ interface RepoSet {
   sharedSupportRepo: SupportRepository & { _reset(): void };
   sharedKillSwitchRepo: KillSwitchRepository & { _reset(): void };
   sharedRoleRepo: RoleRepository & { _reset(): void };
+  sharedVendorApplicationRepo: VendorApplicationRepository & { _reset(): void; _seed(app: unknown): void };
+  sharedNotificationRepo: NotificationRepository & { _reset(): void };
+  sharedUserRoleRepo: UserRoleRepository & { _reset(): void; _seed(dto: unknown): void };
 }
 
 let _repos: RepoSet | null = null;
@@ -106,6 +118,9 @@ function getRepos(): RepoSet {
       sharedSupportRepo: new MemorySupportRepository(),
       sharedKillSwitchRepo: new MemoryKillSwitchRepository(),
       sharedRoleRepo: new MemoryRoleRepository(),
+      sharedVendorApplicationRepo: new MemoryVendorApplicationRepository(),
+      sharedNotificationRepo: new MemoryNotificationRepository(),
+      sharedUserRoleRepo: new MemoryUserRoleRepository(),
     };
   } else {
     const db = getDb();
@@ -119,10 +134,13 @@ function getRepos(): RepoSet {
         sharedPromotionRepo: new MemoryPromotionRepository(),
         sharedLoyaltyRepo: new MemoryLoyaltyRepository(),
         sharedGroupCartRepo: new MemoryGroupCartRepository(),
-        sharedChainRepo: new MemoryChainRepository(),
+        sharedChainRepo: new DrizzleChainRepository(db) as unknown as RepoSet["sharedChainRepo"],
         sharedSupportRepo: new MemorySupportRepository(),
         sharedKillSwitchRepo: new DrizzleKillSwitchRepository(db) as unknown as RepoSet["sharedKillSwitchRepo"],
         sharedRoleRepo: new MemoryRoleRepository(),
+        sharedVendorApplicationRepo: new DrizzleVendorApplicationRepository(db) as unknown as RepoSet["sharedVendorApplicationRepo"],
+        sharedNotificationRepo: new DrizzleNotificationRepository(db) as unknown as RepoSet["sharedNotificationRepo"],
+        sharedUserRoleRepo: new DrizzleUserRoleRepository(db) as unknown as RepoSet["sharedUserRoleRepo"],
       };
     } catch {
       _repos = {
@@ -138,6 +156,9 @@ function getRepos(): RepoSet {
         sharedSupportRepo: new MemorySupportRepository(),
         sharedKillSwitchRepo: new MemoryKillSwitchRepository(),
         sharedRoleRepo: new MemoryRoleRepository(),
+        sharedVendorApplicationRepo: new MemoryVendorApplicationRepository(),
+        sharedNotificationRepo: new MemoryNotificationRepository(),
+        sharedUserRoleRepo: new MemoryUserRoleRepository(),
       };
     }
   }
@@ -157,3 +178,6 @@ export const sharedChainRepo = getRepos().sharedChainRepo;
 export const sharedSupportRepo = getRepos().sharedSupportRepo;
 export const sharedKillSwitchRepo = getRepos().sharedKillSwitchRepo;
 export const sharedRoleRepo = getRepos().sharedRoleRepo;
+export const sharedVendorApplicationRepo = getRepos().sharedVendorApplicationRepo;
+export const sharedNotificationRepo = getRepos().sharedNotificationRepo;
+export const sharedUserRoleRepo = getRepos().sharedUserRoleRepo;
