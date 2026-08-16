@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { fetchSettlementSummary, downloadSettlementPdf, type SettlementSummary } from "@/lib/api";
+import { useActiveRestaurant } from "@/hooks/useActiveRestaurant";
 import { formatINR, formatDate } from "@/lib/format";
 import {
   PageHeader,
@@ -17,24 +18,27 @@ export default function SettlementsPage() {
   const [summary, setSummary] = useState<SettlementSummary | null>(null);
   const [error, setError] = useState("");
   const [downloading, setDownloading] = useState(false);
+  const { activeRestaurantId } = useActiveRestaurant();
 
   const load = useCallback(async () => {
+    if (!activeRestaurantId) return;
     try {
-      setSummary(await fetchSettlementSummary());
+      setSummary(await fetchSettlementSummary(activeRestaurantId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load settlement summary");
     }
-  }, []);
+  }, [activeRestaurantId]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   async function handleDownload() {
+    if (!activeRestaurantId) return;
     setDownloading(true);
     setError("");
     try {
-      await downloadSettlementPdf();
+      await downloadSettlementPdf(activeRestaurantId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to download the PDF report");
     } finally {

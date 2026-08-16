@@ -5,7 +5,13 @@ import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
 import { resetCatalogRepository } from "./catalog";
-import { sharedAuditRepo, sharedOrderRepo } from "../repositories/shared";
+import {
+  sharedAuditRepo,
+  sharedChainRepo,
+  sharedOrderRepo,
+  sharedUserRoleRepo,
+} from "../repositories/shared";
+import { makeChain } from "../repositories/chainRepository";
 import type { OrderDTO, OrderItemDTO } from "../repositories/orderRepository";
 
 // ============================================
@@ -14,9 +20,11 @@ import type { OrderDTO, OrderItemDTO } from "../repositories/orderRepository";
 
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const GREEN_BOWL_ID = "a0000000-0000-4000-8000-000000000002";
+const CLOSED_KITCHEN_ID = "a0000000-0000-4000-8000-000000000003";
 const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001"; // Chicken Biryani
 const MENU_ITEM_2 = "b0000000-0000-4000-8000-000000000002"; // Veg Biryani
 const OWNER_ID = "e0000000-0000-4000-a000-000000000001"; // Biryani House owner
+const STAFF_ID = "e0000000-0000-4000-a000-000000000099"; // scoped staff member
 
 function vendorAuthHeaders(userId?: string, role?: string) {
   return {
@@ -91,6 +99,8 @@ describe("Vendor Ops routes", () => {
     resetCatalogRepository();
     sharedOrderRepo._reset();
     sharedAuditRepo._reset();
+    sharedUserRoleRepo._reset();
+    sharedChainRepo._reset();
     app = createApp();
   });
 
@@ -237,5 +247,102 @@ describe("Vendor Ops routes", () => {
       .get(`/api/v1/restaurants/${REST_ID}/menu`)
       .expect(200);
     expect(res.body.data.map((m: { id: string }) => m.id)).not.toContain(MENU_ITEM_2);
+  });
+});
+
+describe("Vendor multi-restaurant resolution", () => {
+  let app: Express;
+
+  beforeEach(() => {
+    resetRedisForTests();
+    resetCatalogRepository();
+    sharedOrderRepo._reset();
+    sharedAuditRepo._reset();
+    sharedUserRoleRepo._reset();
+    sharedChainRepo._reset();
+    app = createApp();
+  });
+
+  it("returns only the restaurants the vendor owns", async () => {
+    const res = await request(app)
+      .get("/api/vendor/restaurants")
+      .set(vendorAuthHeaders())
+      .expect(200);
+
+    expect(res.body.success).toBe(true);
+    const ids = res.body.data.map((r: { id: string }) => r.id);
+    expect(ids).toEqual([REST_ID]);
+    expect(ids).not.toContain(GREEN_BOWL_ID);
+    expect(ids).not.toContain(CLOSED_KITCHEN_ID);
+    expect(res.body.data[0]).toMatchObject({
+      id: REST_ID,
+      name: "Biryani House",
+      is_active: true,
+      commission_rate: 0.08,
+      chain_id: null,
+    });
+  });
+
+  it("includes restaurants granted via restaurant-scoped membership", async () => {
+    await sharedUserRoleRepo.assign({
+      user_id: STAFF_ID,
+      scope_type: "restaurant",
+      scope_id: GREEN_BOWL_ID,
+      role: "VENDOR_STAFF",
+    });
+
+    const res = await request(app)
+      .get("/api/vendor/restaurants")
+      .set(vendorAuthHeaders(STAFF_ID, "VENDOR_STAFF"))
+      .expect(200);
+
+    const ids = res.body.data.map((r: { id: string }) => r.id);
+    expect(ids).toEqual([GREEN_BOWL_ID]);
+  });
+
+  it("includes chain outlets granted via chain-scoped membership", async () => {
+    const chain = makeChain(
+      "Franchise Co",
+      "e0000000-0000-4000-a000-0000000000aa",
+      "c0000000-0000-4000-8000-0000000000ff",
+    );
+    sharedChainRepo._seed(chain, [GREEN_BOWL_ID]);
+    await sharedUserRoleRepo.assign({
+      user_id: STAFF_ID,
+      scope_type: "chain",
+      scope_id: chain.id,
+      role: "VENDOR_STAFF",
+    });
+
+    const res = await request(app)
+      .get("/api/vendor/restaurants")
+      .set(vendorAuthHeaders(STAFF_ID, "VENDOR_STAFF"))
+      .expect(200);
+
+    const ids = res.body.data.map((r: { id: string }) => r.id);
+    expect(ids).toEqual([GREEN_BOWL_ID]);
+    expect(res.body.data[0].chain_id).toBe(chain.id);
+  });
+
+  it("returns every restaurant for ADMIN platform oversight", async () => {
+    const res = await request(app)
+      .get("/api/vendor/restaurants")
+      .set(vendorAuthHeaders("u-admin", "ADMIN"))
+      .expect(200);
+
+    const ids = res.body.data.map((r: { id: string }) => r.id).sort();
+    expect(ids).toEqual([REST_ID, GREEN_BOWL_ID, CLOSED_KITCHEN_ID].sort());
+  });
+
+  it("requires authentication", async () => {
+    await request(app).get("/api/vendor/restaurants").expect(401);
+  });
+
+  it("forbids CONSUMER from listing vendor restaurants", async () => {
+    const res = await request(app)
+      .get("/api/vendor/restaurants")
+      .set(vendorAuthHeaders("u-consumer", "CONSUMER"))
+      .expect(403);
+    expect(res.body.error.code).toBe("FORBIDDEN");
   });
 });

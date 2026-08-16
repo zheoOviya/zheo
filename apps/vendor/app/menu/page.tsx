@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { fetchMenu, updateMenuItem, uploadMenuPhoto, type VendorMenuItem } from "@/lib/api";
+import { useActiveRestaurant } from "@/hooks/useActiveRestaurant";
 import { formatINR } from "@/lib/format";
 import { PageHeader, ErrorBanner, Spinner, EmptyPanel, SecondaryButton } from "@/components/ui";
 
@@ -11,7 +12,6 @@ const TAG_LABELS: Record<string, { label: string; className: string }> = {
   VEG: { label: "VEG", className: "border-emerald-500 text-emerald-600" },
   NON_VEG: { label: "NON VEG", className: "border-red-500 text-red-600" },
   JAIN: { label: "JAIN", className: "border-amber-500 text-amber-600" },
-  HALAL: { label: "HALAL", className: "border-teal-500 text-teal-600" },
 };
 
 export default function MenuPage() {
@@ -21,28 +21,35 @@ export default function MenuPage() {
   const [uploading, setUploading] = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
+  const { activeRestaurantId } = useActiveRestaurant();
 
   const load = useCallback(async () => {
+    if (!activeRestaurantId) return;
     try {
-      setItems(await fetchMenu());
+      setItems(await fetchMenu(activeRestaurantId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load menu");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeRestaurantId]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   async function toggleAvailability(item: VendorMenuItem) {
+    if (!activeRestaurantId) return;
     setToggling(item.id);
     setError("");
     try {
-      const updated = await updateMenuItem(item.id, {
-        is_available: !item.is_available,
-      });
+      const updated = await updateMenuItem(
+        item.id,
+        {
+          is_available: !item.is_available,
+        },
+        activeRestaurantId,
+      );
       setItems((prev) => prev.map((i) => (i.id === item.id ? updated : i)));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update item");
@@ -52,10 +59,11 @@ export default function MenuPage() {
   }
 
   async function handlePhoto(item: VendorMenuItem, file: File) {
+    if (!activeRestaurantId) return;
     setUploading(item.id);
     setError("");
     try {
-      const result = await uploadMenuPhoto(item.id, file);
+      const result = await uploadMenuPhoto(item.id, file, activeRestaurantId);
       setItems((prev) =>
         prev.map((i) => (i.id === item.id ? { ...i, image_url: result.image_url } : i)),
       );

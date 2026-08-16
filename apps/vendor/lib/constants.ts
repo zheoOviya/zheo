@@ -1,3 +1,5 @@
-// Shared vendor constants. The demo seed only provisions a single
-// restaurant, so all vendor pages operate on the same id.
-export const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
+// Shared vendor constants.
+// The demo seed provisions a single restaurant, but vendor pages must no
+// longer assume a fixed restaurant id. The signed-in vendor's active
+// restaurant is resolved dynamically via GET /api/vendor/restaurants and
+// stored in lib/store.ts. See lib/api.ts fetchVendorRestaurants().

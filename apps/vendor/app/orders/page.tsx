@@ -10,7 +10,7 @@ import {
   type OrderStatus,
   type PaymentMethod,
 } from "@/lib/api";
-import { RESTAURANT_ID } from "@/lib/constants";
+import { useActiveRestaurant } from "@/hooks/useActiveRestaurant";
 import { useOrdersWebSocket } from "@/hooks/useOrdersWebSocket";
 import { isPickupOtpComplete, sanitizePickupOtp, pickupFailureMessage } from "@/lib/kds";
 import {
@@ -77,13 +77,15 @@ export default function OrdersPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(30);
 
-  const { updates } = useOrdersWebSocket(RESTAURANT_ID);
+  const { activeRestaurantId } = useActiveRestaurant();
+  const { updates } = useOrdersWebSocket(activeRestaurantId);
 
   useEffect(() => {
+    if (!activeRestaurantId) return;
     let cancelled = false;
     (async () => {
       try {
-        const all = await fetchOrders({ scope: "all" });
+        const all = await fetchOrders({ scope: "all" }, activeRestaurantId);
         if (!cancelled) setOrders(all);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load orders");
@@ -94,7 +96,7 @@ export default function OrdersPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activeRestaurantId]);
 
   useEffect(() => {
     if (updates.length === 0) return;

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { syncPosMenu, simulatePosOrder, type PosSimulateResult } from "@/lib/api";
+import { useActiveRestaurant } from "@/hooks/useActiveRestaurant";
 import { shortOrderId } from "@/lib/format";
 import {
   PageHeader,
@@ -26,6 +27,7 @@ export default function PosPage() {
   const [testing, setTesting] = useState(false);
   const [activity, setActivity] = useState<Activity[]>([]);
   const [error, setError] = useState("");
+  const { activeRestaurantId } = useActiveRestaurant();
 
   useEffect(() => {
     const stored = window.localStorage.getItem(STORE_KEY);
@@ -46,10 +48,11 @@ export default function PosPage() {
   }
 
   async function handleSync() {
+    if (!activeRestaurantId) return;
     setSyncing(true);
     setError("");
     try {
-      const result = await syncPosMenu();
+      const result = await syncPosMenu(activeRestaurantId);
       setActivity((prev) => [{ kind: "synced", synced: result.synced }, ...prev]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sync failed");
@@ -59,10 +62,11 @@ export default function PosPage() {
   }
 
   async function handleTestOrder() {
+    if (!activeRestaurantId) return;
     setTesting(true);
     setError("");
     try {
-      const result = await simulatePosOrder();
+      const result = await simulatePosOrder(activeRestaurantId);
       setActivity((prev) => [{ kind: "imported", result: result.import }, ...prev]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Test order failed");

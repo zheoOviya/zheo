@@ -7,10 +7,12 @@ import { assertRestaurantAccess } from "../middleware/vendorAccess";
 import { getCatalogRepository } from "./catalog";
 import {
   sharedAuditRepo,
+  sharedChainRepo,
   sharedIdentityRepo,
   sharedOrderRepo,
   sharedPosOrderRepo,
   sharedPromotionRepo,
+  sharedUserRoleRepo,
 } from "../repositories/shared";
 import {
   ALLOWED_IMAGE_MIME,
@@ -36,6 +38,7 @@ import {
 } from "../services/gstExport";
 import {
   MenuBulkUpdateError,
+  type RestaurantDTO,
 } from "../repositories/catalogRepository";
 import { logger } from "../lib/logger";
 
@@ -145,6 +148,82 @@ const petpoojaPosService = new PetpoojaPosService(
   getCatalogRepository(),
   sharedIdentityRepo,
   sharedPosOrderRepo,
+);
+
+// ---- Multi-vendor: list restaurants the caller can operate -----------------
+
+interface VendorRestaurantResponse {
+  id: string;
+  name: string;
+  is_active: boolean;
+  commission_rate: number;
+  chain_id: string | null;
+}
+
+/**
+ * Resolves every restaurant the caller is allowed to operate, mirroring the
+ * ownership rules in `assertRestaurantAccess`:
+ *   - ADMIN / SUPER_ADMIN -> all restaurants (platform scope)
+ *   - direct owner_id match
+ *   - restaurant-scoped user_roles membership
+ *   - chain-scoped user_roles membership (covers every outlet of the chain)
+ *   - legacy chain owner fallback
+ */
+async function vendorRestaurantsFor(
+  userId: string,
+  role: string,
+): Promise<VendorRestaurantResponse[]> {
+  const repo = getCatalogRepository();
+
+  if (role === "ADMIN" || role === "SUPER_ADMIN") {
+    const all = await repo.getAllRestaurants();
+    return Promise.all(all.map(toVendorRestaurant));
+  }
+
+  const all = await repo.getAllRestaurants();
+  const owned: RestaurantDTO[] = [];
+  for (const restaurant of all) {
+    if (restaurant.owner_id === userId) {
+      owned.push(restaurant);
+      continue;
+    }
+    if (await sharedUserRoleRepo.isMember(userId, "restaurant", restaurant.id)) {
+      owned.push(restaurant);
+      continue;
+    }
+    const chainId = await sharedChainRepo.getOutletChainId(restaurant.id);
+    if (chainId) {
+      if (await sharedUserRoleRepo.isMember(userId, "chain", chainId)) {
+        owned.push(restaurant);
+        continue;
+      }
+      const chain = await sharedChainRepo.getById(chainId);
+      if (chain?.owner_id === userId) owned.push(restaurant);
+    }
+  }
+  return Promise.all(owned.map(toVendorRestaurant));
+}
+
+async function toVendorRestaurant(r: RestaurantDTO): Promise<VendorRestaurantResponse> {
+  return {
+    id: r.id,
+    name: r.name,
+    is_active: r.is_active,
+    commission_rate: r.commission_rate,
+    chain_id: await sharedChainRepo.getOutletChainId(r.id),
+  };
+}
+
+vendorOpsRouter.get(
+  "/restaurants",
+  asyncHandler(async (req, res) => {
+    const userId = res.locals.userId;
+    const role = String(res.locals.userRole ?? "");
+    if (typeof userId !== "string" || userId.length === 0) {
+      throw new AppError("UNAUTHORIZED", "Authentication required", 401);
+    }
+    ok(res, await vendorRestaurantsFor(userId, role));
+  }),
 );
 
 // ---- V13: Menu Management -------------------------------------------------

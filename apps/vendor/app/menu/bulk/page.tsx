@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { fetchMenu, bulkUpdateMenu, type VendorMenuItem } from "@/lib/api";
+import { useActiveRestaurant } from "@/hooks/useActiveRestaurant";
 import { formatINR } from "@/lib/format";
 import {
   PageHeader,
@@ -18,16 +19,18 @@ export default function BulkMenuPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const { activeRestaurantId } = useActiveRestaurant();
 
   const load = useCallback(async () => {
+    if (!activeRestaurantId) return;
     try {
-      setItems(await fetchMenu());
+      setItems(await fetchMenu(activeRestaurantId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load menu");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeRestaurantId]);
 
   useEffect(() => {
     load();
@@ -41,6 +44,7 @@ export default function BulkMenuPage() {
   }
 
   async function handleSave() {
+    if (!activeRestaurantId) return;
     setSaving(true);
     setError("");
     setSuccess("");
@@ -52,6 +56,7 @@ export default function BulkMenuPage() {
           is_available: item.is_available,
           description: item.description,
         })),
+        activeRestaurantId,
       );
       setItems(updated);
       setSuccess(`Saved ${updated.length} menu items in one transaction.`);

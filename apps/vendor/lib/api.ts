@@ -1,58 +1,69 @@
 "use client";
 
-import { RESTAURANT_ID } from "./constants";
+import {
+  getAccessToken as getStoredToken,
+  refreshSession,
+  logout as clearVendorSession,
+} from "./auth";
 
 // ============================================
 // Vendor console API client.
 // All /api/vendor/* endpoints are role-gated
 // (VENDOR_OWNER / VENDOR_STAFF), so every request
-// carries the demo-owner Bearer token obtained via
-// the dev OTP login. Previously pages used plain
-// fetch -> 401 -> silently empty dashboards.
+// carries the merchant's Bearer token obtained via
+// the phone+OTP sign-in on /login (see lib/auth.ts).
+// If no session is present the caller is bounced to
+// /login; on a 401 the access token is silently
+// refreshed once before giving up.
 // ============================================
 
-const DEMO_PHONE = "+919876000001"; // seeded VENDOR_OWNER (SnakZap Mumbai Chain)
-const DEVICE_FP = "vendor-demo-fp-0001";
-const DEMO_OTP = "111111";
-
-let cachedToken: string | null = null;
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly code?: string,
+    public readonly status?: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 export async function getAccessToken(): Promise<string> {
-  if (cachedToken) return cachedToken;
-
-  await fetch("/api/v1/auth/send-otp", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phone: DEMO_PHONE }),
-  });
-
-  const res = await fetch("/api/v1/auth/verify-otp", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      phone: DEMO_PHONE,
-      otp: DEMO_OTP,
-      device_fingerprint: DEVICE_FP,
-    }),
-  });
-  const body = await res.json();
-  if (!body.success) {
-    throw new Error(body.error?.message ?? "Demo login failed");
-  }
-  cachedToken = body.data.access_token as string;
-  return cachedToken;
+  const token = getStoredToken();
+  if (token) return token;
+  if (typeof window !== "undefined") window.location.href = "/login";
+  throw new Error("Not authenticated");
 }
 
 export async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const token = await getAccessToken();
-  return fetch(path, {
-    ...init,
-    headers: {
-      ...(init.headers ?? {}),
-      Authorization: `Bearer ${token}`,
-      ...(init.body ? { "Content-Type": "application/json" } : {}),
-    },
-  });
+  let token = getStoredToken();
+  if (!token) {
+    if (typeof window !== "undefined") window.location.href = "/login";
+    throw new Error("Not authenticated");
+  }
+
+  const doFetch = (t: string) =>
+    fetch(path, {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        Authorization: `Bearer ${t}`,
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+      },
+    });
+
+  let res = await doFetch(token);
+  if (res.status === 401) {
+    const refreshed = await refreshSession();
+    if (refreshed) {
+      res = await doFetch(refreshed);
+    } else {
+      await clearVendorSession();
+      if (typeof window !== "undefined") window.location.href = "/login";
+      throw new Error("Session expired");
+    }
+  }
+  return res;
 }
 
 async function read<T>(res: Response): Promise<T> {
@@ -191,10 +202,13 @@ export interface ChainAggregateInsights {
   }[];
 }
 
-export interface Restaurant {
+/** A restaurant the signed-in vendor is authorized to operate. */
+export interface VendorRestaurant {
   id: string;
   name: string;
-  gst_number?: string | null;
+  is_active: boolean;
+  commission_rate: number;
+  chain_id: string | null;
 }
 
 export interface PosSyncResult {
@@ -217,7 +231,7 @@ export interface PosSimulateResult {
 
 export async function fetchOrders(
   options: { scope?: "active" | "all"; status?: OrderStatus } = {},
-  restaurantId: string = RESTAURANT_ID,
+  restaurantId: string,
 ): Promise<VendorOrder[]> {
   const params = new URLSearchParams({ restaurant_id: restaurantId });
   params.set("scope", options.scope ?? "active");
@@ -261,7 +275,7 @@ export async function cancelOrder(
 // Menu
 // ============================================
 
-export async function fetchMenu(restaurantId: string = RESTAURANT_ID): Promise<VendorMenuItem[]> {
+export async function fetchMenu(restaurantId: string): Promise<VendorMenuItem[]> {
   return read<VendorMenuItem[]>(
     await authedFetch(`/api/vendor/menu?restaurant_id=${restaurantId}`),
   );
@@ -270,7 +284,7 @@ export async function fetchMenu(restaurantId: string = RESTAURANT_ID): Promise<V
 export async function updateMenuItem(
   itemId: string,
   patch: { price?: number; is_available?: boolean; description?: string | null },
-  restaurantId: string = RESTAURANT_ID,
+  restaurantId: string,
 ): Promise<VendorMenuItem> {
   return read<VendorMenuItem>(
     await authedFetch(`/api/vendor/menu/${itemId}?restaurant_id=${restaurantId}`, {
@@ -282,7 +296,7 @@ export async function updateMenuItem(
 
 export async function bulkUpdateMenu(
   items: { item_id: string; price?: number; is_available?: boolean; description?: string | null }[],
-  restaurantId: string = RESTAURANT_ID,
+  restaurantId: string,
 ): Promise<VendorMenuItem[]> {
   return read<VendorMenuItem[]>(
     await authedFetch(`/api/vendor/menu/bulk?restaurant_id=${restaurantId}`, {
@@ -295,7 +309,7 @@ export async function bulkUpdateMenu(
 export async function uploadMenuPhoto(
   itemId: string,
   photo: File,
-  restaurantId: string = RESTAURANT_ID,
+  restaurantId: string,
 ): Promise<{ id: string; image_url: string }> {
   const token = await getAccessToken();
   const form = new FormData();
@@ -313,14 +327,14 @@ export async function uploadMenuPhoto(
 // ============================================
 
 export async function fetchSettlementSummary(
-  restaurantId: string = RESTAURANT_ID,
+  restaurantId: string,
 ): Promise<SettlementSummary> {
   return read<SettlementSummary>(
     await authedFetch(`/api/vendor/settlements/summary?restaurant_id=${restaurantId}`),
   );
 }
 
-export async function downloadSettlementPdf(restaurantId: string = RESTAURANT_ID): Promise<void> {
+export async function downloadSettlementPdf(restaurantId: string): Promise<void> {
   const token = await getAccessToken();
   const res = await fetch(`/api/vendor/settlements/today?restaurant_id=${restaurantId}`, {
     method: "PUT",
@@ -338,7 +352,7 @@ export async function downloadSettlementPdf(restaurantId: string = RESTAURANT_ID
 
 export async function fetchInsights(
   days: number,
-  restaurantId: string = RESTAURANT_ID,
+  restaurantId: string,
 ): Promise<Insights> {
   return read<Insights>(
     await authedFetch(`/api/vendor/insights?restaurant_id=${restaurantId}&days=${days}`),
@@ -365,7 +379,7 @@ export async function createPromotion(input: {
 
 export async function downloadGstCsv(
   month: string,
-  restaurantId: string = RESTAURANT_ID,
+  restaurantId: string,
 ): Promise<void> {
   const token = await getAccessToken();
   const res = await fetch(`/api/vendor/gst-export?restaurant_id=${restaurantId}&month=${month}`, {
@@ -427,7 +441,7 @@ export async function placeCateringOrder(input: {
 // POS
 // ============================================
 
-export async function syncPosMenu(restaurantId: string = RESTAURANT_ID): Promise<PosSyncResult> {
+export async function syncPosMenu(restaurantId: string): Promise<PosSyncResult> {
   return read<PosSyncResult>(
     await authedFetch(`/api/vendor/pos/sync-menu?restaurant_id=${restaurantId}`, {
       method: "POST",
@@ -436,7 +450,7 @@ export async function syncPosMenu(restaurantId: string = RESTAURANT_ID): Promise
 }
 
 export async function simulatePosOrder(
-  restaurantId: string = RESTAURANT_ID,
+  restaurantId: string,
 ): Promise<PosSimulateResult> {
   return read<PosSimulateResult>(
     await authedFetch(`/api/vendor/pos/simulate-order?restaurant_id=${restaurantId}`, {
@@ -446,17 +460,149 @@ export async function simulatePosOrder(
 }
 
 // ============================================
-// Catalog
+// Catalog (vendor-scoped restaurants)
 // ============================================
 
-export async function fetchRestaurants(): Promise<Restaurant[]> {
-  const res = await fetch("/api/v1/restaurants");
-  return read<Restaurant[]>(res);
+/**
+ * Fetches the restaurants the signed-in vendor is authorized to operate.
+ * Role-gated on the server (VENDOR_OWNER / VENDOR_STAFF, plus ADMIN /
+ * SUPER_ADMIN for platform oversight). Returns [] for an unknown vendor.
+ */
+export async function fetchVendorRestaurants(): Promise<VendorRestaurant[]> {
+  return read<VendorRestaurant[]>(await authedFetch("/api/vendor/restaurants"));
 }
 
-export async function fetchRestaurant(
-  restaurantId: string = RESTAURANT_ID,
-): Promise<Restaurant | null> {
-  const restaurants = await fetchRestaurants();
-  return restaurants.find((r) => r.id === restaurantId) ?? null;
+// ============================================
+// Vendor onboarding application (new merchant sign-up)
+// ============================================
+
+export interface VendorApplicationInput {
+  name: string;
+  gst_number: string;
+  fssai_license: string;
+  phone: string;
+  contact_email?: string;
+  address?: string;
+  city?: string;
+  type?: "SINGLE" | "CHAIN";
+  outlet_count?: number;
+}
+
+export interface VendorApplication {
+  id: string;
+  applicant_id: string;
+  name: string;
+  gst_number: string;
+  fssai_license: string;
+  phone: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  type: "SINGLE" | "CHAIN";
+  outlet_count: number;
+  rejection_reason: string | null;
+  created_at: string;
+}
+
+export async function requestOtp(phone: string): Promise<string> {
+  const res = await fetch("/api/v1/auth/send-otp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone }),
+  });
+  const body = await res.json();
+  if (!body.success) throw new Error(body.error?.message ?? "Failed to send OTP");
+  return (body.data?.demoOtp as string) ?? "";
+}
+
+export async function verifyOtpForApply(phone: string, otp: string): Promise<string> {
+  const res = await fetch("/api/v1/auth/verify-otp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone, otp, device_fingerprint: "vendor-apply-fp-0001" }),
+  });
+  const body = await res.json();
+  if (!body.success) throw new Error(body.error?.message ?? "OTP verification failed");
+  return body.data.access_token as string;
+}
+
+export async function submitVendorApplication(
+  token: string,
+  input: VendorApplicationInput,
+): Promise<VendorApplication> {
+  const res = await fetch("/api/v1/vendor-applications", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json();
+  if (!body.success) throw new Error(body.error?.message ?? "Application failed");
+  return body.data as VendorApplication;
+}
+
+/**
+ * Fetches the signed-in vendor's own onboarding applications (status page).
+ * Uses the session-scoped authedFetch so a stale token silently refreshes.
+ */
+export async function fetchMyApplications(): Promise<VendorApplication[]> {
+  return read<VendorApplication[]>(
+    await authedFetch("/api/v1/vendor-applications/mine"),
+  );
+}
+
+// ============================================
+// Vendor sign-in / sign-up (phone + OTP)
+// ============================================
+
+export interface VendorAuthUser {
+  id: string;
+  phone: string;
+  role: string;
+}
+
+export async function vendorSignup(phone: string): Promise<VendorAuthUser> {
+  const res = await fetch("/api/v1/auth/vendor/signup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone }),
+  });
+  const body = await res.json();
+  if (!body.success) {
+    throw new ApiError(body.error?.message ?? "Sign up failed", body.error?.code, res.status);
+  }
+  return body.data as VendorAuthUser;
+}
+
+export async function vendorSendOtp(phone: string): Promise<string> {
+  const res = await fetch("/api/v1/auth/vendor/send-otp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone }),
+  });
+  const body = await res.json();
+  if (!body.success) {
+    throw new ApiError(body.error?.message ?? "Failed to send OTP", body.error?.code, res.status);
+  }
+  return (body.data?.demoOtp as string) ?? "";
+}
+
+export async function vendorVerifyOtp(
+  phone: string,
+  otp: string,
+  deviceFingerprint: string,
+): Promise<{ access_token: string; user: VendorAuthUser }> {
+  const res = await fetch("/api/v1/auth/vendor/verify-otp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone, otp, device_fingerprint: deviceFingerprint }),
+  });
+  const body = await res.json();
+  if (!body.success) {
+    throw new ApiError(body.error?.message ?? "OTP verification failed", body.error?.code, res.status);
+  }
+  return {
+    access_token: body.data.access_token as string,
+    user: body.data.user as VendorAuthUser,
+  };
 }

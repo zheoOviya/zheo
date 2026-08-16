@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { fetchOrders, fetchInsights, type VendorOrder, type Insights } from "@/lib/api";
+import { useActiveRestaurant } from "@/hooks/useActiveRestaurant";
 import { ACTIVE_ORDER_STATUSES } from "@/lib/status";
 import { formatINR, formatINRCompact, relativeTime, shortOrderId, isSameDay } from "@/lib/format";
 import {
@@ -30,12 +31,17 @@ export default function OverviewPage() {
   const [insights, setInsights] = useState<Insights | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const { activeRestaurantId } = useActiveRestaurant();
 
   useEffect(() => {
+    if (!activeRestaurantId) return;
     let cancelled = false;
     (async () => {
       try {
-        const [all, insight] = await Promise.all([fetchOrders({ scope: "all" }), fetchInsights(7)]);
+        const [all, insight] = await Promise.all([
+          fetchOrders({ scope: "all" }, activeRestaurantId),
+          fetchInsights(7, activeRestaurantId),
+        ]);
         if (cancelled) return;
         setOrders(all);
         setInsights(insight);
@@ -50,7 +56,7 @@ export default function OverviewPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activeRestaurantId]);
 
   const stats = useMemo(() => {
     const todays = orders.filter((o) => isSameDay(o.created_at));

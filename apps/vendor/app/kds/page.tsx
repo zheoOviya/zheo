@@ -11,7 +11,7 @@ import {
   type VendorOrder,
   type OrderStatus,
 } from "@/lib/api";
-import { RESTAURANT_ID } from "@/lib/constants";
+import { useActiveRestaurant } from "@/hooks/useActiveRestaurant";
 import { useOrdersWebSocket } from "@/hooks/useOrdersWebSocket";
 import { isPickupOtpComplete, pickupFailureMessage, sanitizePickupOtp } from "@/lib/kds";
 import { formatINR, formatTime, shortOrderId } from "@/lib/format";
@@ -72,19 +72,21 @@ export default function KdsPage() {
   const [otpError, setOtpError] = useState<Record<string, string>>({});
   const [handingOver, setHandingOver] = useState<Record<string, boolean>>({});
   const [now, setNow] = useState(Date.now());
-  const { updates, connected } = useOrdersWebSocket(RESTAURANT_ID);
+  const { activeRestaurantId } = useActiveRestaurant();
+  const { updates, connected } = useOrdersWebSocket(activeRestaurantId);
   const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const loadOrders = useCallback(async () => {
+    if (!activeRestaurantId) return;
     try {
-      const data = await fetchOrders({ scope: "active" });
+      const data = await fetchOrders({ scope: "active" }, activeRestaurantId);
       setOrders(data);
       setLoading(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load orders");
       setLoading(false);
     }
-  }, []);
+  }, [activeRestaurantId]);
 
   useEffect(() => {
     loadOrders();

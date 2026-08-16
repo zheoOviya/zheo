@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { fetchInsights, type Insights } from "@/lib/api";
+import { useActiveRestaurant } from "@/hooks/useActiveRestaurant";
 import { formatINR } from "@/lib/format";
 import {
   PageHeader,
@@ -24,18 +25,23 @@ export default function InsightsPage() {
   const [days, setDays] = useState(30);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const { activeRestaurantId } = useActiveRestaurant();
 
-  const load = useCallback(async (windowDays: number) => {
-    setLoading(true);
-    setError("");
-    try {
-      setInsights(await fetchInsights(windowDays));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load insights");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const load = useCallback(
+    async (windowDays: number) => {
+      if (!activeRestaurantId) return;
+      setLoading(true);
+      setError("");
+      try {
+        setInsights(await fetchInsights(windowDays, activeRestaurantId));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load insights");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [activeRestaurantId],
+  );
 
   useEffect(() => {
     load(days);

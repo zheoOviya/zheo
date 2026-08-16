@@ -137,6 +137,10 @@ pnpm dev
 - Admin demo: `+919876000003`, OTP `111111` (SUPER_ADMIN)
 - Payment/POS webhooks: `valid_sig_` prefix simulates HMAC in dev
 
+See [docs/vendor-restaurant-resolution.md](docs/vendor-restaurant-resolution.md)
+for how the vendor console resolves multi-restaurant access and API/WebSocket
+origins.
+
 ### Verification
 
 ```bash

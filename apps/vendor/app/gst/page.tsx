@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { downloadGstCsv } from "@/lib/api";
+import { useActiveRestaurant } from "@/hooks/useActiveRestaurant";
 import { PageHeader, SectionCard, ErrorBanner, PrimaryButton } from "@/components/ui";
 
 function currentMonth(): string {
@@ -14,13 +15,15 @@ export default function GstPage() {
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const { activeRestaurantId } = useActiveRestaurant();
 
   async function handleDownload() {
+    if (!activeRestaurantId) return;
     setDownloading(true);
     setError("");
     setMessage("");
     try {
-      await downloadGstCsv(month);
+      await downloadGstCsv(month, activeRestaurantId);
       setMessage(`GSTR-1 CSV for ${month} downloaded.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate the GST report");
