@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import AuthGate from "@/components/AuthGate";
+import { AppHeader } from "@/components/AppHeader";
 import StampCardProgress from "@/components/StampCardProgress";
 import { useTheme } from "@/components/ThemeProvider";
 import { useAuthStore } from "@/lib/store";
@@ -79,16 +80,22 @@ function SpiceToleranceCard({
 
   return (
     <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-primary-900/40 dark:shadow-primary-900/20">
-      <div className="mb-1 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-primary-700 dark:text-primary-300">
-          Spice Profile
-        </h2>
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg font-semibold text-primary-700 dark:text-primary-300">
+            Spice Profile
+          </h2>
+          <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+            Optional
+          </span>
+        </div>
         <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-bold text-red-600 dark:bg-red-900/30 dark:text-red-400">
           {tolerance ? SPICE_LABELS[tolerance - 1] : "Not set"}
         </span>
       </div>
       <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">
-        Set your heat tolerance (1-5). Menus will automatically hide dishes spicier than this level.
+        Optional — set your heat tolerance (1-5) and we&apos;ll hide dishes spicier than this level.
+        Leave it unset to browse the full menu.
       </p>
 
       <div className="flex items-center justify-center gap-2">
@@ -358,7 +365,12 @@ function StampCardsSection({
 
   if (loading) {
     return (
-      <section className="rounded-2xl bg-white p-6 shadow-sm">
+      <section
+        role="status"
+        aria-busy="true"
+        aria-label="Loading stamp cards"
+        className="rounded-2xl bg-white p-6 shadow-sm"
+      >
         <div className="h-5 w-40 animate-skeleton-teal rounded bg-primary-200" />
         <div className="mt-4 space-y-2">
           <div className="h-9 w-9 animate-skeleton-teal rounded-full bg-primary-200" />
@@ -464,7 +476,7 @@ function VipSupportCard({
           >
             {vip.is_vip
               ? "You get HIGH-priority support with a dedicated operations agent."
-              : "More orders and spend unlock priority support."}
+              : "More orders and spend unlock priority support. Standard support is always available to every customer."}
           </p>
         </div>
         <span
@@ -637,6 +649,7 @@ function ProfileContent() {
 
   return (
     <main className="py-6">
+      <AppHeader />
       <header className="mb-6 flex items-center justify-between">
         <div>
           <p className="section-eyebrow">Account</p>
@@ -694,7 +707,12 @@ function ProfileContent() {
 
       <div className="space-y-6">
         {loadingFlags.wallet || loadingFlags.streak ? (
-          <section className="rounded-2xl bg-white p-6 shadow-sm">
+          <section
+            role="status"
+            aria-busy="true"
+            aria-label="Loading wallet and rewards"
+            className="rounded-2xl bg-white p-6 shadow-sm"
+          >
             <div className="h-5 w-48 animate-skeleton-teal rounded bg-primary-200" />
             <div className="mt-4 grid grid-cols-2 gap-3">
               <div className="h-20 animate-skeleton-teal rounded-xl bg-primary-200" />
@@ -708,7 +726,12 @@ function ProfileContent() {
         <SpiceToleranceCard tolerance={tolerance} onSaved={setTolerance} />
 
         {loadingFlags.vip ? (
-          <section className="rounded-2xl bg-white p-6 shadow-sm">
+          <section
+            role="status"
+            aria-busy="true"
+            aria-label="Loading VIP status"
+            className="rounded-2xl bg-white p-6 shadow-sm"
+          >
             <div className="h-5 w-48 animate-skeleton-teal rounded bg-primary-200" />
             <div className="mt-4 h-4 w-full animate-skeleton-teal rounded bg-primary-200" />
             <div className="mt-2 h-4 w-2/3 animate-skeleton-teal rounded bg-primary-200" />
@@ -718,7 +741,12 @@ function ProfileContent() {
         ) : null}
 
         {loadingFlags.profile ? (
-          <section className="rounded-2xl bg-white p-6 shadow-sm">
+          <section
+            role="status"
+            aria-busy="true"
+            aria-label="Loading referral profile"
+            className="rounded-2xl bg-white p-6 shadow-sm"
+          >
             <div className="h-5 w-40 animate-skeleton-teal rounded bg-primary-200" />
             <div className="mt-4 h-8 w-56 animate-skeleton-teal rounded bg-primary-200" />
           </section>

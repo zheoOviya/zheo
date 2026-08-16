@@ -1,3 +1,5 @@
+import { cached, invalidateByPrefix } from "./cache";
+
 export interface Restaurant {
   id: string;
   name: string;
@@ -129,24 +131,33 @@ async function authedFetcher<T>(path: string, token: string, init?: RequestInit)
 }
 
 export function fetchReferralProfile(token: string): Promise<ReferralProfile> {
-  return authedFetcher<ReferralProfile>("/api/v1/loyalty/referral", token);
+  return cached(`referral:${token}`, () =>
+    authedFetcher<ReferralProfile>("/api/v1/loyalty/referral", token),
+  );
 }
 
-export function applyReferral(token: string, code: string): Promise<unknown> {
-  return authedFetcher<unknown>("/api/v1/loyalty/apply-referral", token, {
+export async function applyReferral(token: string, code: string): Promise<unknown> {
+  const result = await authedFetcher<unknown>("/api/v1/loyalty/apply-referral", token, {
     method: "POST",
     body: JSON.stringify({ referral_code: code }),
   });
+  invalidateByPrefix("referral:");
+  invalidateByPrefix("wallet:");
+  return result;
 }
 
 export function fetchStampCards(token: string): Promise<StampCard[]> {
-  return authedFetcher<StampCard[]>("/api/v1/loyalty/stamp-cards", token);
+  return cached(`stamp-cards:${token}`, () =>
+    authedFetcher<StampCard[]>("/api/v1/loyalty/stamp-cards", token),
+  );
 }
 
 export function fetchStampCard(token: string, restaurantId: string): Promise<StampCard> {
-  return authedFetcher<StampCard>(
-    `/api/v1/loyalty/stamp-cards/${encodeURIComponent(restaurantId)}`,
-    token,
+  return cached(`stamp-card:${token}:${restaurantId}`, () =>
+    authedFetcher<StampCard>(
+      `/api/v1/loyalty/stamp-cards/${encodeURIComponent(restaurantId)}`,
+      token,
+    ),
   );
 }
 
@@ -178,11 +189,24 @@ export interface StreakData {
 }
 
 export function fetchWallet(token: string): Promise<WalletData> {
-  return authedFetcher<WalletData>("/api/v1/loyalty/wallet", token);
+  return cached(`wallet:${token}`, () =>
+    authedFetcher<WalletData>("/api/v1/loyalty/wallet", token),
+  );
 }
 
 export function fetchStreak(token: string): Promise<StreakData> {
-  return authedFetcher<StreakData>("/api/v1/loyalty/streak", token);
+  return cached(`streak:${token}`, () =>
+    authedFetcher<StreakData>("/api/v1/loyalty/streak", token),
+  );
+}
+
+// Clears the loyalty caches that can change after an order is placed:
+// wallet cashback, pickup streak, and stamp-card progress.
+export function invalidateLoyaltyCachesAfterOrder(): void {
+  invalidateByPrefix("wallet:");
+  invalidateByPrefix("streak:");
+  invalidateByPrefix("stamp-cards:");
+  invalidateByPrefix("stamp-card:");
 }
 
 // ============================================

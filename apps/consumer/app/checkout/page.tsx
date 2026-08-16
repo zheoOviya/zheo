@@ -4,9 +4,15 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import AuthGate from "@/components/AuthGate";
+import { AppHeader } from "@/components/AppHeader";
 import { useAuthStore } from "@/lib/store";
 import { useCartStore } from "@/lib/store";
-import { createPaymentOrder, simulatePaymentWebhook, type PaymentMethod } from "@/lib/api";
+import {
+  createPaymentOrder,
+  invalidateLoyaltyCachesAfterOrder,
+  simulatePaymentWebhook,
+  type PaymentMethod,
+} from "@/lib/api";
 import { loadRazorpayScript, createRazorpayInstance } from "@/lib/razorpay";
 import { computePriceBreakdown, formatINR } from "@/lib/pricing";
 import { EmptyState } from "@snakzap/ui";
@@ -269,7 +275,7 @@ function PickupSlotSelector({
 
 function CheckoutContent() {
   const router = useRouter();
-  const { user, accessToken, logout } = useAuthStore();
+  const { user, accessToken } = useAuthStore();
   const { items, clear } = useCartStore();
   const breakdown = computePriceBreakdown(items);
 
@@ -364,6 +370,7 @@ function CheckoutContent() {
 
       const createdOrderId = body.data.id;
       setOrderId(createdOrderId);
+      invalidateLoyaltyCachesAfterOrder();
 
       const payment = await createPaymentOrder(createdOrderId, accessToken, paymentMethod);
 
@@ -386,6 +393,7 @@ function CheckoutContent() {
   if (step === "success") {
     return (
       <main className="py-6">
+        <AppHeader />
         <header className="mb-6">
           <p className="section-eyebrow">Secure checkout</p>
           <h1 className="section-title">Checkout</h1>
@@ -459,6 +467,7 @@ function CheckoutContent() {
   if (step === "failed") {
     return (
       <main className="py-6">
+        <AppHeader />
         <header className="mb-6">
           <p className="section-eyebrow">Secure checkout</p>
           <h1 className="section-title">Checkout</h1>
@@ -494,6 +503,7 @@ function CheckoutContent() {
   if (step === "payment" && rpOrderId) {
     return (
       <main className="py-6">
+        <AppHeader />
         <header className="mb-6">
           <p className="section-eyebrow">Secure checkout</p>
           <h1 className="section-title">Checkout</h1>
@@ -528,6 +538,7 @@ function CheckoutContent() {
 
   return (
     <main className="py-6 pb-28">
+      <AppHeader />
       <header className="mb-6 flex items-center justify-between">
         <div>
           <p className="section-eyebrow">Secure checkout</p>
@@ -536,16 +547,6 @@ function CheckoutContent() {
             {user?.phone ? `Signed in as +91 ${user.phone}` : "Preparing your order"}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={async () => {
-            await logout();
-            router.push("/login");
-          }}
-          className="btn-outline !min-h-9 !px-4 !py-1.5 !text-xs"
-        >
-          Sign Out
-        </button>
       </header>
 
       {items.length === 0 ? (
@@ -662,7 +663,7 @@ function CheckoutContent() {
             onClick={() => router.push("/")}
             className="w-full py-2 text-sm text-neutral-400 hover:text-primary-600"
           >
-            Add More Items
+            Continue Shopping
           </button>
         </div>
       )}
