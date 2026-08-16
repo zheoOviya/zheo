@@ -19,7 +19,7 @@ const GREEN_BOWL = "a0000000-0000-4000-8000-000000000002";
 const CHICKEN_BIRYANI = "b0000000-0000-4000-8000-000000000001";
 const VEG_BIRYANI = "b0000000-0000-4000-8000-000000000002";
 const PANEER_WRAP = "b0000000-0000-4000-8000-000000000003";
-const HALAL_SHAWARMA = "b0000000-0000-4000-8000-000000000004";
+const SHAWARMA = "b0000000-0000-4000-8000-000000000004";
 
 const NON_VEG_USER = "00000000-0000-4000-8000-0000000000d1";
 const EARLY_USER = "00000000-0000-4000-8000-0000000000d2";
@@ -84,7 +84,7 @@ describe("Discovery routes", () => {
     });
 
     it("a user with 1-2 past orders stays in the rule-based tier", async () => {
-      await placeConfirmedOrder(app, EARLY_USER, GREEN_BOWL, HALAL_SHAWARMA);
+      await placeConfirmedOrder(app, EARLY_USER, GREEN_BOWL, SHAWARMA);
 
       const res = await request(app)
         .get("/api/v1/discovery/personalized-homepage")
@@ -100,7 +100,7 @@ describe("Discovery routes", () => {
 
     it("a user with >= 3 past orders switches to the ML-weighted tier", async () => {
       for (let i = 0; i < 3; i += 1) {
-        await placeConfirmedOrder(app, NON_VEG_USER, GREEN_BOWL, HALAL_SHAWARMA);
+        await placeConfirmedOrder(app, NON_VEG_USER, GREEN_BOWL, SHAWARMA);
       }
 
       const res = await request(app)

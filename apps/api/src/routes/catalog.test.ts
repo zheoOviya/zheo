@@ -85,12 +85,12 @@ describe("Catalog context routes", () => {
       expect(names).toEqual(["Veg Biryani"]);
     });
 
-    it("filters by HALAL", async () => {
+    it("filters by JAIN", async () => {
       const res = await request(app)
-        .get("/api/v1/menu-items/filter?dietary=HALAL")
+        .get("/api/v1/menu-items/filter?dietary=JAIN")
         .expect(200);
       const names = res.body.data.map((m: { name: string }) => m.name);
-      expect(names).toEqual(["Halal Chicken Shawarma"]);
+      expect(names).toEqual(["Veg Biryani"]);
     });
 
     it("rejects unknown dietary tags", async () => {
@@ -140,11 +140,11 @@ describe("Catalog context routes", () => {
     });
 
     it("caches filter results per dietary combination", async () => {
-      await request(app).get("/api/v1/menu-items/filter?dietary=HALAL").expect(200);
-      const cached = await getRedis().get("cache:catalog:filter:HALAL");
+      await request(app).get("/api/v1/menu-items/filter?dietary=JAIN").expect(200);
+      const cached = await getRedis().get("cache:catalog:filter:JAIN");
       expect(cached).not.toBeNull();
       const parsed = JSON.parse(cached as string);
-      expect(parsed[0].name).toBe("Halal Chicken Shawarma");
+      expect(parsed[0].name).toBe("Veg Biryani");
     });
   });
 });

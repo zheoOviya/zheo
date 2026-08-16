@@ -26,10 +26,9 @@ export interface PosMenuClient {
 
 // Dietary tags returned by Petpooja (strings) mapped to our
 // boolean tag map. Unknown tags are ignored.
-const TAG_MAP: Record<string, "VEG" | "JAIN" | "HALAL" | "NON_VEG"> = {
+const TAG_MAP: Record<string, "VEG" | "JAIN" | "NON_VEG"> = {
   VEG: "VEG",
   JAIN: "JAIN",
-  HALAL: "HALAL",
   NON_VEG: "NON_VEG",
 };
 

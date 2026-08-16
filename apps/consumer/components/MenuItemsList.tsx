@@ -29,7 +29,6 @@ const DIETARY_COLORS: Record<string, string> = {
   VEG: "bg-green-500/15 text-green-700 ring-green-600/20",
   NON_VEG: "bg-red-500/15 text-red-700 ring-red-600/20",
   JAIN: "bg-primary-500/15 text-primary-700 ring-primary-600/20",
-  HALAL: "bg-amber-500/15 text-amber-700 ring-amber-600/20",
 };
 
 function toCustomizations(raw: unknown[] | undefined): CartCustomization[] {

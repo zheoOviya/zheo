@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { filterMenuByDietary, type MenuItem } from "@/lib/api";
 
-const DIETARY_TAGS = ["VEG", "JAIN", "HALAL"] as const;
+const DIETARY_TAGS = ["VEG", "JAIN"] as const;
 
 // D05 Dietary Filter - chip row filtering menu items via the GIN-indexed
 // /api/v1/menu-items/filter endpoint. Multi-select applies containment (AND).

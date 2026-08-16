@@ -75,10 +75,10 @@ const TOD_DIETARY_BOOST: Record<
   TimeOfDay,
   Record<string, number>
 > = {
-  breakfast: { VEG: 1.08, JAIN: 1.08, NON_VEG: 0.95, HALAL: 0.98 },
-  lunch: { VEG: 1.0, JAIN: 1.0, NON_VEG: 1.08, HALAL: 1.05 },
-  evening: { VEG: 1.05, JAIN: 1.05, NON_VEG: 1.0, HALAL: 1.0 },
-  late_night: { VEG: 0.95, JAIN: 0.95, NON_VEG: 1.05, HALAL: 1.05 },
+  breakfast: { VEG: 1.08, JAIN: 1.08, NON_VEG: 0.95 },
+  lunch: { VEG: 1.0, JAIN: 1.0, NON_VEG: 1.08 },
+  evening: { VEG: 1.05, JAIN: 1.05, NON_VEG: 1.0 },
+  late_night: { VEG: 0.95, JAIN: 0.95, NON_VEG: 1.05 },
 };
 
 export interface PersonalizedRestaurant {
