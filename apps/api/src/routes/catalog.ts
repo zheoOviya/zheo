@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { z } from "zod";
+import { RestaurantSchema, MenuItemSchema } from "@snakzap/types";
 import { config } from "../config";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import {
   ALLOWED_DIETARY_TAGS,
   type CatalogRepository,
+  DrizzleCatalogRepository,
   MemoryCatalogRepository,
   type MenuItemDTO,
   type RestaurantDTO,
@@ -12,8 +14,10 @@ import {
 } from "../repositories/catalogRepository";
 import { cacheKey, getOrSet } from "../services/cache";
 import { jwtService } from "../services/jwt";
-import { sharedIdentityRepo } from "../repositories/shared";
+import { getStorageMode, sharedIdentityRepo } from "../repositories/shared";
+import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
+import { SEED_MENU, SEED_RESTAURANTS } from "../seed/catalogData";
 
 // ============================================
 // Catalog context routes (discovery) - /api/v1
@@ -62,26 +66,9 @@ async function effectiveSpiceToleranceOf(req: {
   }
 }
 
-const RestaurantResponseSchema = z.object({
-  id: z.string().uuid(),
-  name: z.string(),
-  commission_rate: z.number(),
-  is_active: z.boolean(),
-  lat: z.number().nullable(),
-  lng: z.number().nullable(),
-  pickup_eta_min: z.number().int().min(1).max(120),
-});
-const MenuItemResponseSchema = z.object({
-  id: z.string().uuid(),
-  restaurant_id: z.string().uuid(),
-  name: z.string(),
-  price: z.number(),
-  dietary_tags: z.record(z.boolean()),
-  customizations: z.array(z.unknown()),
-  is_available: z.boolean(),
-  spice_level: z.number().int().min(1).max(5),
-  image_url: z.string().nullable(),
-});
+// Public catalog shapes live in @snakzap/types (single source of truth).
+const RestaurantResponseSchema = RestaurantSchema;
+const MenuItemResponseSchema = MenuItemSchema;
 const SearchResultResponseSchema = z.object({
   type: z.enum(["restaurant", "dish"]),
   id: z.string().uuid(),
@@ -95,119 +82,21 @@ const SearchResponseSchema = z.array(SearchResultResponseSchema);
 const FilterResponseSchema = z.array(MenuItemResponseSchema);
 
 // Seeded fixture data for the offline/memory repository.
-// lat/lng are the P04 traffic-ETA pickup origins (Mumbai, IN).
-const SEED_RESTAURANTS: RestaurantDTO[] = [
-  {
-    id: "a0000000-0000-4000-8000-000000000001",
-    name: "Biryani House",
-    gst_number: "27AABCB1234A1Z5",
-    owner_id: "e0000000-0000-4000-a000-000000000001",
-    commission_rate: 0.08,
-    is_active: true,
-    lat: 19.076,
-    lng: 72.8777,
-    pickup_eta_min: 25,
-  },
-  {
-    id: "a0000000-0000-4000-8000-000000000002",
-    name: "Green Bowl",
-    gst_number: "27AACCG5678B1Z3",
-    owner_id: "e0000000-0000-4000-a000-000000000002",
-    commission_rate: 0.08,
-    is_active: true,
-    lat: 19.1136,
-    lng: 72.8697,
-    pickup_eta_min: 15,
-  },
-  {
-    id: "a0000000-0000-4000-8000-000000000003",
-    name: "Closed Kitchen",
-    gst_number: "27AADDH9012C1Z7",
-    owner_id: "e0000000-0000-4000-a000-000000000003",
-    commission_rate: 0.05,
-    is_active: false,
-    lat: 18.9647,
-    lng: 72.8258,
-    pickup_eta_min: 30,
-  },
-];
+// Defined once in ../seed/catalogData (shared with the Postgres seed) so the
+// memory catalog and the Drizzle-backed catalog stay in sync.
 
-const SEED_MENU: MenuItemDTO[] = [
-  {
-    id: "b0000000-0000-4000-8000-000000000001",
-    restaurant_id: "a0000000-0000-4000-8000-000000000001",
-    name: "Chicken Biryani",
-    price: 220,
-    description: "Hyderabadi-style chicken biryani with saffron rice.",
-    dietary_tags: { NON_VEG: true },
-    customizations: [],
-    image_url: "https://picsum.photos/seed/chicken-biryani/400/300",
-    pos_item_id: null,
-    spice_level: 5,
-    is_available: true,
-  },
-  {
-    id: "b0000000-0000-4000-8000-000000000002",
-    restaurant_id: "a0000000-0000-4000-8000-000000000001",
-    name: "Veg Biryani",
-    price: 180,
-    description: "Seasonal vegetables slow-cooked with basmati rice.",
-    dietary_tags: { VEG: true, JAIN: true },
-    customizations: [],
-    image_url: "https://picsum.photos/seed/veg-biryani/400/300",
-    pos_item_id: null,
-    spice_level: 2,
-    is_available: true,
-  },
-  {
-    id: "b0000000-0000-4000-8000-000000000003",
-    restaurant_id: "a0000000-0000-4000-8000-000000000002",
-    name: "Paneer Wrap",
-    price: 160,
-    description: "Paneer tikka wrapped in a warm whole-wheat roti.",
-    dietary_tags: { VEG: true },
-    customizations: [],
-    image_url: "https://picsum.photos/seed/paneer-wrap/400/300",
-    pos_item_id: null,
-    spice_level: 1,
-    is_available: true,
-  },
-  {
-    id: "b0000000-0000-4000-8000-000000000004",
-    restaurant_id: "a0000000-0000-4000-8000-000000000002",
-    name: "Chicken Shawarma",
-    price: 190,
-    description: "Chicken shawarma with garlic sauce.",
-    dietary_tags: { NON_VEG: true },
-    customizations: [],
-    image_url: "https://picsum.photos/seed/chicken-shawarma/400/300",
-    pos_item_id: null,
-    spice_level: 3,
-    is_available: true,
-  },
-  {
-    id: "b0000000-0000-4000-8000-000000000005",
-    restaurant_id: "a0000000-0000-4000-8000-000000000002",
-    name: "Unavailable Dish",
-    price: 99,
-    description: null,
-    dietary_tags: { VEG: true },
-    customizations: [],
-    image_url: "https://picsum.photos/seed/unavailable-dish/400/300",
-    pos_item_id: null,
-    spice_level: 1,
-    is_available: false,
-  },
-];
-
-// Factory - shared memory repo so vendor menu updates are
-// immediately visible to the consumer catalog. When Postgres
-// wiring lands, this returns the DrizzleCatalogRepository.
+// Factory - storage-mode aware. In Postgres mode this returns the
+// Drizzle-backed repository; otherwise it falls back to the shared in-memory
+// repo (seeded from SEED_RESTAURANTS/SEED_MENU) so vendor menu updates stay
+// immediately visible to the consumer catalog without a database.
 let sharedCatalogRepo: CatalogRepository | null = null;
 
 export function getCatalogRepository(): CatalogRepository {
   if (!sharedCatalogRepo) {
-    sharedCatalogRepo = new MemoryCatalogRepository(SEED_RESTAURANTS, SEED_MENU);
+    sharedCatalogRepo =
+      getStorageMode() === "postgres"
+        ? new DrizzleCatalogRepository(getDb())
+        : new MemoryCatalogRepository(SEED_RESTAURANTS, SEED_MENU);
   }
   return sharedCatalogRepo;
 }

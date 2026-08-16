@@ -7,6 +7,7 @@ import { m } from "framer-motion";
 import { Badge, Sheet } from "@snakzap/ui";
 import type { Restaurant, MenuItem } from "@/lib/api";
 import { useCartStore, type CartItem } from "@/lib/store";
+import { DEFAULT_ORIGIN, formatDistanceKm, haversineKm } from "@/lib/geo";
 import toast from "react-hot-toast";
 
 interface RestaurantCardProps {
@@ -22,6 +23,12 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
 
   const isOpen = restaurant.is_active;
   const etaLabel = isOpen ? `~${restaurant.pickup_eta_min} min` : "Opens 11:00";
+  const ratingLabel = restaurant.rating != null ? restaurant.rating.toFixed(1) : "New";
+  const cuisineLabel = restaurant.cuisines.length > 0 ? restaurant.cuisines.join(" · ") : "Menu";
+  const distanceLabel =
+    restaurant.lat != null && restaurant.lng != null
+      ? formatDistanceKm(haversineKm(DEFAULT_ORIGIN, { lat: restaurant.lat, lng: restaurant.lng }))
+      : null;
 
   async function openQuickAdd() {
     setQuickAddOpen(true);
@@ -81,7 +88,7 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
         >
           <div className="relative aspect-[4/3] w-full overflow-hidden bg-primary-100 dark:bg-primary-900/30">
             <Image
-              src={`https://picsum.photos/seed/${restaurant.id}/600/450`}
+              src={restaurant.cover_image ?? `https://picsum.photos/seed/${restaurant.id}/600/450`}
               alt={restaurant.name}
               fill
               sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
@@ -106,7 +113,7 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
               >
                 <path d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.3 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8L12 2z" />
               </svg>
-              4.5
+              {ratingLabel}
             </span>
             <span className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur">
               <svg
@@ -133,7 +140,9 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
               </h3>
             </div>
             <p className="mt-1 line-clamp-1 text-xs text-neutral-400 dark:text-neutral-500">
-              North Indian &middot; Biryani &middot; {isOpen ? "1.2 km" : "Opens 11:00"}
+              {cuisineLabel}
+              {restaurant.price_for_one != null ? ` · ₹${restaurant.price_for_one} for one` : ""}
+              {isOpen && distanceLabel ? ` · ${distanceLabel}` : isOpen ? "" : " · Opens 11:00"}
             </p>
             <button
               type="button"

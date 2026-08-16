@@ -37,30 +37,39 @@ export type AuditLog = z.infer<typeof AuditLogSchema>;
 // Bounded Context: catalog
 // ============================================
 
+// Public restaurant shape returned by the catalog API and consumed by the
+// consumer app. Single source of truth shared by the API route response
+// schema and the consumer's `Restaurant` type.
 export const RestaurantSchema = z.object({
   id: z.string().uuid(),
-  owner_id: z.string().uuid(),
   name: z.string().min(1),
-  gst_number: z.string().min(1),
-  fssai_license: z.string().min(1),
-  commission_rate: z.coerce.number().default(0.08),
-  is_active: z.boolean().default(true),
-  created_at: z.date(),
+  commission_rate: z.number(),
+  is_active: z.boolean(),
+  lat: z.number().nullable(),
+  lng: z.number().nullable(),
+  pickup_eta_min: z.number().int().min(1).max(120),
+  rating: z.number().nonnegative().nullable(),
+  cuisines: z.array(z.string()),
+  price_for_one: z.number().int().positive().nullable(),
+  cover_image: z.string().nullable(),
 });
 export type Restaurant = z.infer<typeof RestaurantSchema>;
 
 export const DietaryTagsSchema = z.record(z.boolean());
 export type DietaryTags = z.infer<typeof DietaryTagsSchema>;
 
+// Public menu-item shape (D03 spice level included; internal fields such as
+// description/pos_item_id stay in the repository DTO).
 export const MenuItemSchema = z.object({
   id: z.string().uuid(),
   restaurant_id: z.string().uuid(),
   name: z.string().min(1),
-  price: z.coerce.number().nonnegative(),
-  dietary_tags: DietaryTagsSchema.default({}),
-  customizations: z.array(z.unknown()).default([]),
-  is_available: z.boolean().default(true),
-  created_at: z.date(),
+  price: z.number(),
+  dietary_tags: DietaryTagsSchema,
+  customizations: z.array(z.unknown()),
+  is_available: z.boolean(),
+  spice_level: z.number().int().min(1).max(5),
+  image_url: z.string().nullable(),
 });
 export type MenuItem = z.infer<typeof MenuItemSchema>;
 

@@ -71,7 +71,10 @@ export function PersonalizedFeed() {
               >
                 <div className="relative h-24 w-full overflow-hidden bg-primary-100 dark:bg-primary-900/30">
                   <Image
-                    src={`https://picsum.photos/seed/${pick.restaurant.id}/400/200`}
+                    src={
+                      pick.restaurant.cover_image ??
+                      `https://picsum.photos/seed/${pick.restaurant.id}/400/200`
+                    }
                     alt=""
                     fill
                     sizes="(max-width: 640px) 50vw, 25vw"
@@ -91,7 +94,7 @@ export function PersonalizedFeed() {
                     >
                       <path d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.3 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8L12 2z" />
                     </svg>
-                    4.5
+                    {pick.restaurant.rating != null ? pick.restaurant.rating.toFixed(1) : "New"}
                   </span>
                 </div>
                 <div className="p-3">
@@ -117,7 +120,10 @@ export function PersonalizedFeed() {
               >
                 <div className="relative h-24 w-full overflow-hidden bg-amber-100 dark:bg-amber-900/20">
                   <Image
-                    src={`https://picsum.photos/seed/${feed.surprise_restaurant.restaurant.id}/400/200`}
+                    src={
+                      feed.surprise_restaurant.restaurant.cover_image ??
+                      `https://picsum.photos/seed/${feed.surprise_restaurant.restaurant.id}/400/200`
+                    }
                     alt=""
                     fill
                     sizes="(max-width: 640px) 50vw, 25vw"

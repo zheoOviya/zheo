@@ -1,28 +1,9 @@
 import { cached, invalidateByPrefix } from "./cache";
+import type { Restaurant, MenuItem } from "@snakzap/types";
 
-export interface Restaurant {
-  id: string;
-  name: string;
-  commission_rate: number;
-  is_active: boolean;
-  lat: number | null;
-  lng: number | null;
-  /** Estimated prep/pickup time in minutes (shown on home cards). */
-  pickup_eta_min: number;
-}
-
-export interface MenuItem {
-  id: string;
-  restaurant_id: string;
-  name: string;
-  price: number;
-  image_url: string | null;
-  dietary_tags: Record<string, boolean>;
-  customizations: unknown[];
-  is_available: boolean;
-  /** D03 spice level (1 = mild, 5 = extreme). */
-  spice_level: number;
-}
+// Catalog entities are defined once in @snakzap/types and re-exported here so
+// existing `@/lib/api` imports keep working unchanged.
+export type { Restaurant, MenuItem };
 
 export interface SearchResult {
   type: "restaurant" | "dish";
