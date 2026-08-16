@@ -87,7 +87,7 @@ Petpooja menu API and upserts into `menu_items`.
 | `pos_item_id` | `pos_item_id` (new) | idempotency key for sync |
 | `name` | `name` | direct |
 | `price` | `price` | direct |
-| `category` / `dietary` | `dietary_tags` jsonb | `VEG`/`NON_VEG`/`JAIN`/`HALAL` flags |
+| `category` / `dietary` | `dietary_tags` jsonb | `VEG`/`NON_VEG`/`JAIN` flags |
 | `addons` | `customizations` jsonb | `[{ name, price_delta }]` |
 
 Upsert semantics: an existing `menu_items` row with the same

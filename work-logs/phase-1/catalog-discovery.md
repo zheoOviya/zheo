@@ -39,7 +39,7 @@ TTL config lives in `config.ts` (`catalog.cacheTtl*`), simulating a central regi
 - `RestaurantGrid`: RSC with `<img loading="lazy">`, fixed aspect-ratio placeholders to guarantee **zero layout shift**.
 - `loading.tsx`: **Teal-shimmer skeleton** grid shown during RSC streaming (no spinners).
 - `SearchBar`: client component, debounced (350ms) autocomplete calling `/api/v1/search/autocomplete` through the Next proxy.
-- `DietaryFilter`: client component, chip row (VEG / JAIN / HALAL) calling the GIN filter endpoint.
+- `DietaryFilter`: client component, chip row (VEG / JAIN) calling the GIN filter endpoint.
 - Colors from `@snakzap/config` Tailwind preset (`#0D9488` primary, `#F59E0B` accent, `#F0FDFA` light bg).
 
 ## Next.js Reverse Proxy

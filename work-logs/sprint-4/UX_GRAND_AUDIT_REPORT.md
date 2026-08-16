@@ -16,7 +16,7 @@
 **Status:** PASS  
 **Evidence:** `components/RestaurantGrid.tsx` -- Grid layout with Open/Closed badges, empty state. `aria-label="Restaurants"`.
 
-### I-04: Dietary Filter (VEG, JAIN, HALAL)
+### I-04: Dietary Filter (VEG, JAIN)
 **Status:** PASS  
 **Evidence:** `components/DietaryFilter.tsx` -- Chip toggle buttons with `role="group"`, `aria-label="Dietary filters"`. Loading state "Filtering...".
 
