@@ -26,10 +26,12 @@ import { wearRouter } from "./routes/wear";
 import { supportRouter } from "./routes/support";
 import { registerLoyaltyEventHandlers } from "./services/loyalty";
 import { registerRetentionEventHandlers } from "./services/retention";
+import { registerVendorNotificationHandlers } from "./services/notifications";
 import { initEventSubscriber } from "./lib/eventBus";
 import { metrics, metricsRouter } from "./routes/metrics";
 import { adminRouter } from "./routes/admin";
-import { requireRole } from "./middleware/requireRoles";
+import { vendorApplicationRouter } from "./routes/vendorApplications";
+import { requireVendorOrAdmin } from "./middleware/requireRoles";
 import { getRedis } from "./lib/redis";
 import { probePostgres } from "./lib/db";
 
@@ -38,6 +40,7 @@ import { probePostgres } from "./lib/db";
 // credited, and pickup streaks advance when an order is picked up.
 registerLoyaltyEventHandlers();
 registerRetentionEventHandlers();
+registerVendorNotificationHandlers();
 void initEventSubscriber();
 
 export const API_PREFIX = "/api/v1";
@@ -155,9 +158,10 @@ export function createApp(): Express {
   app.use(API_PREFIX, usersRouter);
   app.use(`${API_PREFIX}/webhooks/pos`, posWebhookRouter);
   // A-01: Vendor routes gated behind VENDOR/ADMIN role.
-  app.use("/api/vendor", requireRole("VENDOR_OWNER", "VENDOR_STAFF", "ADMIN", "SUPER_ADMIN"), vendorRouter);
-  app.use("/api/vendor", requireRole("VENDOR_OWNER", "VENDOR_STAFF", "ADMIN", "SUPER_ADMIN"), vendorOpsRouter);
-  app.use("/api/vendor", chainsRouter);
+  app.use("/api/vendor", requireVendorOrAdmin, vendorRouter);
+  app.use("/api/vendor", requireVendorOrAdmin, vendorOpsRouter);
+  app.use("/api/vendor", requireVendorOrAdmin, chainsRouter);
+  app.use(`${API_PREFIX}/vendor-applications`, vendorApplicationRouter);
   app.use(`${API_PREFIX}/admin`, adminRouter);
 
   app.use(notFoundHandler);

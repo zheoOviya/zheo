@@ -9,7 +9,7 @@ import { requireRole } from "../middleware/requireRoles";
 import { sharedAuditRepo, sharedIdentityRepo } from "../repositories/shared";
 import type { IdentityUser } from "../repositories/identityRepository";
 import { jwtService } from "../services/jwt";
-import { sendOtp, verifyOtp } from "../services/otp";
+import { sendOtp, verifyOtp, maskPhone } from "../services/otp";
 import {
   buildOtpauthUrl,
   generateTotpSecret,
@@ -90,6 +90,34 @@ const adminOtpLimiter = rateLimiter({
   max: config.rateLimit.otpMaxPerMinute,
   windowMs: 60_000,
   identifier: (req) => String(req.body?.email ?? req.ip ?? "unknown").toLowerCase(),
+  failClosed: true,
+});
+
+const vendorOtpLimiter = rateLimiter({
+  prefix: "otp-vendor",
+  max: config.rateLimit.otpMaxPerMinute,
+  windowMs: 60_000,
+  identifier: (req) => String(req.body?.phone ?? req.ip ?? "unknown"),
+  failClosed: true,
+});
+
+// Vendor sign-in has a 3-step flow (send-otp probe -> signup -> send-otp ->
+// verify-otp), so verify gets its own budget instead of sharing the
+// send-otp/signup window. Otherwise a brand-new merchant would always trip
+// the 3/min limit before they can enter the OTP.
+const vendorVerifyOtpLimiter = rateLimiter({
+  prefix: "otp-vendor-verify",
+  max: config.rateLimit.otpMaxPerMinute,
+  windowMs: 60_000,
+  identifier: (req) => String(req.body?.phone ?? req.ip ?? "unknown"),
+  failClosed: true,
+});
+
+const consumerOtpLimiter = rateLimiter({
+  prefix: "otp-consumer",
+  max: config.rateLimit.otpMaxPerMinute,
+  windowMs: 60_000,
+  identifier: (req) => String(req.body?.phone ?? req.ip ?? "unknown"),
   failClosed: true,
 });
 
@@ -330,6 +358,235 @@ authRouter.post(
       access_token: pair.accessToken,
       expires_in: config.jwt.accessTtlSeconds,
       user: { id: user.id, phone: user.phone, role: user.role },
+    }, 200);
+  }),
+);
+
+// ============================================
+// Vendor console login (phone -> OTP)
+// New merchants sign up as PENDING_VENDOR and can then sign in with the
+// same phone+OTP flow. PENDING_VENDOR accounts cannot access /api/vendor
+// routes until an admin approves their onboarding (role upgraded to
+// VENDOR_OWNER / VENDOR_STAFF).
+// ============================================
+
+const VENDOR_ROLES = ["PENDING_VENDOR", "VENDOR_OWNER", "VENDOR_STAFF"];
+
+async function resolveVendorUser(phone: string): Promise<IdentityUser> {
+  const user = await sharedIdentityRepo.getByPhone(phone);
+  if (!user || !VENDOR_ROLES.includes(user.role)) {
+    throw new AppError(
+      "VENDOR_NOT_FOUND",
+      "No vendor account found for this phone",
+      404,
+    );
+  }
+  if (user.is_suspended) {
+    throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended", 403);
+  }
+  return user;
+}
+
+authRouter.post(
+  "/vendor/signup",
+  vendorOtpLimiter,
+  asyncHandler(async (req, res) => {
+    const body = PhoneSchema.safeParse(req.body);
+    if (!body.success) {
+      throw new AppError("VALIDATION_ERROR", "Invalid request body", 400, body.error.flatten());
+    }
+    const user = await sharedIdentityRepo.createByPhone(body.data.phone, "PENDING_VENDOR");
+    if (!user) {
+      throw new AppError(
+        "PHONE_TAKEN",
+        "An account already exists for this phone",
+        409,
+      );
+    }
+    logger.info({
+      message: "vendor_signup",
+      user_id: user.id,
+      phone_masked: maskPhone(user.phone),
+      correlation_id: res.locals.correlationId,
+    });
+    ok(res, { id: user.id, phone: user.phone, role: user.role }, 201);
+  }),
+);
+
+authRouter.post(
+  "/vendor/send-otp",
+  vendorOtpLimiter,
+  asyncHandler(async (req, res) => {
+    const body = PhoneSchema.safeParse(req.body);
+    if (!body.success) {
+      throw new AppError("VALIDATION_ERROR", "Invalid request body", 400, body.error.flatten());
+    }
+    const user = await resolveVendorUser(body.data.phone);
+    const result = await sendOtp(user.phone);
+    logger.info({
+      message: "vendor_otp_sent",
+      phone_masked: result.phoneMasked,
+      correlation_id: res.locals.correlationId,
+    });
+    ok(res, result);
+  }),
+);
+
+authRouter.post(
+  "/vendor/verify-otp",
+  vendorVerifyOtpLimiter,
+  asyncHandler(async (req, res) => {
+    const body = VerifyOtpSchema.safeParse(req.body);
+    if (!body.success) {
+      throw new AppError("VALIDATION_ERROR", "Invalid request body", 400, body.error.flatten());
+    }
+
+    const user = await resolveVendorUser(body.data.phone);
+    await verifyOtp(user.phone, body.data.otp);
+
+    const claims = {
+      sub: user.id,
+      phone: user.phone,
+      role: user.role,
+      device_fingerprint: body.data.device_fingerprint,
+    };
+
+    const pair = jwtService.issuePair(claims);
+
+    res.cookie(config.jwt.refreshCookieName, pair.refreshToken, {
+      httpOnly: true,
+      secure: config.env === "production",
+      sameSite: "strict",
+      path: "/",
+      maxAge: config.jwt.refreshTtlSeconds * 1000,
+    });
+
+    logger.info({
+      message: "vendor_otp_verified",
+      user_id: user.id,
+      correlation_id: res.locals.correlationId,
+    });
+
+    ok(res, {
+      access_token: pair.accessToken,
+      expires_in: config.jwt.accessTtlSeconds,
+      user: { id: user.id, phone: user.phone, role: user.role, is_suspended: user.is_suspended },
+    }, 200);
+  }),
+);
+
+// ============================================
+// Consumer sign-in / sign-up (phone -> OTP)
+// Consumers sign up implicitly: send-otp auto-creates a CONSUMER identity
+// when the phone is new, so the login page needs no separate sign-up step.
+// ============================================
+
+async function resolveConsumerUser(phone: string): Promise<IdentityUser> {
+  const user = await sharedIdentityRepo.getByPhone(phone);
+  if (!user || user.role !== "CONSUMER") {
+    throw new AppError(
+      "CONSUMER_NOT_FOUND",
+      "No consumer account found for this phone",
+      404,
+    );
+  }
+  if (user.is_suspended) {
+    throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended", 403);
+  }
+  return user;
+}
+
+// Sign-up is implicit: a brand-new phone is auto-created as a CONSUMER on the
+// first send-otp, so there is no separate sign-up round-trip.
+async function findOrCreateConsumer(phone: string): Promise<IdentityUser> {
+  const existing = await sharedIdentityRepo.getByPhone(phone);
+  if (existing) {
+    if (existing.role !== "CONSUMER") {
+      throw new AppError(
+        "CONSUMER_NOT_FOUND",
+        "No consumer account found for this phone",
+        404,
+      );
+    }
+    if (existing.is_suspended) {
+      throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended", 403);
+    }
+    return existing;
+  }
+  const user = await sharedIdentityRepo.createByPhone(phone, "CONSUMER");
+  if (!user) {
+    throw new AppError(
+      "PHONE_TAKEN",
+      "An account already exists for this phone",
+      409,
+    );
+  }
+  logger.info({
+    message: "consumer_signup_implicit",
+    user_id: user.id,
+    phone_masked: maskPhone(user.phone),
+  });
+  return user;
+}
+
+authRouter.post(
+  "/consumer/send-otp",
+  consumerOtpLimiter,
+  asyncHandler(async (req, res) => {
+    const body = PhoneSchema.safeParse(req.body);
+    if (!body.success) {
+      throw new AppError("VALIDATION_ERROR", "Invalid request body", 400, body.error.flatten());
+    }
+    const user = await findOrCreateConsumer(body.data.phone);
+    const result = await sendOtp(user.phone);
+    logger.info({
+      message: "consumer_otp_sent",
+      phone_masked: result.phoneMasked,
+      correlation_id: res.locals.correlationId,
+    });
+    ok(res, result);
+  }),
+);
+
+authRouter.post(
+  "/consumer/verify-otp",
+  consumerOtpLimiter,
+  asyncHandler(async (req, res) => {
+    const body = VerifyOtpSchema.safeParse(req.body);
+    if (!body.success) {
+      throw new AppError("VALIDATION_ERROR", "Invalid request body", 400, body.error.flatten());
+    }
+
+    const user = await resolveConsumerUser(body.data.phone);
+    await verifyOtp(user.phone, body.data.otp);
+
+    const claims = {
+      sub: user.id,
+      phone: user.phone,
+      role: user.role,
+      device_fingerprint: body.data.device_fingerprint,
+    };
+
+    const pair = jwtService.issuePair(claims);
+
+    res.cookie(config.jwt.refreshCookieName, pair.refreshToken, {
+      httpOnly: true,
+      secure: config.env === "production",
+      sameSite: "strict",
+      path: "/",
+      maxAge: config.jwt.refreshTtlSeconds * 1000,
+    });
+
+    logger.info({
+      message: "consumer_otp_verified",
+      user_id: user.id,
+      correlation_id: res.locals.correlationId,
+    });
+
+    ok(res, {
+      access_token: pair.accessToken,
+      expires_in: config.jwt.accessTtlSeconds,
+      user: { id: user.id, phone: user.phone, role: user.role, is_suspended: user.is_suspended },
     }, 200);
   }),
 );

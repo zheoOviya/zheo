@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
-import { authenticate } from "../middleware/auth";
+import { requireConsumerOrAdmin } from "../middleware/requireRoles";
 import { getCartPersistenceService } from "../services/cartPersistence";
 
 // ============================================
@@ -33,7 +33,7 @@ export const cartRouter: Router = Router();
 
 cartRouter.get(
   "/cart",
-  authenticate,
+  requireConsumerOrAdmin,
   asyncHandler(async (_req, res) => {
     const userId = res.locals.userId as string;
     const result = await cartPersistenceService.loadCart(userId);
@@ -43,7 +43,7 @@ cartRouter.get(
 
 cartRouter.post(
   "/cart",
-  authenticate,
+  requireConsumerOrAdmin,
   asyncHandler(async (req, res) => {
     const body = SaveCartSchema.safeParse(req.body);
     if (!body.success) {
@@ -60,7 +60,7 @@ cartRouter.post(
 
 cartRouter.delete(
   "/cart",
-  authenticate,
+  requireConsumerOrAdmin,
   asyncHandler(async (_req, res) => {
     const userId = res.locals.userId as string;
     await cartPersistenceService.deleteCart(userId);

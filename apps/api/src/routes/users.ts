@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
-import { authenticate } from "../middleware/auth";
+import { requireConsumerOrAdmin } from "../middleware/requireRoles";
 import { sharedIdentityRepo } from "../repositories/shared";
 import { createEventEnvelope, emit } from "../lib/eventBus";
 import { logger } from "../lib/logger";
@@ -20,7 +20,7 @@ export const usersRouter: Router = Router();
 
 usersRouter.put(
   "/users/profile",
-  authenticate,
+  requireConsumerOrAdmin,
   asyncHandler(async (req, res) => {
     const body = UpdateProfileSchema.safeParse(req.body);
     if (!body.success) {

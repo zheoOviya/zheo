@@ -317,6 +317,119 @@ describe("Admin RBAC (A-01, A-11)", () => {
   });
 
   // ============================================
+  // Operator suspend/reactivate/demote hierarchy
+  // ============================================
+
+  describe("User management hierarchy", () => {
+    const seedUser = (id: string, phone: string, role: string) => {
+      sharedIdentityRepo._seed({
+        id,
+        phone,
+        role,
+        is_suspended: false,
+        totp_enabled: false,
+        created_at: new Date().toISOString(),
+      });
+    };
+
+    beforeEach(async () => {
+      sharedIdentityRepo._reset();
+      resetRedisForTests();
+      seedUser("u-hierarchy-consumer", "+910000000101", "CONSUMER");
+      seedUser("u-hierarchy-admin-a", "+910000000102", "ADMIN");
+      seedUser("u-hierarchy-admin-b", "+910000000103", "ADMIN");
+      seedUser("u-hierarchy-super-a", "+910000000104", "SUPER_ADMIN");
+      seedUser("u-hierarchy-super-b", "+910000000105", "SUPER_ADMIN");
+      seedUser("admin-test-id", "+919999999999", "CONSUMER");
+    });
+
+    it("ADMIN cannot suspend a SUPER_ADMIN", async () => {
+      const res = await request(app)
+        .put("/api/v1/admin/users/u-hierarchy-super-a/suspend")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(403);
+    });
+
+    it("ADMIN cannot suspend another ADMIN", async () => {
+      const res = await request(app)
+        .put("/api/v1/admin/users/u-hierarchy-admin-a/suspend")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(403);
+    });
+
+    it("ADMIN can suspend a CONSUMER", async () => {
+      const res = await request(app)
+        .put("/api/v1/admin/users/u-hierarchy-consumer/suspend")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+    });
+
+    it("SUPER_ADMIN cannot suspend another SUPER_ADMIN", async () => {
+      const res = await request(app)
+        .put("/api/v1/admin/users/u-hierarchy-super-b/suspend")
+        .set("Authorization", adminToken("SUPER_ADMIN"));
+      expect(res.status).toBe(403);
+    });
+
+    it("SUPER_ADMIN can suspend an ADMIN", async () => {
+      const res = await request(app)
+        .put("/api/v1/admin/users/u-hierarchy-admin-a/suspend")
+        .set("Authorization", adminToken("SUPER_ADMIN"));
+      expect(res.status).toBe(200);
+    });
+
+    it("cannot suspend your own account", async () => {
+      const res = await request(app)
+        .put("/api/v1/admin/users/admin-test-id/suspend")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(403);
+    });
+
+    it("ADMIN cannot reactivate an operator account", async () => {
+      await request(app)
+        .put("/api/v1/admin/users/u-hierarchy-admin-b/suspend")
+        .set("Authorization", adminToken("SUPER_ADMIN"));
+      const res = await request(app)
+        .put("/api/v1/admin/users/u-hierarchy-admin-b/reactivate")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(403);
+    });
+
+    it("suspend stores an optional reason and audits it", async () => {
+      const res = await request(app)
+        .put("/api/v1/admin/users/u-hierarchy-consumer/suspend")
+        .set("Authorization", adminToken("ADMIN"))
+        .send({ reason: "Abusive behavior" });
+      expect(res.status).toBe(200);
+      expect(res.body.data.suspended_reason).toBe("Abusive behavior");
+    });
+
+    it("cannot demote the last active SUPER_ADMIN", async () => {
+      await request(app)
+        .put("/api/v1/admin/users/u-hierarchy-super-b/role")
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ role: "ADMIN" })
+        .expect(200);
+      const res = await request(app)
+        .put("/api/v1/admin/users/u-hierarchy-super-a/role")
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ role: "CONSUMER" });
+      expect(res.status).toBe(403);
+    });
+
+    it("cannot demote the last active ADMIN", async () => {
+      await request(app)
+        .put("/api/v1/admin/users/u-hierarchy-admin-b/suspend")
+        .set("Authorization", adminToken("SUPER_ADMIN"));
+      const res = await request(app)
+        .put("/api/v1/admin/users/u-hierarchy-admin-a/role")
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ role: "CONSUMER" });
+      expect(res.status).toBe(403);
+    });
+  });
+
+  // ============================================
   // Custom Roles (admin console) — SUPER_ADMIN only
   // ============================================
 

@@ -1,7 +1,7 @@
 import { Router, type Response } from "express";
 import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
-import { adminReadOnly, adminWrite } from "../middleware/requireRoles";
+import { adminReadOnly, adminWrite, superAdminOnly } from "../middleware/requireRoles";
 import { rateLimiter } from "../middleware/rateLimiter";
 import {
   sharedAuditRepo,
@@ -12,10 +12,14 @@ import {
   sharedRoleRepo,
   sharedPaymentRepo,
   sharedLoyaltyRepo,
+  sharedVendorApplicationRepo,
+  sharedUserRoleRepo,
+  sharedChainRepo,
   getStorageMode,
 } from "../repositories/shared";
 import { getRedis } from "../lib/redis";
 import { config } from "../config";
+import { emit, createEventEnvelope } from "../lib/eventBus";
 import { getCatalogRepository } from "./catalog";
 import type { RestaurantDTO } from "../repositories/catalogRepository";
 import type { KillSwitchDTO } from "../repositories/killSwitchRepository";
@@ -179,6 +183,18 @@ function isBuiltinRole(name: string): boolean {
 
 async function roleExists(name: string): Promise<boolean> {
   return isBuiltinRole(name) || (await sharedRoleRepo.getByName(name)) !== null;
+}
+
+/** Operator roles with elevated console privileges. A plain ADMIN must not
+ *  suspend/reactivate/demote these accounts. */
+function isOperatorRole(role: string): boolean {
+  return role === "ADMIN" || role === "SUPER_ADMIN";
+}
+
+/** Number of non-suspended users currently holding the given role. */
+async function countActiveByRole(role: string): Promise<number> {
+  const { items } = await sharedIdentityRepo.listAll(1, 10_000, undefined, role);
+  return items.filter((u) => !u.is_suspended).length;
 }
 
 const CreateRoleSchema = z.object({
@@ -461,6 +477,171 @@ adminRouter.put(
 );
 
 // ============================================
+// Vendor Onboarding Applications (marketplace)
+// Admins review PENDING applications and approve (creating the restaurant +
+// upgrading the applicant to VENDOR_OWNER) or reject with a reason.
+// ============================================
+
+const RejectApplicationSchema = z.object({
+  reason: z.string().min(2).max(300).optional(),
+});
+
+adminRouter.get(
+  "/vendor-applications",
+  adminReadOnly,
+  asyncHandler(async (req, res) => {
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    const apps = await sharedVendorApplicationRepo.listAll(status as never);
+    ok(res, apps);
+  }),
+);
+
+adminRouter.get(
+  "/vendor-applications/metrics",
+  adminReadOnly,
+  asyncHandler(async (req, res) => {
+    const days = Math.min(30, Math.max(1, parseInt(String(req.query.days ?? "14"), 10) || 14));
+    const metrics = await sharedVendorApplicationRepo.getMetrics(days);
+    ok(res, metrics);
+  }),
+);
+
+adminRouter.put(
+  "/vendor-applications/:id/approve",
+  adminWriteLimiter, superAdminOnly,
+  asyncHandler(async (req, res) => {
+    const id = req.params.id as string;
+    const actorId = res.locals.userId as string;
+    const app = await sharedVendorApplicationRepo.getById(id);
+    if (!app) {
+      throw new AppError("NOT_FOUND", "Application not found", 404);
+    }
+    if (app.status !== "PENDING") {
+      throw new AppError("CONFLICT", `Application is already ${app.status.toLowerCase()}`, 409);
+    }
+    const repo = getCatalogRepository();
+
+    let restaurant: RestaurantDTO;
+    let chainId: string | null = null;
+    let outletIds: string[] = [];
+
+    if (app.type === "CHAIN") {
+      const chain = await sharedChainRepo.create(app.name, app.applicant_id);
+      chainId = chain.id;
+      const count = Math.max(1, app.outlet_count);
+      restaurant = await repo.createRestaurant({
+        name: count > 1 ? `${app.name} — Outlet 1` : app.name,
+        gst_number: app.gst_number,
+        fssai_license: app.fssai_license,
+        owner_id: app.applicant_id,
+        commission_rate: app.commission_rate,
+        lat: app.lat,
+        lng: app.lng,
+        pickup_eta_min: 20,
+        chain_id: chain.id,
+      });
+      outletIds.push(restaurant.id);
+      for (let i = 2; i <= count; i += 1) {
+        const outlet = await repo.createRestaurant({
+          name: `${app.name} — Outlet ${i}`,
+          gst_number: app.gst_number,
+          fssai_license: app.fssai_license,
+          owner_id: app.applicant_id,
+          commission_rate: app.commission_rate,
+          lat: app.lat,
+          lng: app.lng,
+          pickup_eta_min: 20,
+          chain_id: chain.id,
+        });
+        outletIds.push(outlet.id);
+      }
+    } else {
+      restaurant = await repo.createRestaurant({
+        name: app.name,
+        gst_number: app.gst_number,
+        fssai_license: app.fssai_license,
+        owner_id: app.applicant_id,
+        commission_rate: app.commission_rate,
+        lat: app.lat,
+        lng: app.lng,
+        pickup_eta_min: 20,
+      });
+    }
+
+    await sharedIdentityRepo.updateRole(app.applicant_id, "VENDOR_OWNER");
+    if (chainId) {
+      await sharedUserRoleRepo.assign({
+        user_id: app.applicant_id,
+        scope_type: "chain",
+        scope_id: chainId,
+        role: "VENDOR_OWNER",
+      });
+    } else {
+      await sharedUserRoleRepo.assign({
+        user_id: app.applicant_id,
+        scope_type: "restaurant",
+        scope_id: restaurant.id,
+        role: "VENDOR_OWNER",
+      });
+    }
+    const updated = await sharedVendorApplicationRepo.updateStatus(id, "APPROVED", actorId);
+    await sharedAuditRepo.log(actorId, "vendor_application_approved", {
+      application_id: id,
+      vendor_id: chainId ?? restaurant.id,
+      vendor_name: app.name,
+      applicant_id: app.applicant_id,
+      type: app.type,
+      outlet_count: chainId ? outletIds.length : 1,
+    });
+    await emit(
+      createEventEnvelope("VendorApplicationApproved", id, {
+        applicant_id: app.applicant_id,
+        name: app.name,
+        phone: app.phone,
+        contact_email: app.contact_email ?? null,
+        vendor_id: chainId ?? restaurant.id,
+      }),
+    );
+    ok(res, { application: updated, restaurant, chain_id: chainId, outlet_ids: outletIds });
+  }),
+);
+
+adminRouter.put(
+  "/vendor-applications/:id/reject",
+  adminWriteLimiter, superAdminOnly,
+  asyncHandler(async (req, res) => {
+    const id = req.params.id as string;
+    const actorId = res.locals.userId as string;
+    const body = RejectApplicationSchema.safeParse(req.body ?? {});
+    const reason = body.success ? body.data.reason ?? null : null;
+    const app = await sharedVendorApplicationRepo.getById(id);
+    if (!app) {
+      throw new AppError("NOT_FOUND", "Application not found", 404);
+    }
+    if (app.status !== "PENDING") {
+      throw new AppError("CONFLICT", `Application is already ${app.status.toLowerCase()}`, 409);
+    }
+    const updated = await sharedVendorApplicationRepo.updateStatus(id, "REJECTED", actorId, reason);
+    await sharedAuditRepo.log(actorId, "vendor_application_rejected", {
+      application_id: id,
+      vendor_name: app.name,
+      applicant_id: app.applicant_id,
+      ...(reason ? { reason } : {}),
+    });
+    await emit(
+      createEventEnvelope("VendorApplicationRejected", id, {
+        applicant_id: app.applicant_id,
+        name: app.name,
+        phone: app.phone,
+        contact_email: app.contact_email ?? null,
+        reason: reason ?? null,
+      }),
+    );
+    ok(res, updated);
+  }),
+);
+
+// ============================================
 // Vendor Performance & Settlement (A-09)
 // Per-vendor orders, revenue, and platform commission.
 // Read-only for all admin roles.
@@ -637,7 +818,7 @@ adminRouter.get(
 // Role Management (custom roles) — SUPER_ADMIN only
 // ============================================
 
-function superAdminOnly(res: Response): void {
+function assertSuperAdmin(res: Response): void {
   if (res.locals.userRole !== "SUPER_ADMIN") {
     throw new AppError("FORBIDDEN", "Only SUPER_ADMIN can manage roles", 403);
   }
@@ -671,7 +852,7 @@ adminRouter.post(
   "/roles",
   adminWriteLimiter, adminWrite,
   asyncHandler(async (req, res) => {
-    superAdminOnly(res);
+    assertSuperAdmin(res);
     const body = CreateRoleSchema.safeParse(req.body);
     if (!body.success) {
       throw new AppError("VALIDATION_ERROR", "Invalid role payload", 400, body.error.flatten());
@@ -697,7 +878,7 @@ adminRouter.delete(
   "/roles/:name",
   adminWriteLimiter, adminWrite,
   asyncHandler(async (req, res) => {
-    superAdminOnly(res);
+    assertSuperAdmin(res);
     const name = req.params.name as string;
     if (isBuiltinRole(name)) {
       throw new AppError("FORBIDDEN", "Built-in roles cannot be deleted", 403);
@@ -786,23 +967,43 @@ adminRouter.get(
   }),
 );
 
+const SuspendUserSchema = z.object({
+  reason: z.string().max(200).optional(),
+});
+
 adminRouter.put(
   "/users/:id/suspend",
   adminWriteLimiter, adminWrite,
   asyncHandler(async (req, res) => {
     const id = req.params.id as string;
+    const actorId = res.locals.userId as string;
+    const actorRole = res.locals.userRole as string;
+    const body = SuspendUserSchema.safeParse(req.body ?? {});
+    const reason = body.success ? body.data.reason ?? null : null;
     const user = await sharedIdentityRepo.getById(id);
     if (!user) {
       throw new AppError("NOT_FOUND", "User not found", 404);
     }
+    if (id === actorId) {
+      throw new AppError("FORBIDDEN", "You cannot suspend your own account", 403);
+    }
+    if (actorRole === "ADMIN" && isOperatorRole(user.role)) {
+      throw new AppError("FORBIDDEN", "ADMIN cannot suspend operator accounts", 403);
+    }
+    if (actorRole === "SUPER_ADMIN" && user.role === "SUPER_ADMIN") {
+      throw new AppError("FORBIDDEN", "Cannot suspend another SUPER_ADMIN", 403);
+    }
+    if (isOperatorRole(user.role) && (await countActiveByRole(user.role)) <= 1) {
+      throw new AppError("FORBIDDEN", `Cannot suspend the last active ${user.role}`, 403);
+    }
     if (user.is_suspended) {
       throw new AppError("CONFLICT", "User is already suspended", 409);
     }
-    const updated = await sharedIdentityRepo.suspend(id);
-    const actorId = res.locals.userId as string;
+    const updated = await sharedIdentityRepo.suspend(id, reason);
     await sharedAuditRepo.log(actorId, "user_suspended", {
       user_id: id,
       phone: user.phone,
+      ...(reason ? { reason } : {}),
     });
     ok(res, updated);
   }),
@@ -813,9 +1014,16 @@ adminRouter.put(
   adminWriteLimiter, adminWrite,
   asyncHandler(async (req, res) => {
     const id = req.params.id as string;
+    const actorRole = res.locals.userRole as string;
     const user = await sharedIdentityRepo.getById(id);
     if (!user) {
       throw new AppError("NOT_FOUND", "User not found", 404);
+    }
+    if (actorRole === "ADMIN" && isOperatorRole(user.role)) {
+      throw new AppError("FORBIDDEN", "ADMIN cannot manage operator accounts", 403);
+    }
+    if (actorRole === "SUPER_ADMIN" && user.role === "SUPER_ADMIN") {
+      throw new AppError("FORBIDDEN", "Cannot reactivate another SUPER_ADMIN", 403);
     }
     if (!user.is_suspended) {
       throw new AppError("CONFLICT", "User is not suspended", 409);
@@ -861,6 +1069,21 @@ adminRouter.put(
     }
     if (id === actorId) {
       throw new AppError("FORBIDDEN", "Cannot change your own role", 403);
+    }
+    if (
+      user.role === "SUPER_ADMIN" &&
+      body.data.role !== "SUPER_ADMIN" &&
+      (await countActiveByRole("SUPER_ADMIN")) <= 1
+    ) {
+      throw new AppError("FORBIDDEN", "Cannot demote the last active SUPER_ADMIN", 403);
+    }
+    if (
+      user.role === "ADMIN" &&
+      body.data.role !== "ADMIN" &&
+      body.data.role !== "SUPER_ADMIN" &&
+      (await countActiveByRole("ADMIN")) <= 1
+    ) {
+      throw new AppError("FORBIDDEN", "Cannot demote the last active ADMIN", 403);
     }
     const updated = await sharedIdentityRepo.updateRole(id, body.data.role);
     if (!updated) {
