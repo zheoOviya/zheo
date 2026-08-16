@@ -1,9 +1,11 @@
 import { Router } from "express";
+import type { Response } from "express";
 import { z } from "zod";
 import { config } from "../config";
 import { generateEventMetadata } from "../lib/correlation";
 import { logger } from "../lib/logger";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
+import { authenticate } from "../middleware/auth";
 import { rateLimiter } from "../middleware/rateLimiter";
 import { requireRole } from "../middleware/requireRoles";
 import { sharedAuditRepo, sharedIdentityRepo } from "../repositories/shared";
@@ -144,6 +146,30 @@ async function resolveUser(phone: string) {
   return sharedIdentityRepo.ensureByPhone(phone, "CONSUMER");
 }
 
+// Issues both auth cookies: the httpOnly refresh cookie (7d) and the
+// httpOnly access cookie (15m). The access cookie lets the browser
+// authenticate API calls without exposing the JWT to JavaScript
+// (previously it was returned in the body and stored in localStorage).
+function setAuthCookies(
+  res: Response,
+  pair: { accessToken: string; refreshToken: string },
+): void {
+  res.cookie(config.jwt.refreshCookieName, pair.refreshToken, {
+    httpOnly: true,
+    secure: config.env === "production",
+    sameSite: "strict",
+    path: "/",
+    maxAge: config.jwt.refreshTtlSeconds * 1000,
+  });
+  res.cookie(config.jwt.accessCookieName, pair.accessToken, {
+    httpOnly: true,
+    secure: config.env === "production",
+    sameSite: "strict",
+    path: "/",
+    maxAge: config.jwt.accessTtlSeconds * 1000,
+  });
+}
+
 authRouter.post(
   "/send-otp",
   otpLimiter,
@@ -204,13 +230,7 @@ authRouter.post(
 
     const pair = jwtService.issuePair(claims);
 
-    res.cookie(config.jwt.refreshCookieName, pair.refreshToken, {
-      httpOnly: true,
-      secure: config.env === "production",
-      sameSite: "strict",
-      path: "/",
-      maxAge: config.jwt.refreshTtlSeconds * 1000,
-    });
+    setAuthCookies(res, pair);
 
     logger.info({
       message: "otp_verified",
@@ -246,13 +266,7 @@ authRouter.post(
       body.data.device_fingerprint,
     );
 
-    res.cookie(config.jwt.refreshCookieName, pair.refreshToken, {
-      httpOnly: true,
-      secure: config.env === "production",
-      sameSite: "strict",
-      path: "/",
-      maxAge: config.jwt.refreshTtlSeconds * 1000,
-    });
+    setAuthCookies(res, pair);
 
     ok(res, {
       access_token: pair.accessToken,
@@ -274,7 +288,31 @@ authRouter.post(
       }
     }
     res.clearCookie(config.jwt.refreshCookieName, { path: "/" });
+    res.clearCookie(config.jwt.accessCookieName, { path: "/" });
     ok(res, { logged_out: true });
+  }),
+);
+
+// Current-session identity. The frontends use this to hydrate their UI (role,
+// user id, suspension state) after a hard reload, since the access token now
+// lives in an httpOnly cookie rather than localStorage. Any valid session
+// (including PENDING_VENDOR) may call it.
+authRouter.get(
+  "/me",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const user = await sharedIdentityRepo.getById(res.locals.userId);
+    if (!user) {
+      throw new AppError("UNAUTHORIZED", "User no longer exists", 401);
+    }
+    ok(res, {
+      user: {
+        id: user.id,
+        phone: user.phone,
+        role: user.role,
+        is_suspended: user.is_suspended,
+      },
+    }, 200);
   }),
 );
 
@@ -340,13 +378,7 @@ authRouter.post(
 
     const pair = jwtService.issuePair(claims);
 
-    res.cookie(config.jwt.refreshCookieName, pair.refreshToken, {
-      httpOnly: true,
-      secure: config.env === "production",
-      sameSite: "strict",
-      path: "/",
-      maxAge: config.jwt.refreshTtlSeconds * 1000,
-    });
+    setAuthCookies(res, pair);
 
     logger.info({
       message: "admin_otp_verified",
@@ -453,13 +485,7 @@ authRouter.post(
 
     const pair = jwtService.issuePair(claims);
 
-    res.cookie(config.jwt.refreshCookieName, pair.refreshToken, {
-      httpOnly: true,
-      secure: config.env === "production",
-      sameSite: "strict",
-      path: "/",
-      maxAge: config.jwt.refreshTtlSeconds * 1000,
-    });
+    setAuthCookies(res, pair);
 
     logger.info({
       message: "vendor_otp_verified",
@@ -569,13 +595,7 @@ authRouter.post(
 
     const pair = jwtService.issuePair(claims);
 
-    res.cookie(config.jwt.refreshCookieName, pair.refreshToken, {
-      httpOnly: true,
-      secure: config.env === "production",
-      sameSite: "strict",
-      path: "/",
-      maxAge: config.jwt.refreshTtlSeconds * 1000,
-    });
+    setAuthCookies(res, pair);
 
     logger.info({
       message: "consumer_otp_verified",
@@ -631,13 +651,7 @@ authRouter.post(
       device_fingerprint: body.data.device_fingerprint,
     });
 
-    res.cookie(config.jwt.refreshCookieName, pair.refreshToken, {
-      httpOnly: true,
-      secure: config.env === "production",
-      sameSite: "strict",
-      path: "/",
-      maxAge: config.jwt.refreshTtlSeconds * 1000,
-    });
+    setAuthCookies(res, pair);
 
     logger.info({
       message: "totp_verified_login",

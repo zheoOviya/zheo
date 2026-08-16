@@ -1,9 +1,10 @@
+import { hydrateSession } from "./auth";
+
 export interface HeatmapCell {
   lat: number;
   lng: number;
   count: number;
 }
-
 export interface HeatmapResult {
   window_minutes: number;
   total_orders: number;
@@ -170,18 +171,51 @@ export interface HealthReport {
 
 const ADMIN_API = "/api/v1/admin";
 
+function getDeviceFingerprint(): string {
+  if (typeof window === "undefined") return "admin-console-static";
+  try {
+    const existing = window.localStorage.getItem("snakzap_admin_device_fingerprint");
+    if (existing) return existing;
+    const fresh = "admin-console-" + crypto.randomUUID();
+    window.localStorage.setItem("snakzap_admin_device_fingerprint", fresh);
+    return fresh;
+  } catch {
+    return "admin-console-" + crypto.randomUUID();
+  }
+}
+
+// Auth is carried by the httpOnly access cookie (snakzap_access), so no token
+// is stored in JavaScript or localStorage. On a 401 the access cookie is
+// rotated once via the refresh cookie before giving up.
 async function adminFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const token = typeof window !== "undefined" ? localStorage.getItem("snkz_admin_token") : null;
-  const res = await fetch(`${ADMIN_API}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options?.headers,
-    },
-  });
+  const doFetch = () =>
+    fetch(`${ADMIN_API}${path}`, {
+      ...options,
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    });
+
+  let res = await doFetch();
+  if (res.status === 401) {
+    const refreshed = await fetch("/api/v1/auth/refresh", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_fingerprint: getDeviceFingerprint() }),
+    }).then((r) => r.json().catch(() => null));
+    if (refreshed?.success) {
+      res = await doFetch();
+    }
+  }
+
   const body = await res.json();
   if (!body.success || body.data === null || body.data === undefined) {
+    if (res.status === 401 && typeof window !== "undefined") {
+      window.location.href = "/login";
+    }
     throw new Error(body.error?.message ?? "Request failed");
   }
   return body.data;
@@ -503,12 +537,6 @@ export function updateSupportTicket(
 }
 
 export async function getSessionRoles(): Promise<string[]> {
-  try {
-    const token = typeof window !== "undefined" ? localStorage.getItem("snkz_admin_token") : null;
-    if (!token) return [];
-    const payload = JSON.parse(atob(token.split(".")[1]!));
-    return payload.role ? [payload.role] : [];
-  } catch {
-    return [];
-  }
+  const role = await hydrateSession();
+  return role ? [role] : [];
 }

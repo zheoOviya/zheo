@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LazyMotion, domMax } from "framer-motion";
-import { getSessionUser, isAuthenticated, logout, type VendorSessionUser } from "@/lib/auth";
+import { getSessionUser, hydrateSession, isAuthenticated, logout, type VendorSessionUser } from "@/lib/auth";
 import { useVendorStore } from "@/lib/store";
 
 interface NavItem {
@@ -358,10 +358,34 @@ export function AppShell({ children }: { children: ReactNode }) {
   const resetRestaurants = useVendorStore((s) => s.reset);
 
   useEffect(() => {
+    let cancelled = false;
+
     // Read the session on the client only (avoids an SSR hydration mismatch).
-    setUser(getSessionUser());
-    setAuthenticated(isAuthenticated());
-    setReady(true);
+    if (isAuthenticated()) {
+      setUser(getSessionUser());
+      setAuthenticated(true);
+      setReady(true);
+      return;
+    }
+
+    // The access token is now httpOnly; hydrate the user from /api/v1/auth/me
+    // (covers hard reloads where in-memory state is empty).
+    hydrateSession()
+      .then((u) => {
+        if (cancelled) return;
+        if (u) {
+          setUser(u);
+          setAuthenticated(true);
+        }
+        setReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) setReady(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {

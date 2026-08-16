@@ -2,16 +2,20 @@
 
 // ============================================
 // Vendor session management.
-// The login page completes phone+OTP and stores
-// the access token + user (localStorage). The
-// refresh token lives in an httpOnly cookie set
-// by the API (snakzap_refresh) and is used to
-// silently rotate the access token on 401.
+// The access token now lives in an httpOnly cookie
+// (snakzap_access) set by the API, so it is never
+// persisted to localStorage. This module mirrors the
+// current user in memory (for UI decisions) and
+// hydrates it from GET /api/v1/auth/me on load. The
+// refresh token stays in the httpOnly snakzap_refresh
+// cookie and is used to silently rotate the access
+// token on 401.
 // ============================================
 
-const TOKEN_KEY = "snkz_vendor_token";
-const USER_KEY = "snkz_vendor_user";
 const FP_KEY = "snkz_vendor_fp";
+
+let accessToken: string | null = null;
+let sessionUser: VendorSessionUser | null = null;
 
 export interface VendorSessionUser {
   id: string;
@@ -20,30 +24,21 @@ export interface VendorSessionUser {
   is_suspended?: boolean;
 }
 
-export function storeSession(accessToken: string, user: VendorSessionUser): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(TOKEN_KEY, accessToken);
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+export function storeSession(accessTokenValue: string, user: VendorSessionUser): void {
+  accessToken = accessTokenValue;
+  sessionUser = user;
 }
 
 export function getAccessToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_KEY);
+  return accessToken;
 }
 
 export function getSessionUser(): VendorSessionUser | null {
-  if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem(USER_KEY);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as VendorSessionUser;
-  } catch {
-    return null;
-  }
+  return sessionUser;
 }
 
 export function isAuthenticated(): boolean {
-  return getAccessToken() !== null;
+  return sessionUser !== null;
 }
 
 export function getDeviceFingerprint(): string {
@@ -57,9 +52,8 @@ export function getDeviceFingerprint(): string {
 }
 
 export function clearSession(): void {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(USER_KEY);
+  accessToken = null;
+  sessionUser = null;
 }
 
 /** Silently rotates the access token using the httpOnly refresh cookie. */
@@ -86,7 +80,7 @@ async function doRefreshSession(): Promise<string | null> {
   } | null;
   if (!body?.success || !body.data?.access_token) return null;
   const token = body.data.access_token;
-  localStorage.setItem(TOKEN_KEY, token);
+  accessToken = token;
   return token;
 }
 
@@ -100,5 +94,41 @@ export async function logout(): Promise<void> {
     // Best-effort server-side logout; local session cleared below.
   } finally {
     clearSession();
+  }
+}
+
+// Hydrates the in-memory session from the httpOnly access cookie. Returns the
+// user on success, or null when there is no valid session. Idempotent and safe
+// to call on every mount (covers hard reloads where module state is empty).
+let hydrateInFlight: Promise<VendorSessionUser | null> | null = null;
+
+export function hydrateSession(): Promise<VendorSessionUser | null> {
+  if (hydrateInFlight) return hydrateInFlight;
+  hydrateInFlight = doHydrate().finally(() => {
+    hydrateInFlight = null;
+  });
+  return hydrateInFlight;
+}
+
+async function doHydrate(): Promise<VendorSessionUser | null> {
+  try {
+    const res = await fetch("/api/v1/auth/me", { credentials: "include" });
+    const body = (await res.json().catch(() => null)) as {
+      success?: boolean;
+      data?: {
+        user?: { id?: string; phone?: string; role?: string; is_suspended?: boolean };
+      };
+    } | null;
+    const user = body?.success ? body.data?.user : null;
+    if (!user?.role) return null;
+    sessionUser = {
+      id: user.id ?? "",
+      phone: user.phone ?? "",
+      role: user.role,
+      is_suspended: user.is_suspended,
+    };
+    return sessionUser;
+  } catch {
+    return null;
   }
 }

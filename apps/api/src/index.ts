@@ -5,6 +5,7 @@ import { closeDb, probePostgres } from "./lib/db";
 import { getRedis } from "./lib/redis";
 import { logger } from "./lib/logger";
 import { initWebSocketServer } from "./lib/websocket";
+import { assertSecureConfig } from "./env";
 
 // Resilience: never let an unhandled async failure take the process down.
 process.on("unhandledRejection", (reason) => {
@@ -18,6 +19,10 @@ process.on("uncaughtException", (err) => {
 });
 
 async function main() {
+  // Fail fast on insecure production configuration (weak/missing JWT secrets,
+  // or the dev auth bypass left enabled). Throws -> process exits non-zero.
+  assertSecureConfig();
+
   // Probe PostgreSQL before any repository module loads. Pool construction is
   // lazy (never opens a socket), so a live database must be verified with a
   // real query. When unreachable (e.g. preview without Postgres), fall back to
@@ -42,23 +47,14 @@ async function main() {
   const DEFAULT_REFRESH_SECRET = "dev-refresh-secret-change-in-production";
 
   if (
-    config.env === "production" &&
+    config.env !== "production" &&
     (config.jwt.accessSecret === DEFAULT_ACCESS_SECRET ||
       config.jwt.refreshSecret === DEFAULT_REFRESH_SECRET)
-  ) {
-    logger.error({
-      message:
-        "jwt_default_secret_in_production: JWT secrets are using dev defaults. " +
-        "Set JWT_SECRET and JWT_REFRESH_SECRET before going live.",
-    });
-  } else if (
-    config.jwt.accessSecret === DEFAULT_ACCESS_SECRET ||
-    config.jwt.refreshSecret === DEFAULT_REFRESH_SECRET
   ) {
     logger.warn({
       message:
         "jwt_default_secret_in_use: JWT secrets fall back to dev defaults. " +
-        "Set JWT_SECRET and JWT_REFRESH_SECRET in non-development environments.",
+        "Set JWT_SECRET and JWT_REFRESH_SECRET before deploying to production.",
     });
   }
 

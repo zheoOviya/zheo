@@ -12,6 +12,17 @@ import { AppError } from "../middleware/envelope";
 
 const OTP_PREFIX = "otp:";
 
+// The dev/preview auth bypass (on-screen demo OTP + any-6-digit verify) is
+// ONLY active when explicitly opted in via ALLOW_DEV_AUTH_BYPASS=true, or in
+// the test environment. This replaces the previous `NODE_ENV !== "production"`
+// check, which silently enabled the bypass in any misconfigured staging
+// environment (empty or "staging" NODE_ENV). NODE_ENV is read at call time so
+// the test suite can still flip it to "production" and assert strict behavior.
+function isDevBypassActive(): boolean {
+  if (config.auth.allowDevAuthBypass) return true;
+  return process.env.NODE_ENV === "test";
+}
+
 export interface SendOtpResult {
   sent: boolean;
   phoneMasked: string;
@@ -65,10 +76,11 @@ export async function sendOtp(phone: string): Promise<SendOtpResult> {
     sent,
     phoneMasked: maskPhone(phone),
     expiresInSeconds: config.msg91.otpTtlSeconds,
-    // On-screen demo OTP: exposed only in non-production builds so a preview
-    // or tester can complete login without an SMS gateway. The REAL generated
+    // On-screen demo OTP: exposed only when the dev bypass is explicitly
+    // enabled (ALLOW_DEV_AUTH_BYPASS=true) or in tests, so a preview or
+    // tester can complete login without an SMS gateway. The REAL generated
     // code is surfaced (not a bypass), so verification stays honest.
-    ...(process.env.NODE_ENV !== "production" ? { demoOtp: otp } : {}),
+    ...(isDevBypassActive() ? { demoOtp: otp } : {}),
   };
 }
 
@@ -84,7 +96,7 @@ export async function verifyOtp(
   // guarantees the demo can never dead-end with "Invalid OTP" or
   // "OTP expired" (stale browser bundle, manual entry, single-use consumed,
   // TTL expiry, or a dev-server restart wiping the in-memory store).
-  if (process.env.NODE_ENV !== "production") {
+  if (isDevBypassActive()) {
     if (!/^\d{6}$/.test(otp)) {
       throw new AppError("OTP_INVALID", "Invalid OTP", 400);
     }

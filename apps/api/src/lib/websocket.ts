@@ -5,12 +5,21 @@ import { WebSocket, WebSocketServer } from "ws";
 import { config } from "../config";
 import { getRedis } from "./redis";
 import { logger } from "./logger";
+import { jwtService } from "../services/jwt";
+import { sharedOrderRepo } from "../repositories/shared";
+import { assertRestaurantAccess } from "../middleware/vendorAccess";
 
 // ============================================
 // WebSocket Server (EOS Layer 1, P05 Live Kitchen)
 // Integrated with Express via HTTP upgrade.
 // Redis PubSub for cross-instance broadcasting.
 // Contract: { event: "ORDER_STATUS_UPDATE", data: { order_id, sql_status, ui_status } }
+//
+// Security: connections are authenticated (httpOnly access cookie, `?token=`
+// query, or Authorization header) and subscriptions are authorized:
+//   - subscribe_restaurant  -> vendor of that restaurant, or platform ops
+//   - subscribe (order)     -> the order's owner, vendor of its restaurant,
+//                              or platform ops
 // ============================================
 
 export interface OrderStatusUpdate {
@@ -36,39 +45,156 @@ const UI_STATUS_MAP: Record<string, string> = {
 
 const PUBSUB_CHANNEL = "order_updates";
 
+const PLATFORM_ROLES = new Set(["ADMIN", "SUPER_ADMIN", "OPS_AGENT"]);
+const VENDOR_ROLES = new Set(["VENDOR_OWNER", "VENDOR_STAFF"]);
+
 let wss: WebSocketServer | null = null;
+
+interface WsClaims {
+  sub: string;
+  role: string;
+}
 
 interface ClientInfo {
   ws: WebSocket;
   subscriptions: Set<string>;
+  claims: WsClaims;
 }
 
 // All connected clients with their subscriptions
 const clients = new Map<string, ClientInfo>();
+
+function parseCookieHeader(header: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    const key = part.slice(0, eq).trim();
+    const value = part.slice(eq + 1).trim();
+    if (key) out[key] = value;
+  }
+  return out;
+}
+
+function authenticateConnection(req: IncomingMessage): WsClaims | null {
+  let token: string | null = null;
+
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    token = authHeader.slice(7);
+  }
+
+  if (!token) {
+    try {
+      const url = new URL(req.url ?? "", "http://localhost");
+      token = url.searchParams.get("token");
+    } catch {
+      token = null;
+    }
+  }
+
+  if (!token) {
+    const cookies = parseCookieHeader(req.headers.cookie);
+    token = cookies[config.jwt.accessCookieName] ?? null;
+  }
+
+  if (!token) return null;
+
+  try {
+    const claims = jwtService.verifyAccessToken(token);
+    return { sub: claims.sub, role: claims.role };
+  } catch {
+    return null;
+  }
+}
+
+async function canSubscribeOrder(
+  claims: WsClaims,
+  orderId: string,
+): Promise<boolean> {
+  if (PLATFORM_ROLES.has(claims.role)) return true;
+
+  const order = await sharedOrderRepo.getById(orderId).catch(() => null);
+  if (!order) return false;
+
+  if (claims.role === "CONSUMER") {
+    return order.user_id === claims.sub;
+  }
+
+  if (VENDOR_ROLES.has(claims.role)) {
+    try {
+      await assertRestaurantAccess(
+        { locals: { userId: claims.sub, userRole: claims.role } },
+        order.restaurant_id,
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+async function canSubscribeRestaurant(
+  claims: WsClaims,
+  restaurantId: string,
+): Promise<boolean> {
+  if (PLATFORM_ROLES.has(claims.role)) return true;
+  if (!VENDOR_ROLES.has(claims.role)) return false;
+
+  try {
+    await assertRestaurantAccess(
+      { locals: { userId: claims.sub, userRole: claims.role } },
+      restaurantId,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function initWebSocketServer(httpServer: Server): WebSocketServer {
   if (wss) return wss;
 
   wss = new WebSocketServer({ server: httpServer });
 
-  wss.on("connection", (ws: WebSocket, _req: IncomingMessage) => {
+  wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
+    const claims = authenticateConnection(req);
+    if (!claims) {
+      logger.warn({ message: "ws_connection_rejected_unauthenticated" });
+      ws.close(1008, "Unauthorized");
+      return;
+    }
+
     const clientId = randomUUID();
-    const info: ClientInfo = { ws, subscriptions: new Set() };
+    const info: ClientInfo = { ws, subscriptions: new Set(), claims };
     clients.set(clientId, info);
 
-    logger.info({ message: "ws_client_connected", client_id: clientId });
+    logger.info({
+      message: "ws_client_connected",
+      client_id: clientId,
+      role: claims.role,
+    });
 
     ws.on("message", (raw) => {
+      let msg: { type?: string; order_id?: string; restaurant_id?: string };
       try {
-        const msg = JSON.parse(raw.toString());
-        if (msg.type === "subscribe" && msg.order_id) {
-          info.subscriptions.add(`order:${msg.order_id}`);
-        }
-        if (msg.type === "subscribe_restaurant" && msg.restaurant_id) {
-          info.subscriptions.add(`restaurant:${msg.restaurant_id}`);
-        }
+        msg = JSON.parse(raw.toString());
       } catch {
-        // ignore malformed
+        return;
+      }
+
+      if (msg.type === "subscribe" && msg.order_id) {
+        void canSubscribeOrder(claims, msg.order_id).then((allowed) => {
+          if (allowed) info.subscriptions.add(`order:${msg.order_id}`);
+        });
+      }
+      if (msg.type === "subscribe_restaurant" && msg.restaurant_id) {
+        void canSubscribeRestaurant(claims, msg.restaurant_id).then((allowed) => {
+          if (allowed) info.subscriptions.add(`restaurant:${msg.restaurant_id}`);
+        });
       }
     });
 

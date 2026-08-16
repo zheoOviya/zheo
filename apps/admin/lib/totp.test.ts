@@ -25,7 +25,7 @@ describe("admin totp client lib", () => {
     vi.restoreAllMocks();
   });
 
-  it("getTotpStatus POSTs with the bearer token and returns status", async () => {
+  it("getTotpStatus POSTs with the httpOnly cookie and returns status", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
         success: true,
@@ -34,13 +34,13 @@ describe("admin totp client lib", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const status = await getTotpStatus("token-123");
+    const status = await getTotpStatus();
     expect(status.totp_enabled).toBe(true);
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/v1/auth/totp/status");
     expect(init.method).toBe("POST");
-    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer token-123");
+    expect(init.credentials).toBe("include");
   });
 
   it("enrollTotp returns the secret and otpauth URL", async () => {
@@ -56,7 +56,7 @@ describe("admin totp client lib", () => {
         ),
       ),
     );
-    const result = await enrollTotp("token-1");
+    const result = await enrollTotp();
     expect(result.secret).toBe("ABCDEFGH");
     expect(result.otpauth_url).toContain("otpauth://totp/");
   });
@@ -67,7 +67,7 @@ describe("admin totp client lib", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const res = await confirmTotp("token-2", "123456");
+    const res = await confirmTotp("123456");
     expect(res.totp_enabled).toBe(true);
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -79,7 +79,7 @@ describe("admin totp client lib", () => {
       "fetch",
       vi.fn().mockResolvedValue(jsonResponse({ success: true, data: { totp_enabled: false } })),
     );
-    const res = await disableTotp("token-3", "654321");
+    const res = await disableTotp("654321");
     expect(res.totp_enabled).toBe(false);
   });
 

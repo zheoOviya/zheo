@@ -21,6 +21,12 @@ function optionalInt(name: string, fallback: number): number {
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
+function optionalBool(name: string, fallback: boolean): boolean {
+  const value = process.env[name];
+  if (value === undefined) return fallback;
+  return value === "true" || value === "1";
+}
+
 export const config = {
   env: optional("NODE_ENV", "development"),
   port: optionalInt("PORT", 3001),
@@ -39,6 +45,15 @@ export const config = {
     accessTtlSeconds: optionalInt("JWT_ACCESS_TTL_SECONDS", 15 * 60),
     refreshTtlSeconds: optionalInt("JWT_REFRESH_TTL_SECONDS", 7 * 24 * 60 * 60),
     refreshCookieName: optional("JWT_REFRESH_COOKIE_NAME", "snakzap_refresh"),
+    accessCookieName: optional("JWT_ACCESS_COOKIE_NAME", "snakzap_access"),
+  },
+
+  // Explicit opt-in for the dev/preview auth bypass (on-screen demo OTP +
+  // any-6-digit verification). Defaults to OFF so a misconfigured staging
+  // environment can never silently accept arbitrary OTPs. Test environments
+  // are always allowed (see services/otp.ts).
+  auth: {
+    allowDevAuthBypass: optionalBool("ALLOW_DEV_AUTH_BYPASS", false),
   },
 
   msg91: {

@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  getAccessToken as getStoredToken,
   refreshSession,
   logout as clearVendorSession,
 } from "./auth";
@@ -9,12 +8,12 @@ import {
 // ============================================
 // Vendor console API client.
 // All /api/vendor/* endpoints are role-gated
-// (VENDOR_OWNER / VENDOR_STAFF), so every request
-// carries the merchant's Bearer token obtained via
-// the phone+OTP sign-in on /login (see lib/auth.ts).
-// If no session is present the caller is bounced to
-// /login; on a 401 the access token is silently
-// refreshed once before giving up.
+// (VENDOR_OWNER / VENDOR_STAFF), but auth is now
+// carried by the httpOnly access cookie
+// (snakzap_access), so no token is stored or sent
+// from JavaScript. If no session is present the
+// caller is bounced to /login; on a 401 the access
+// cookie is silently refreshed once before giving up.
 // ============================================
 
 export class ApiError extends Error {
@@ -28,35 +27,22 @@ export class ApiError extends Error {
   }
 }
 
-export async function getAccessToken(): Promise<string> {
-  const token = getStoredToken();
-  if (token) return token;
-  if (typeof window !== "undefined") window.location.href = "/login";
-  throw new Error("Not authenticated");
-}
-
 export async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  let token = getStoredToken();
-  if (!token) {
-    if (typeof window !== "undefined") window.location.href = "/login";
-    throw new Error("Not authenticated");
-  }
-
-  const doFetch = (t: string) =>
+  const doFetch = () =>
     fetch(path, {
       ...init,
+      credentials: "include",
       headers: {
         ...(init.headers ?? {}),
-        Authorization: `Bearer ${t}`,
         ...(init.body ? { "Content-Type": "application/json" } : {}),
       },
     });
 
-  let res = await doFetch(token);
+  let res = await doFetch();
   if (res.status === 401) {
     const refreshed = await refreshSession();
     if (refreshed) {
-      res = await doFetch(refreshed);
+      res = await doFetch();
     } else {
       await clearVendorSession();
       if (typeof window !== "undefined") window.location.href = "/login";
@@ -311,12 +297,11 @@ export async function uploadMenuPhoto(
   photo: File,
   restaurantId: string,
 ): Promise<{ id: string; image_url: string }> {
-  const token = await getAccessToken();
   const form = new FormData();
   form.append("photo", photo);
   const res = await fetch(`/api/vendor/menu/${itemId}/upload-photo?restaurant_id=${restaurantId}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    credentials: "include",
     body: form,
   });
   return read(res);
@@ -335,10 +320,9 @@ export async function fetchSettlementSummary(
 }
 
 export async function downloadSettlementPdf(restaurantId: string): Promise<void> {
-  const token = await getAccessToken();
   const res = await fetch(`/api/vendor/settlements/today?restaurant_id=${restaurantId}`, {
     method: "PUT",
-    headers: { Authorization: `Bearer ${token}` },
+    credentials: "include",
   });
   if (!res.ok) throw new Error(`Download failed (${res.status})`);
   const blob = await res.blob();
@@ -381,9 +365,8 @@ export async function downloadGstCsv(
   month: string,
   restaurantId: string,
 ): Promise<void> {
-  const token = await getAccessToken();
   const res = await fetch(`/api/vendor/gst-export?restaurant_id=${restaurantId}&month=${month}`, {
-    headers: { Authorization: `Bearer ${token}` },
+    credentials: "include",
   });
   if (!res.ok) throw new Error(`Download failed (${res.status})`);
   const blob = await res.blob();

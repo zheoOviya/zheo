@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   pathname: "/",
   isAuthenticated: vi.fn(() => false),
   getSessionUser: vi.fn<() => SessionUser | null>(() => null),
+  hydrateSession: vi.fn(() => Promise.resolve<SessionUser | null>(null)),
   logout: vi.fn(() => Promise.resolve()),
   restaurants: [] as VendorRestaurant[],
   activeRestaurantId: null as string | null,
@@ -38,6 +39,7 @@ vi.mock("next/link", () => ({
 vi.mock("@/lib/auth", () => ({
   isAuthenticated: mocks.isAuthenticated,
   getSessionUser: mocks.getSessionUser,
+  hydrateSession: mocks.hydrateSession,
   logout: mocks.logout,
 }));
 

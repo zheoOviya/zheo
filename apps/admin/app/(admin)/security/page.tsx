@@ -8,7 +8,6 @@ import {
   getTotpStatus,
   type TotpStatus,
 } from "../../../lib/totp";
-import { getAccessToken } from "../../../lib/auth";
 import { createQrMatrix, qrSvgPath, qrViewSize } from "../../../lib/qr";
 
 function QrSvg({ otpauthUrl }: { otpauthUrl: string }) {
@@ -63,9 +62,7 @@ export default function SecurityPage() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
-    const token = getAccessToken();
-    if (!token) return;
-    getTotpStatus(token)
+    getTotpStatus()
       .then(setStatus)
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load 2FA status"))
       .finally(() => setLoading(false));
@@ -76,12 +73,10 @@ export default function SecurityPage() {
   }, [load]);
 
   async function startEnroll() {
-    const token = getAccessToken();
-    if (!token) return;
     setBusy(true);
     setError("");
     try {
-      setEnrollResult(await enrollTotp(token));
+      setEnrollResult(await enrollTotp());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to start 2FA setup");
     } finally {
@@ -90,12 +85,11 @@ export default function SecurityPage() {
   }
 
   async function submitConfirm() {
-    const token = getAccessToken();
-    if (!token || confirmCode.length !== 6) return;
+    if (confirmCode.length !== 6) return;
     setBusy(true);
     setError("");
     try {
-      await confirmTotp(token, confirmCode);
+      await confirmTotp(confirmCode);
       setConfirmCode("");
       setEnrollResult(null);
       setStatus({ totp_enabled: true, enrolled: true, totp_confirmed_at: new Date().toISOString() });
@@ -108,12 +102,11 @@ export default function SecurityPage() {
   }
 
   async function submitDisable() {
-    const token = getAccessToken();
-    if (!token || disableCode.length !== 6) return;
+    if (disableCode.length !== 6) return;
     setBusy(true);
     setError("");
     try {
-      await disableTotp(token, disableCode);
+      await disableTotp(disableCode);
       setDisableCode("");
       setStatus({ totp_enabled: false, enrolled: false, totp_confirmed_at: null });
     } catch (e) {

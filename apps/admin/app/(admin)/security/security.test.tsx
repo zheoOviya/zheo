@@ -12,19 +12,16 @@ const mocks = vi.hoisted(() => ({
   enrollTotp: vi.fn(),
   confirmTotp: vi.fn(),
   disableTotp: vi.fn(),
-  getAccessToken: vi.fn(),
   createQrMatrix: vi.fn(),
   qrSvgPath: vi.fn(),
   qrViewSize: vi.fn(),
 }));
 
 vi.mock("../../../lib/totp", () => mocks);
-vi.mock("../../../lib/auth", () => mocks);
 vi.mock("../../../lib/qr", () => mocks);
 
 describe("Security page (2FA)", () => {
   beforeEach(() => {
-    mocks.getAccessToken.mockReturnValue("token-1");
     mocks.getTotpStatus.mockResolvedValue({
       totp_enabled: false,
       enrolled: false,
@@ -69,7 +66,7 @@ describe("Security page (2FA)", () => {
     await waitFor(() =>
       expect(screen.getByText(/Two-factor authentication is enabled/)).toBeTruthy(),
     );
-    expect(mocks.confirmTotp).toHaveBeenCalledWith("token-1", "123456");
+    expect(mocks.confirmTotp).toHaveBeenCalledWith("123456");
   });
 
   it("disables 2FA with a current code when already enabled", async () => {
@@ -92,6 +89,6 @@ describe("Security page (2FA)", () => {
     await waitFor(() =>
       expect(screen.getByText(/Two-factor authentication is off/)).toBeTruthy(),
     );
-    expect(mocks.disableTotp).toHaveBeenCalledWith("token-1", "654321");
+    expect(mocks.disableTotp).toHaveBeenCalledWith("654321");
   });
 });

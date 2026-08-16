@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { getWsUrl } from "@snakzap/config/ws";
+import { useAuthStore } from "../lib/store";
 
 export interface OrderStatusUpdate {
   event: "ORDER_STATUS_UPDATE";
@@ -30,7 +31,14 @@ export function useWebSocket(orderId: string | null) {
   const connect = useCallback(() => {
     if (!orderId || wsRef.current) return;
 
-    const ws = new WebSocket(WS_URL);
+    // Authenticate the socket. Same-origin connections carry the httpOnly
+    // access cookie automatically; cross-origin dev connections fall back to
+    // the in-memory token as a query parameter.
+    const token = useAuthStore.getState().accessToken;
+    const sep = WS_URL.includes("?") ? "&" : "?";
+    const url = token ? `${WS_URL}${sep}token=${encodeURIComponent(token)}` : WS_URL;
+
+    const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {

@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { jwtService } from "../services/jwt";
+import { resolveAccessToken } from "./auth";
 import { AppError } from "./envelope";
 
 // ============================================
@@ -15,12 +16,12 @@ import { AppError } from "./envelope";
 
 export function requireRole(...allowedRoles: string[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const header = req.headers.authorization;
-    if (!header?.startsWith("Bearer ")) {
+    const token = resolveAccessToken(req);
+    if (!token) {
       next(
         new AppError(
           "UNAUTHORIZED",
-          "Missing or malformed Authorization header",
+          "Missing or malformed access token",
           401,
         ),
       );
@@ -29,7 +30,7 @@ export function requireRole(...allowedRoles: string[]) {
 
     let role: string;
     try {
-      const claims = jwtService.verifyAccessToken(header.slice(7));
+      const claims = jwtService.verifyAccessToken(token);
       role = claims.role;
       res.locals.userId = claims.sub;
       res.locals.userRole = role;

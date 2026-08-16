@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { fetchDashboardMetrics, type DashboardMetrics } from "../../../lib/api";
-import { getAccessToken } from "../../../lib/auth";
 import { getTotpStatus } from "../../../lib/totp";
 import Link from "next/link";
 
@@ -54,9 +53,7 @@ export default function DashboardPage() {
   }, [load]);
 
   useEffect(() => {
-    const token = getAccessToken();
-    if (!token) return;
-    getTotpStatus(token)
+    getTotpStatus()
       .then((s) => setTotpEnabled(s.totp_enabled))
       .catch(() => setTotpEnabled(null));
   }, []);
