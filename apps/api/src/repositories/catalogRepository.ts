@@ -22,6 +22,14 @@ export interface RestaurantDTO {
   lng: number | null;
   /** Estimated prep/pickup time in minutes shown on consumer cards. */
   pickup_eta_min: number;
+  /** Average rating (e.g. 4.5) shown on consumer cards. */
+  rating: number | null;
+  /** Cuisines shown on consumer cards (e.g. ["North Indian", "Biryani"]). */
+  cuisines: string[];
+  /** Approximate cost for one person in INR (display hint). */
+  price_for_one: number | null;
+  /** Cover image URL for the consumer card / restaurant page. */
+  cover_image: string | null;
   /** Multi-outlet chain linkage (NULL for standalone restaurants). */
   chain_id?: string | null;
 }
@@ -37,6 +45,10 @@ export interface CreateRestaurantInput {
   lng: number | null;
   pickup_eta_min: number;
   chain_id?: string | null;
+  rating?: number | null;
+  cuisines?: string[];
+  price_for_one?: number | null;
+  cover_image?: string | null;
 }
 
 export interface MenuItemDTO {
@@ -159,6 +171,10 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       lat: r.lat ?? null,
       lng: r.lng ?? null,
       pickup_eta_min: r.pickup_eta_min,
+      rating: r.rating ?? null,
+      cuisines: r.cuisines ?? [],
+      price_for_one: r.price_for_one ?? null,
+      cover_image: r.cover_image ?? null,
     }));
   }
 
@@ -179,6 +195,10 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       lat: r.lat ?? null,
       lng: r.lng ?? null,
       pickup_eta_min: r.pickup_eta_min,
+      rating: r.rating ?? null,
+      cuisines: r.cuisines ?? [],
+      price_for_one: r.price_for_one ?? null,
+      cover_image: r.cover_image ?? null,
     };
   }
 
@@ -393,6 +413,10 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       lat: r.lat ?? null,
       lng: r.lng ?? null,
       pickup_eta_min: r.pickup_eta_min,
+      rating: r.rating ?? null,
+      cuisines: r.cuisines ?? [],
+      price_for_one: r.price_for_one ?? null,
+      cover_image: r.cover_image ?? null,
     }));
   }
 
@@ -415,6 +439,10 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       lng: input.lng ?? undefined,
       pickup_eta_min: input.pickup_eta_min,
       chain_id: input.chain_id ?? undefined,
+      rating: input.rating ?? null,
+      cuisines: input.cuisines ?? [],
+      price_for_one: input.price_for_one ?? null,
+      cover_image: input.cover_image ?? null,
     });
     return {
       id,
@@ -428,6 +456,10 @@ export class DrizzleCatalogRepository implements CatalogRepository {
       lng: input.lng,
       pickup_eta_min: input.pickup_eta_min,
       chain_id: input.chain_id ?? null,
+      rating: input.rating ?? null,
+      cuisines: input.cuisines ?? [],
+      price_for_one: input.price_for_one ?? null,
+      cover_image: input.cover_image ?? null,
     };
   }
 }
@@ -609,6 +641,10 @@ export class MemoryCatalogRepository implements CatalogRepository {
       lng: input.lng,
       pickup_eta_min: input.pickup_eta_min,
       chain_id: input.chain_id ?? null,
+      rating: input.rating ?? null,
+      cuisines: input.cuisines ?? [],
+      price_for_one: input.price_for_one ?? null,
+      cover_image: input.cover_image ?? null,
     };
     this.restaurantsData.push(created);
     return created;

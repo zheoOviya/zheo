@@ -64,6 +64,20 @@
       "when": 1792560000000,
       "tag": "0008_vendor_onboarding",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792560001000,
+      "tag": "0009_restaurant_discovery",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792560002000,
+      "tag": "0010_menu_spice_level",
+      "breakpoints": true
     }
   ]
 }

@@ -36,6 +36,11 @@ export const restaurants = pgTable(
     lng: doublePrecision("lng"),
     // Consumer home cards show a real per-restaurant pickup ETA.
     pickup_eta_min: integer("pickup_eta_min").notNull().default(20),
+    // Discovery attributes shown on consumer cards / restaurant pages.
+    rating: doublePrecision("rating"),
+    cuisines: text("cuisines").array().notNull().default(sql`'{}'::text[]`),
+    price_for_one: integer("price_for_one"),
+    cover_image: text("cover_image"),
     created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
@@ -67,6 +72,8 @@ export const menu_items = pgTable(
     image_url: text("image_url"),
     pos_item_id: text("pos_item_id"),
     is_available: boolean("is_available").notNull().default(true),
+    // D03 spice level (1 = mild, 5 = extreme). Defaults to 3.
+    spice_level: integer("spice_level").notNull().default(3),
     created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({

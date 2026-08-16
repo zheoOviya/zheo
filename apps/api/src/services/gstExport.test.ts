@@ -26,6 +26,10 @@ const REST: RestaurantDTO = {
   lat: 19.076,
   lng: 72.8777,
   pickup_eta_min: 25,
+  rating: 4.5,
+  cuisines: ["North Indian", "Biryani"],
+  price_for_one: 300,
+  cover_image: "https://picsum.photos/seed/biryani-house/600/450",
 };
 
 function makeOrder(

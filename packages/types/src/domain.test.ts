@@ -157,17 +157,23 @@ describe("OrderItemSchema", () => {
 });
 
 describe("RestaurantSchema", () => {
-  it("defaults commission_rate to 0.08 per pricing strategy", () => {
+  it("validates the public restaurant shape", () => {
     const r = RestaurantSchema.parse({
       id: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
-      owner_id: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
       name: "Test",
-      gst_number: "GST123",
-      fssai_license: "FSSAI123",
-      created_at: new Date(),
+      commission_rate: 0.08,
+      is_active: true,
+      lat: 19.076,
+      lng: 72.8777,
+      pickup_eta_min: 25,
+      rating: 4.5,
+      cuisines: ["North Indian", "Biryani"],
+      price_for_one: 300,
+      cover_image: "https://example.com/cover.jpg",
     });
-    expect(r.commission_rate).toBe(0.08);
-    expect(r.is_active).toBe(true);
+    expect(r.cuisines).toEqual(["North Indian", "Biryani"]);
+    expect(r.rating).toBe(4.5);
+    expect(r.cover_image).toBe("https://example.com/cover.jpg");
   });
 });
 
@@ -175,12 +181,14 @@ describe("MenuItemSchema", () => {
   it("accepts dietary_tags as a boolean record", () => {
     const item = MenuItemSchema.parse({
       id: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
-      restaurant_id: "9b1deb4d-3b7d-4bad-9bdd-2b0b7b3dcb6d",
+      restaurant_id: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
       name: "Veg Biryani",
       price: 150,
       dietary_tags: { vegan: true, spicy: false },
       customizations: [],
-      created_at: new Date(),
+      is_available: true,
+      spice_level: 3,
+      image_url: null,
     });
     expect(item.dietary_tags.vegan).toBe(true);
   });
