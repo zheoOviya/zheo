@@ -156,5 +156,3 @@ pnpm typecheck      # Turbo typecheck all packages
 - Payment and POS webhooks use mock signature verification in dev. Real HMAC activates when secrets are configured.
 
 ## License
-
-[MIT](LICENSE)
