@@ -77,4 +77,39 @@ describe("Sheet", () => {
       expect(document.body.style.overflow).toBe("hidden");
     });
   });
+
+  it("exposes dialog semantics and an accessible name", async () => {
+    render(
+      <Sheet open={true} onClose={vi.fn()} title="Quick Add">
+        <button type="button">Add item</button>
+      </Sheet>,
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(dialog.getAttribute("aria-label")).toBe("Quick Add");
+  });
+
+  it("closes when Escape is pressed", async () => {
+    const onClose = vi.fn();
+    render(
+      <Sheet open={true} onClose={onClose} title="Quick Add">
+        <button type="button">Add item</button>
+      </Sheet>,
+    );
+    await screen.findByRole("dialog");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("moves focus into the sheet when opened", async () => {
+    render(
+      <Sheet open={true} onClose={vi.fn()} title="Quick Add">
+        <button type="button">Add item</button>
+      </Sheet>,
+    );
+    await screen.findByRole("dialog");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Add item" })).toHaveFocus();
+    });
+  });
 });

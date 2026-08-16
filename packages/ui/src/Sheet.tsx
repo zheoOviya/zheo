@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface SheetProps {
   open: boolean;
@@ -11,13 +11,29 @@ interface SheetProps {
   className?: string;
 }
 
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  );
+}
+
 export function Sheet({ open, onClose, children, title, className = "" }: SheetProps) {
   const [mounted, setMounted] = useState(false);
   const [animating, setAnimating] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     if (open) {
       setMounted(true);
+      previouslyFocused.current = document.activeElement as HTMLElement | null;
       requestAnimationFrame(() => setAnimating(true));
       document.body.style.overflow = "hidden";
     } else {
@@ -33,6 +49,51 @@ export function Sheet({ open, onClose, children, title, className = "" }: SheetP
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open || !mounted) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+
+    const container: HTMLDivElement = panel;
+    const initialFocus = getFocusableElements(container)[0] ?? container;
+    initialFocus.focus();
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== "Tab") return;
+
+      const focusables = getFocusableElements(container);
+      if (focusables.length === 0) {
+        e.preventDefault();
+        container.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (!first || !last) return;
+
+      if (e.shiftKey) {
+        if (document.activeElement === first || !container.contains(document.activeElement)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (document.activeElement === last || !container.contains(document.activeElement)) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previouslyFocused.current?.focus?.();
+    };
+  }, [open, mounted]);
+
   const handleBackdropClick = useCallback(() => {
     onClose();
   }, [onClose]);
@@ -47,8 +108,14 @@ export function Sheet({ open, onClose, children, title, className = "" }: SheetP
           animating ? "opacity-100" : "opacity-0",
         ].join(" ")}
         onClick={handleBackdropClick}
+        aria-hidden="true"
       />
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
         className={[
           "relative w-full max-w-lg rounded-t-xl",
           "bg-white dark:bg-neutral-900",
