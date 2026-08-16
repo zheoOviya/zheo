@@ -43,6 +43,8 @@ export const EventNameSchema = z.enum([
   "HeatmapQueried",
   "WearOrderListed",
   "VipTicketCreated",
+  "VendorApplicationApproved",
+  "VendorApplicationRejected",
 ]);
 export type EventName = z.infer<typeof EventNameSchema>;
 
@@ -331,6 +333,31 @@ export const VipTicketCreatedEventSchema = z.object({
 export type VipTicketCreatedEvent = z.infer<typeof VipTicketCreatedEventSchema>;
 
 // ============================================
+// Vendor Onboarding Decision (marketplace context)
+// Emitted after a vendor application is approved/rejected so downstream
+// subscribers (notifications, analytics) can react without blocking the
+// admin request path.
+// ============================================
+
+export const VendorApplicationApprovedEventSchema = z.object({
+  applicant_id: z.string().uuid(),
+  name: z.string(),
+  phone: z.string(),
+  contact_email: z.string().nullable(),
+  vendor_id: z.string().uuid(),
+});
+export type VendorApplicationApprovedEvent = z.infer<typeof VendorApplicationApprovedEventSchema>;
+
+export const VendorApplicationRejectedEventSchema = z.object({
+  applicant_id: z.string().uuid(),
+  name: z.string(),
+  phone: z.string(),
+  contact_email: z.string().nullable(),
+  reason: z.string().nullable(),
+});
+export type VendorApplicationRejectedEvent = z.infer<typeof VendorApplicationRejectedEventSchema>;
+
+// ============================================
 // Event Catalog - typed envelope factory
 // ============================================
 
@@ -361,6 +388,8 @@ export type EventPayloadMap = {
   HeatmapQueried: HeatmapQueriedEvent;
   WearOrderListed: WearOrderListedEvent;
   VipTicketCreated: VipTicketCreatedEvent;
+  VendorApplicationApproved: VendorApplicationApprovedEvent;
+  VendorApplicationRejected: VendorApplicationRejectedEvent;
 };
 
 export type TypedEventEnvelope<K extends EventName = EventName> = Omit<

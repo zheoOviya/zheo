@@ -6,6 +6,7 @@ import { z } from "zod";
 
 export const UserRoleSchema = z.enum([
   "CONSUMER",
+  "PENDING_VENDOR",
   "VENDOR_OWNER",
   "VENDOR_STAFF",
   "OPS_AGENT",

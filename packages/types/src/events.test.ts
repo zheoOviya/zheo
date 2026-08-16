@@ -15,7 +15,7 @@ describe("Event Envelope (EOS Layer 1.2)", () => {
     ).toBe(true);
   });
 
-  it("EventNameSchema contains all 26 core events", () => {
+  it("EventNameSchema contains all 28 core events", () => {
     expect(EventNameSchema.options).toEqual([
       "OrderCreated",
       "PaymentSucceeded",
@@ -43,6 +43,8 @@ describe("Event Envelope (EOS Layer 1.2)", () => {
       "HeatmapQueried",
       "WearOrderListed",
       "VipTicketCreated",
+      "VendorApplicationApproved",
+      "VendorApplicationRejected",
     ]);
   });
 

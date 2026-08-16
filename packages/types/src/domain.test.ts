@@ -41,10 +41,11 @@ describe("UserSchema", () => {
 });
 
 describe("UserRoleSchema (RBAC)", () => {
-  it("contains all 6 roles from the PRD", () => {
+  it("contains all 7 roles from the PRD", () => {
     const roles = UserRoleSchema.options;
     expect(roles).toEqual([
       "CONSUMER",
+      "PENDING_VENDOR",
       "VENDOR_OWNER",
       "VENDOR_STAFF",
       "OPS_AGENT",
