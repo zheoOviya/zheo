@@ -89,8 +89,9 @@ describe("Exported enums", () => {
     expect(orderStatusEnum.enumValues).toContain("SETTLED");
   });
 
-  it("user_role has exactly 6 roles", () => {
-    expect(userRoleEnum.enumValues).toHaveLength(6);
+  it("user_role has exactly 7 roles", () => {
+    expect(userRoleEnum.enumValues).toHaveLength(7);
+    expect(userRoleEnum.enumValues).toContain("PENDING_VENDOR");
     expect(userRoleEnum.enumValues).toContain("SUPER_ADMIN");
   });
 });

@@ -6,3 +6,6 @@ export * from "./payments";
 export * from "./fulfillment";
 export * from "./killswitches";
 export * from "./supporttickets";
+export * from "./vendorApplications";
+export * from "./notifications";
+export * from "./userRoles";
