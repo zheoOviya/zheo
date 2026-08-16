@@ -17,6 +17,7 @@ import { jwtService } from "../services/jwt";
 import { getStorageMode, sharedIdentityRepo } from "../repositories/shared";
 import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
+import { SEED_MENU, SEED_RESTAURANTS } from "../seed/catalogData";
 
 // ============================================
 // Catalog context routes (discovery) - /api/v1
@@ -81,122 +82,8 @@ const SearchResponseSchema = z.array(SearchResultResponseSchema);
 const FilterResponseSchema = z.array(MenuItemResponseSchema);
 
 // Seeded fixture data for the offline/memory repository.
-// lat/lng are the P04 traffic-ETA pickup origins (Mumbai, IN).
-const SEED_RESTAURANTS: RestaurantDTO[] = [
-  {
-    id: "a0000000-0000-4000-8000-000000000001",
-    name: "Biryani House",
-    gst_number: "27AABCB1234A1Z5",
-    owner_id: "e0000000-0000-4000-a000-000000000001",
-    commission_rate: 0.08,
-    is_active: true,
-    lat: 19.076,
-    lng: 72.8777,
-    pickup_eta_min: 25,
-    rating: 4.5,
-    cuisines: ["North Indian", "Biryani"],
-    price_for_one: 300,
-    cover_image: "https://picsum.photos/seed/biryani-house/600/450",
-  },
-  {
-    id: "a0000000-0000-4000-8000-000000000002",
-    name: "Green Bowl",
-    gst_number: "27AACCG5678B1Z3",
-    owner_id: "e0000000-0000-4000-a000-000000000002",
-    commission_rate: 0.08,
-    is_active: true,
-    lat: 19.1136,
-    lng: 72.8697,
-    pickup_eta_min: 15,
-    rating: 4.2,
-    cuisines: ["Healthy", "Salads"],
-    price_for_one: 250,
-    cover_image: "https://picsum.photos/seed/green-bowl/600/450",
-  },
-  {
-    id: "a0000000-0000-4000-8000-000000000003",
-    name: "Closed Kitchen",
-    gst_number: "27AADDH9012C1Z7",
-    owner_id: "e0000000-0000-4000-a000-000000000003",
-    commission_rate: 0.05,
-    is_active: false,
-    lat: 18.9647,
-    lng: 72.8258,
-    pickup_eta_min: 30,
-    rating: 3.9,
-    cuisines: ["Continental"],
-    price_for_one: 200,
-    cover_image: "https://picsum.photos/seed/closed-kitchen/600/450",
-  },
-];
-
-const SEED_MENU: MenuItemDTO[] = [
-  {
-    id: "b0000000-0000-4000-8000-000000000001",
-    restaurant_id: "a0000000-0000-4000-8000-000000000001",
-    name: "Chicken Biryani",
-    price: 220,
-    description: "Hyderabadi-style chicken biryani with saffron rice.",
-    dietary_tags: { NON_VEG: true },
-    customizations: [],
-    image_url: "https://picsum.photos/seed/chicken-biryani/400/300",
-    pos_item_id: null,
-    spice_level: 5,
-    is_available: true,
-  },
-  {
-    id: "b0000000-0000-4000-8000-000000000002",
-    restaurant_id: "a0000000-0000-4000-8000-000000000001",
-    name: "Veg Biryani",
-    price: 180,
-    description: "Seasonal vegetables slow-cooked with basmati rice.",
-    dietary_tags: { VEG: true, JAIN: true },
-    customizations: [],
-    image_url: "https://picsum.photos/seed/veg-biryani/400/300",
-    pos_item_id: null,
-    spice_level: 2,
-    is_available: true,
-  },
-  {
-    id: "b0000000-0000-4000-8000-000000000003",
-    restaurant_id: "a0000000-0000-4000-8000-000000000002",
-    name: "Paneer Wrap",
-    price: 160,
-    description: "Paneer tikka wrapped in a warm whole-wheat roti.",
-    dietary_tags: { VEG: true },
-    customizations: [],
-    image_url: "https://picsum.photos/seed/paneer-wrap/400/300",
-    pos_item_id: null,
-    spice_level: 1,
-    is_available: true,
-  },
-  {
-    id: "b0000000-0000-4000-8000-000000000004",
-    restaurant_id: "a0000000-0000-4000-8000-000000000002",
-    name: "Chicken Shawarma",
-    price: 190,
-    description: "Chicken shawarma with garlic sauce.",
-    dietary_tags: { NON_VEG: true },
-    customizations: [],
-    image_url: "https://picsum.photos/seed/chicken-shawarma/400/300",
-    pos_item_id: null,
-    spice_level: 3,
-    is_available: true,
-  },
-  {
-    id: "b0000000-0000-4000-8000-000000000005",
-    restaurant_id: "a0000000-0000-4000-8000-000000000002",
-    name: "Unavailable Dish",
-    price: 99,
-    description: null,
-    dietary_tags: { VEG: true },
-    customizations: [],
-    image_url: "https://picsum.photos/seed/unavailable-dish/400/300",
-    pos_item_id: null,
-    spice_level: 1,
-    is_available: false,
-  },
-];
+// Defined once in ../seed/catalogData (shared with the Postgres seed) so the
+// memory catalog and the Drizzle-backed catalog stay in sync.
 
 // Factory - storage-mode aware. In Postgres mode this returns the
 // Drizzle-backed repository; otherwise it falls back to the shared in-memory

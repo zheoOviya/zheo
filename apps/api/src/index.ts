@@ -62,6 +62,12 @@ async function main() {
   const { seedPhase4DemoData } = await import("./seed/phase4Demo");
   seedPhase4DemoData();
 
+  // Catalog seed data (dev/staging only): when Postgres is the active store,
+  // populate restaurants/menu_items (and their vendor-owner users) so the
+  // Drizzle-backed catalog is not empty. No-op in memory mode.
+  const { seedCatalogData } = await import("./seed/catalogSeed");
+  await seedCatalogData();
+
   // WebSocket upgrade handling on the same HTTP server (EOS Layer 1, P05)
   initWebSocketServer(server);
 
