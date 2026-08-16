@@ -78,6 +78,13 @@
       "when": 1792560002000,
       "tag": "0010_menu_spice_level",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792560003000,
+      "tag": "0011_schema_sync",
+      "breakpoints": true
     }
   ]
 }

@@ -193,18 +193,26 @@ export class DrizzleIdentityRepository implements IdentityRepository {
   }
 
   _seed(user: IdentityUser): void {
-    this.db.insert(users).values({
-      id: user.id,
-      phone: user.phone,
-      email: user.email ?? null,
-      role: user.role,
-      spice_tolerance: user.spice_tolerance ?? 3,
-      is_suspended: user.is_suspended ?? false,
-      totp_secret: user.totp_secret ?? null,
-      totp_enabled: user.totp_enabled ?? false,
-    }).catch((err) => {
-      logger.warn({ message: "identity_seed_failed", error: err instanceof Error ? err.message : String(err) });
-    });
+    this.getById(user.id)
+      .then((existing) => {
+        if (existing) return;
+        return this.db.insert(users).values({
+          id: user.id,
+          phone: user.phone,
+          email: user.email ?? null,
+          role: user.role,
+          spice_tolerance: user.spice_tolerance ?? 3,
+          is_suspended: user.is_suspended ?? false,
+          totp_secret: user.totp_secret ?? null,
+          totp_enabled: user.totp_enabled ?? false,
+        });
+      })
+      .catch((err) => {
+        logger.warn({
+          message: "identity_seed_failed",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
   }
 
   _reset(): void {}
