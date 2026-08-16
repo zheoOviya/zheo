@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import toast from "react-hot-toast";
 import AuthGate from "@/components/AuthGate";
+import { AppHeader } from "@/components/AppHeader";
 import { useAuthStore, useCartStore } from "@/lib/store";
 import { fetchOrderById, fetchOrderHistory, reorderOrder, type OrderHistoryEntry } from "@/lib/api";
 import { formatINR } from "@/lib/pricing";
@@ -208,6 +209,7 @@ function OrderHistoryContent() {
 
     return (
       <article
+        key={order.id}
         className={`rounded-2xl bg-white p-4 shadow-sm sm:flex-row sm:items-center dark:bg-neutral-900 ${
           active ? "ring-1 ring-primary-500/20" : ""
         }`}
@@ -251,6 +253,7 @@ function OrderHistoryContent() {
 
   return (
     <main className="py-6 pb-28">
+      <AppHeader />
       <header className="mb-6">
         <div className="section-head">
           <div>

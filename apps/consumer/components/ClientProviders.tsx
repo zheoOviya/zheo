@@ -12,7 +12,7 @@ import { PwaProvider } from "@/components/PwaProvider";
 import { FeatureFlagProvider } from "@/components/FeatureFlagProvider";
 import { OnboardingGate } from "@/components/OnboardingGate";
 
-const FULL_SCREEN_PAGES = ["/login", "/onboarding"];
+const FULL_SCREEN_PAGES = ["/login", "/signup", "/onboarding"];
 
 const navItems: BottomNavItem[] = [
   {

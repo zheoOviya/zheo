@@ -16,6 +16,7 @@ export interface AuthUser {
   id: string;
   phone: string;
   role: string;
+  is_suspended?: boolean;
 }
 
 interface AuthState {
@@ -37,13 +38,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isAuthenticated: false,
 
   sendOtp: async (phone: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/auth/send-otp`, {
+    // Sign-up is implicit: a new phone is auto-created as a CONSUMER by the
+    // backend on the first send-otp, so there is no separate sign-up call.
+    const res = await fetch(`${API_BASE}/api/v1/auth/consumer/send-otp`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ phone }),
       credentials: "include",
     });
     const body = await res.json();
+
     if (!body.success) {
       throw new Error(body.error?.message ?? "Failed to send OTP");
     }
@@ -56,7 +60,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   login: async (phone: string, otp: string) => {
     const deviceFingerprint = getDeviceFingerprint();
-    const res = await fetch(`${API_BASE}/api/v1/auth/verify-otp`, {
+    const res = await fetch(`${API_BASE}/api/v1/auth/consumer/verify-otp`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

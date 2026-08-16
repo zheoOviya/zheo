@@ -33,9 +33,23 @@ vi.mock("@/components/AuthGate", () => ({
 }));
 
 vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: React.ReactNode }) => (
-    <a href={typeof href === "string" ? href : "#"}>{children}</a>
+  default: ({
+    href,
+    children,
+    ...rest
+  }: {
+    href: string;
+    children: React.ReactNode;
+    "aria-label"?: string;
+  }) => (
+    <a href={typeof href === "string" ? href : "#"} {...rest}>
+      {children}
+    </a>
   ),
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
 }));
 
 const ORDER: OrderHistoryEntry = {
@@ -119,6 +133,26 @@ describe("Order History page (I-03)", () => {
     expect(screen.getByText("₹450.00")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reorder" })).toBeInTheDocument();
     expect(mocks.fetchOrderHistory).toHaveBeenCalledWith("test-token", undefined, 10);
+  });
+
+  it("renders the global header and account menu", async () => {
+    mocks.fetchOrderHistory.mockResolvedValue({ orders: [], next_cursor: null });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("No orders yet")).toBeInTheDocument());
+    expect(screen.getByRole("link", { name: "SnakZap home" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Account menu" })).toBeInTheDocument();
+  });
+
+  it("shows the suspension banner for a suspended account", async () => {
+    useAuthStore.setState({
+      user: { id: "u1", phone: "+919000000000", role: "CONSUMER", is_suspended: true },
+    });
+    mocks.fetchOrderHistory.mockResolvedValue({ orders: [], next_cursor: null });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(screen.getByText(/suspended/)).toBeInTheDocument();
   });
 
   it("shows an empty state when there are no orders", async () => {

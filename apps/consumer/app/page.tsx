@@ -4,30 +4,8 @@ import { RestaurantGrid } from "@/components/RestaurantGrid";
 import { DiscoveryControls } from "@/components/DiscoveryControls";
 import { PersonalizedFeed } from "@/components/PersonalizedFeed";
 import { TrendingCarousel } from "@/components/TrendingCarousel";
-
-function BrandMark() {
-  return (
-    <Link href="/" className="flex items-center gap-2.5" aria-label="SnakZap home">
-      <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary-400 to-primary-700 text-white shadow-md shadow-primary-700/20">
-        <svg
-          className="h-5 w-5"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M3 3l8.5 8.5M12 8.5V21m0-12.5L20.5 3m-8.5 6.5a6.5 6.5 0 100-3M9 21h6"
-          />
-        </svg>
-      </span>
-      <span className="brand-wordmark">SnakZap</span>
-    </Link>
-  );
-}
+import { AccountEntry } from "@/components/AccountEntry";
+import { BrandMark } from "@/components/AppHeader";
 
 export default async function HomePage() {
   let restaurants: Awaited<ReturnType<typeof fetchRestaurants>> = [];
@@ -72,13 +50,7 @@ export default async function HomePage() {
             </svg>
             Gachibowli
           </span>
-          <Link
-            href="/profile"
-            aria-label="Your profile"
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-sm font-bold text-white shadow-md shadow-primary-700/20 transition-transform hover:scale-105 active:scale-95"
-          >
-            U
-          </Link>
+          <AccountEntry />
         </div>
       </header>
 
