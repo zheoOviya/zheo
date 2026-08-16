@@ -1,6 +1,6 @@
 import { AppError } from "./envelope";
 import { getCatalogRepository } from "../routes/catalog";
-import { sharedChainRepo } from "../repositories/shared";
+import { sharedChainRepo, sharedUserRoleRepo } from "../repositories/shared";
 
 // ============================================
 // Vendor Restaurant Ownership Guard (H2)
@@ -8,6 +8,8 @@ import { sharedChainRepo } from "../repositories/shared";
 // orders / menu / settlements for restaurants
 // they do not own.
 //   - ADMIN / SUPER_ADMIN bypass (platform scope)
+//   - scoped user_roles membership (restaurant or
+//     chain scope) — the multi-outlet source of truth
 //   - owner_id match on the catalog restaurant
 //   - chain outlet: restaurant attached to a
 //     chain owned by the caller also passes
@@ -34,6 +36,12 @@ export async function assertRestaurantAccess(
   if (restaurant.owner_id === userId) return;
 
   const chainId = await sharedChainRepo.getOutletChainId(restaurantId);
+
+  // Scoped membership is the source of truth for multi-owner/staff access.
+  if (await sharedUserRoleRepo.isMember(userId, "restaurant", restaurantId)) return;
+  if (chainId && (await sharedUserRoleRepo.isMember(userId, "chain", chainId))) return;
+
+  // Legacy back-compat: chain owner still passes while membership rolls out.
   if (chainId) {
     const chain = await sharedChainRepo.getById(chainId);
     if (chain?.owner_id === userId) return;
