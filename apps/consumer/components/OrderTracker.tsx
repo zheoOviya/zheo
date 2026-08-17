@@ -1,5 +1,6 @@
 "use client";
 
+import { CheckIcon } from "@heroicons/react/24/outline";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useFeatureFlags } from "@/components/FeatureFlagProvider";
 
@@ -47,15 +48,7 @@ export function OrderTracker({ orderId, initialStatus }: OrderTrackerProps) {
                   } ${isCurrent ? "ring-4 ring-primary-500/30" : ""}`}
                 >
                   {isDone && !isCurrent ? (
-                    <svg
-                      className="h-4 w-4"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
+                    <CheckIcon className="h-4 w-4" />
                   ) : (
                     idx + 1
                   )}
