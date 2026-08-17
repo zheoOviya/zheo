@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { XMarkIcon, ShoppingBagIcon } from "@heroicons/react/24/outline";
 import { useRouter } from "next/navigation";
-import Image from "next/image";
+import { BrandImage } from "@/components/BrandImage";
 import { useAuthStore, useCartStore } from "@/lib/store";
 import { createGroupCart } from "@/lib/api";
 import { computePriceBreakdown, formatINR, itemUnitPrice } from "@/lib/pricing";
@@ -191,7 +192,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
       <div
         aria-hidden="true"
         className={[
-          "absolute inset-0 bg-black/40 transition-opacity duration-250",
+          "absolute inset-0 bg-black/40 transition-opacity duration-250 ease-brand",
           animating ? "opacity-100" : "opacity-0",
         ].join(" ")}
         onClick={onClose}
@@ -204,7 +205,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
         onClick={(e) => e.stopPropagation()}
         className={[
           "flex max-h-[85vh] w-full max-w-md flex-col overflow-auto rounded-t-3xl bg-white shadow-elevation-3 dark:bg-neutral-900",
-          "transition-transform duration-250 ease-out",
+          "transition-transform duration-250 ease-brand",
           animating ? "translate-y-0" : "translate-y-full",
         ].join(" ")}
       >
@@ -233,18 +234,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
               aria-label="Close cart"
               className="flex min-h-11 min-w-11 items-center justify-center rounded-full bg-neutral-100 text-neutral-500 transition-colors hover:bg-neutral-200 hover:text-neutral-700 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700"
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
+              <XMarkIcon className="h-5 w-5" />
             </button>
           </div>
         </div>
@@ -252,20 +242,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
         {items.length === 0 ? (
           <EmptyState
             icon={
-              <svg
-                aria-hidden="true"
-                className="h-10 w-10 text-primary-500"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth="1.5"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M15.75 10.5V6a3.75 3.75 0 10-7.5 0v4.5m11.356-1.993l1.263 12c.07.665-.45 1.243-1.119 1.243H4.25a1.125 1.125 0 01-1.12-1.243l1.264-12A1.125 1.125 0 015.513 7.5h12.974c.576 0 1.059.435 1.119 1.007zM8.625 10.5a.375.375 0 11-.75 0 .375.375 0 01.75 0zm7.5 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"
-                />
-              </svg>
+              <ShoppingBagIcon className="h-10 w-10 text-primary-500" />
             }
             title="Your cart is empty"
             description="Add items from a restaurant to get started."
@@ -287,14 +264,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
             {items.map((item) => (
               <div key={item.menuItemId} className="surface-card flex items-center gap-3 p-3">
                 <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-primary-100 dark:bg-primary-900/30">
-                  <Image
-                    src={`https://picsum.photos/seed/${item.menuItemId}/140/140`}
-                    alt=""
-                    fill
-                    sizes="56px"
-                    loading="lazy"
-                    className="object-cover"
-                  />
+                  <BrandImage alt="" sizes="56px" className="object-cover" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-bold text-neutral-800 dark:text-neutral-100">
