@@ -1,8 +1,9 @@
 import Link from "next/link";
-import Image from "next/image";
 import type { Metadata } from "next";
+import { ChevronLeftIcon, ClockIcon, UserIcon } from "@heroicons/react/24/outline";
 import { fetchRestaurants, fetchRestaurantMenu } from "@/lib/api";
 import { MenuItemsList } from "@/components/MenuItemsList";
+import { BrandImage } from "@/components/BrandImage";
 
 // RSC menu page: server-fetches the restaurant + menu, renders the
 // interactive add-to-cart island below (RSC-first, client island pattern).
@@ -66,10 +67,9 @@ export default async function RestaurantMenuPage({ params }: { params: Promise<{
     <main className="pb-28 pt-0">
       <header className="relative mb-6">
         <div className="relative h-44 w-full overflow-hidden rounded-b-3xl bg-primary-100 dark:bg-primary-900/30">
-          <Image
-            src={`https://picsum.photos/seed/${restaurant.id}/800/300`}
+          <BrandImage
+            src={restaurant.cover_image}
             alt=""
-            fill
             sizes="100vw"
             priority
             className="object-cover"
@@ -83,16 +83,7 @@ export default async function RestaurantMenuPage({ params }: { params: Promise<{
             aria-label="Back to home"
             className="absolute left-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur transition-colors hover:bg-black/60"
           >
-            <svg
-              className="h-5 w-5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-              aria-hidden="true"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-            </svg>
+            <ChevronLeftIcon className="h-5 w-5" />
           </Link>
         </div>
         <div className="px-1">
@@ -112,37 +103,11 @@ export default async function RestaurantMenuPage({ params }: { params: Promise<{
               {tag.label}
             </span>
             <span className="inline-flex items-center gap-1 rounded-full bg-primary-500/10 px-2.5 py-0.5 text-xs font-semibold text-primary-700 dark:text-primary-300">
-              <svg
-                className="h-3.5 w-3.5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-                aria-hidden="true"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
+              <ClockIcon className="h-3.5 w-3.5" />
               ~{restaurant.pickup_eta_min} min pickup
             </span>
             <span className="inline-flex items-center gap-1 rounded-full bg-neutral-500/10 px-2.5 py-0.5 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
-              <svg
-                className="h-3.5 w-3.5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-                aria-hidden="true"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"
-                />
-              </svg>
+              <UserIcon className="h-3.5 w-3.5" />
               Pickup only
             </span>
           </div>
