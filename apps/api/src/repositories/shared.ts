@@ -166,18 +166,62 @@ function getRepos(): RepoSet {
   return _repos;
 }
 
-export const sharedOrderRepo = getRepos().sharedOrderRepo;
-export const sharedPaymentRepo = getRepos().sharedPaymentRepo;
-export const sharedAuditRepo = getRepos().sharedAuditRepo;
-export const sharedIdentityRepo = getRepos().sharedIdentityRepo;
-export const sharedPosOrderRepo = getRepos().sharedPosOrderRepo;
-export const sharedPromotionRepo = getRepos().sharedPromotionRepo;
-export const sharedLoyaltyRepo = getRepos().sharedLoyaltyRepo;
-export const sharedGroupCartRepo = getRepos().sharedGroupCartRepo;
-export const sharedChainRepo = getRepos().sharedChainRepo;
-export const sharedSupportRepo = getRepos().sharedSupportRepo;
-export const sharedKillSwitchRepo = getRepos().sharedKillSwitchRepo;
-export const sharedRoleRepo = getRepos().sharedRoleRepo;
-export const sharedVendorApplicationRepo = getRepos().sharedVendorApplicationRepo;
-export const sharedNotificationRepo = getRepos().sharedNotificationRepo;
-export const sharedUserRoleRepo = getRepos().sharedUserRoleRepo;
+// ============================================
+// Lazy repository accessors.
+//
+// These used to be eager top-level constants (e.g.
+// `export const sharedOrderRepo = getRepos().sharedOrderRepo`). That forced
+// getRepos() to run at module-load time, before index.ts could probe
+// PostgreSQL and set USE_MEMORY_REPOS. As a result the in-memory fallback
+// never engaged when Postgres was unreachable (e.g. a preview environment
+// without a database), and the API kept routing every query through the
+// Drizzle repositories and failing with a 500.
+//
+// The proxies below defer getRepos() to the first property access, so the
+// storage-mode decision is locked in lazily after the runtime probe has
+// completed. The public API (`sharedOrderRepo.find...`, `_reset()`, `_seed()`)
+// is unchanged.
+// ============================================
+
+function createLazyRepo<K extends keyof RepoSet>(key: K): RepoSet[K] {
+  const handler: ProxyHandler<RepoSet[K]> = {
+    get(_target, prop) {
+      const repo = getRepos()[key] as unknown as Record<PropertyKey, unknown>;
+      const value = Reflect.get(repo, prop, repo);
+      return typeof value === "function" ? value.bind(repo) : value;
+    },
+    set(_target, prop, value) {
+      const repo = getRepos()[key] as unknown as Record<PropertyKey, unknown>;
+      return Reflect.set(repo, prop, value, repo);
+    },
+    has(_target, prop) {
+      const repo = getRepos()[key] as unknown as Record<PropertyKey, unknown>;
+      return Reflect.has(repo, prop);
+    },
+    ownKeys(_target) {
+      const repo = getRepos()[key] as unknown as Record<PropertyKey, unknown>;
+      return Reflect.ownKeys(repo);
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      const repo = getRepos()[key] as unknown as Record<PropertyKey, unknown>;
+      return Reflect.getOwnPropertyDescriptor(repo, prop);
+    },
+  };
+  return new Proxy({} as RepoSet[K], handler);
+}
+
+export const sharedOrderRepo = createLazyRepo("sharedOrderRepo");
+export const sharedPaymentRepo = createLazyRepo("sharedPaymentRepo");
+export const sharedAuditRepo = createLazyRepo("sharedAuditRepo");
+export const sharedIdentityRepo = createLazyRepo("sharedIdentityRepo");
+export const sharedPosOrderRepo = createLazyRepo("sharedPosOrderRepo");
+export const sharedPromotionRepo = createLazyRepo("sharedPromotionRepo");
+export const sharedLoyaltyRepo = createLazyRepo("sharedLoyaltyRepo");
+export const sharedGroupCartRepo = createLazyRepo("sharedGroupCartRepo");
+export const sharedChainRepo = createLazyRepo("sharedChainRepo");
+export const sharedSupportRepo = createLazyRepo("sharedSupportRepo");
+export const sharedKillSwitchRepo = createLazyRepo("sharedKillSwitchRepo");
+export const sharedRoleRepo = createLazyRepo("sharedRoleRepo");
+export const sharedVendorApplicationRepo = createLazyRepo("sharedVendorApplicationRepo");
+export const sharedNotificationRepo = createLazyRepo("sharedNotificationRepo");
+export const sharedUserRoleRepo = createLazyRepo("sharedUserRoleRepo");
