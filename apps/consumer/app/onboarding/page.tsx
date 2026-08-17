@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { UserIcon, BellIcon, CurrencyRupeeIcon } from "@heroicons/react/24/outline";
 import { useRouter } from "next/navigation";
 import { hasCompletedOnboarding, markOnboardingComplete } from "@/lib/onboarding";
 
@@ -44,57 +45,12 @@ const SLIDES: Slide[] = [
 
 function SlideIcon({ icon }: { icon: Slide["icon"] }) {
   if (icon === "ahead") {
-    return (
-      <svg
-        className="h-16 w-16 text-primary-600"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        aria-hidden="true"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z"
-        />
-      </svg>
-    );
+    return <UserIcon className="h-16 w-16 text-primary-600" />;
   }
   if (icon === "alerts") {
-    return (
-      <svg
-        className="h-16 w-16 text-primary-600"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        aria-hidden="true"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0"
-        />
-      </svg>
-    );
+    return <BellIcon className="h-16 w-16 text-primary-600" />;
   }
-  return (
-    <svg
-      className="h-16 w-16 text-primary-600"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      aria-hidden="true"
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
-      />
-    </svg>
-  );
+  return <CurrencyRupeeIcon className="h-16 w-16 text-primary-600" />;
 }
 
 export default function OnboardingPage() {

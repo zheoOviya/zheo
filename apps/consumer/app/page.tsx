@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { MapPinIcon, ChevronDoubleDownIcon } from "@heroicons/react/24/outline";
 import { fetchRestaurants } from "@/lib/api";
 import { RestaurantGrid } from "@/components/RestaurantGrid";
 import { DiscoveryControls } from "@/components/DiscoveryControls";
@@ -29,25 +30,7 @@ export default async function HomePage() {
         <BrandMark />
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-primary-500/10 px-3.5 py-2 text-sm font-semibold text-primary-700 ring-1 ring-primary-500/20 dark:bg-primary-400/15 dark:text-primary-300 dark:ring-primary-400/25">
-            <svg
-              className="h-3.5 w-3.5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-              aria-hidden="true"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"
-              />
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"
-              />
-            </svg>
+            <MapPinIcon className="h-3.5 w-3.5" />
             Gachibowli
           </span>
           <AccountEntry />
@@ -78,20 +61,7 @@ export default async function HomePage() {
           <div className="mt-5 flex flex-wrap gap-2.5">
             <a href="#restaurants" className="hero-cta-primary">
               Browse restaurants
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2.5}
-                aria-hidden="true"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M19 14l-7 7-7-7m14-8l-7 7-7-7"
-                />
-              </svg>
+              <ChevronDoubleDownIcon className="h-4 w-4" />
             </a>
             <Link href="/orders" className="hero-cta-secondary">
               Track an order

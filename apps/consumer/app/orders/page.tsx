@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { ChevronLeftIcon } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import AuthGate from "@/components/AuthGate";
 import { AppHeader } from "@/components/AppHeader";
@@ -264,16 +265,7 @@ function OrderHistoryContent() {
             href="/"
             className="inline-flex min-h-9 items-center gap-1 rounded-full bg-white px-3.5 text-xs font-semibold text-neutral-600 shadow-elevation-1 ring-1 ring-neutral-900/5 transition-colors hover:bg-surface-light dark:bg-neutral-900 dark:text-neutral-300 dark:ring-white/10"
           >
-            <svg
-              className="h-3.5 w-3.5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2.5}
-              aria-hidden="true"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-            </svg>
+            <ChevronLeftIcon className="h-3.5 w-3.5" />
             Home
           </Link>
         </div>
