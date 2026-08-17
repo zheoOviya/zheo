@@ -77,20 +77,20 @@ export default function VendorLoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-neutral-950 px-6 py-12 text-center">
-      <div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/60 p-8">
-        <h1 className="text-lg font-bold text-primary-400">SnakZap Merchant</h1>
-        <p className="mt-2 text-sm text-neutral-400">
+    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-slate-50 px-6 py-12 text-center">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+        <h1 className="text-lg font-bold text-slate-900">SnakZap Merchant</h1>
+        <p className="mt-2 text-sm text-slate-500">
           {step === "phone"
             ? "Sign in with your phone number. New here? We will create your account automatically."
             : `Enter the 6-digit code sent to ${phone}.`}
         </p>
 
         {step === "phone" && (
-          <div className="mt-4 rounded-lg border border-primary-500/20 bg-primary-500/10 px-3 py-2.5 text-left text-xs text-primary-200">
+          <div className="mt-4 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2.5 text-left text-xs text-teal-700">
             <p className="font-semibold uppercase tracking-wide">Demo access</p>
-            <p className="mt-1 font-mono text-primary-300">+919876000001 — Vendor Owner</p>
-            <p className="mt-1 text-neutral-400">
+            <p className="mt-1 font-mono">+919876000001 — Vendor Owner</p>
+            <p className="mt-1 text-slate-500">
               Any 6-digit code works in this preview. The on-screen demo code
               appears on the next step.
             </p>
@@ -98,12 +98,12 @@ export default function VendorLoginPage() {
         )}
 
         {notice && (
-          <div className="mt-4 rounded-lg border border-primary-500/40 bg-primary-500/10 p-3 text-sm text-primary-300">
+          <div className="mt-4 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-700">
             {notice}
           </div>
         )}
         {error && (
-          <div className="mt-4 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600">
             {error}
           </div>
         )}
@@ -118,11 +118,11 @@ export default function VendorLoginPage() {
         >
           {step === "phone" ? (
             <label className="block text-left text-sm">
-              <span className="mb-1 block font-medium text-neutral-300">Phone number</span>
+              <span className="mb-1 block font-medium text-slate-700">Phone number</span>
               <input
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                className="w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-white outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder-slate-400 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
                 placeholder="+91XXXXXXXXXX"
                 inputMode="tel"
                 autoComplete="tel"
@@ -130,18 +130,18 @@ export default function VendorLoginPage() {
             </label>
           ) : (
             <label className="block text-left text-sm">
-              <span className="mb-1 block font-medium text-neutral-300">OTP code</span>
+              <span className="mb-1 block font-medium text-slate-700">OTP code</span>
               <input
                 value={otp}
                 onChange={(e) => setOtp(e.target.value)}
-                className="w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-white outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder-slate-400 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
                 placeholder="000000"
                 inputMode="numeric"
                 maxLength={6}
                 autoComplete="one-time-code"
               />
               {demoOtp && (
-                <span className="mt-1 block text-xs text-neutral-500">Demo code: {demoOtp}</span>
+                <span className="mt-1 block text-xs text-slate-500">Demo code: {demoOtp}</span>
               )}
             </label>
           )}
@@ -149,7 +149,7 @@ export default function VendorLoginPage() {
           <button
             type="submit"
             disabled={busy || (step === "phone" ? phone.trim().length < 10 : otp.length !== 6)}
-            className="inline-flex min-h-[44px] w-full items-center justify-center rounded-lg bg-primary px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-primary-hover disabled:opacity-50"
+            className="inline-flex min-h-[44px] w-full items-center justify-center rounded-lg bg-teal-600 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-teal-700 disabled:opacity-50"
           >
             {busy ? "Please wait..." : step === "phone" ? "Send OTP" : "Verify & sign in"}
           </button>
@@ -158,16 +158,16 @@ export default function VendorLoginPage() {
             <button
               type="button"
               onClick={() => setStep("phone")}
-              className="w-full text-sm font-semibold text-neutral-400 hover:text-neutral-200"
+              className="w-full text-sm font-semibold text-slate-500 hover:text-slate-700"
             >
               Change phone number
             </button>
           )}
         </form>
 
-        <p className="mt-6 text-xs text-neutral-500">
+        <p className="mt-6 text-xs text-slate-400">
           New to SnakZap?{" "}
-          <Link href="/apply" className="font-semibold text-primary-400 hover:underline">
+          <Link href="/apply" className="font-semibold text-teal-600 hover:underline">
             Apply to onboard your restaurant
           </Link>
         </p>
