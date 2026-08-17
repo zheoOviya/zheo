@@ -255,7 +255,7 @@ export function MenuItemsList({
       <CartDrawer open={cartOpen} onClose={() => setCartOpen(false)} />
 
       {count > 0 && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 px-4 pb-3">
+        <div className="pointer-events-none fixed inset-x-0 bottom-20 z-40 px-4">
           <button
             type="button"
             onClick={() => setCartOpen(true)}

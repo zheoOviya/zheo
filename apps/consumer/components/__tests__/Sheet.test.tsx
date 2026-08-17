@@ -101,6 +101,16 @@ describe("Sheet", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it("sits above the persistent bottom nav (z-[60])", async () => {
+    render(
+      <Sheet open={true} onClose={vi.fn()} title="Quick Add">
+        <p>Body</p>
+      </Sheet>,
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.parentElement?.className).toContain("z-[60]");
+  });
+
   it("moves focus into the sheet when opened", async () => {
     render(
       <Sheet open={true} onClose={vi.fn()} title="Quick Add">

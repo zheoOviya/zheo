@@ -101,7 +101,7 @@ export function Sheet({ open, onClose, children, title, className = "" }: SheetP
   if (!mounted) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center">
+    <div className="fixed inset-0 z-[60] flex items-end justify-center">
       <div
         className={[
           "absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity duration-250",

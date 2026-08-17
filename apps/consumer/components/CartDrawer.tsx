@@ -187,7 +187,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
   }));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-end justify-center" onClick={onClose}>
       <div
         aria-hidden="true"
         className={[
