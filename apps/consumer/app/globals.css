@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --font-inter: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", "Fira Code", monospace;
+}
+
 @layer base {
   *:focus-visible {
     @apply outline-2 outline-offset-2 outline-primary-500;
