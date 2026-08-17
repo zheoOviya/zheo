@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Container } from "@snakzap/ui";
 import type { HeatmapCell, HeatmapResult } from "../../lib/api";
 import { fetchHeatmap } from "../../lib/api";
 
@@ -94,15 +95,15 @@ export default function HeatmapPage() {
 
   if (!data) {
     return (
-      <main className="mx-auto max-w-5xl p-8">
+      <Container as="main" maxWidth="5xl" gutter={false} className="p-8">
         <div className="animate-skeleton-teal mb-6 h-10 w-64 rounded-lg bg-primary-200" />
         <div className="animate-skeleton-teal h-[540px] rounded-2xl bg-primary-200" />
-      </main>
+      </Container>
     );
   }
 
   return (
-    <main className="mx-auto max-w-5xl p-8">
+    <Container as="main" maxWidth="5xl" gutter={false} className="p-8">
       <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-sm font-medium text-primary-700">
@@ -184,6 +185,6 @@ export default function HeatmapPage() {
           </span>
         </footer>
       </section>
-    </main>
+    </Container>
   );
 }
