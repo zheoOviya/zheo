@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { fetchDashboardMetrics, type DashboardMetrics } from "../../../lib/api";
 import { getTotpStatus } from "../../../lib/totp";
+import { trendColors } from "../../../lib/colors";
 import Link from "next/link";
 
 const fmt = (n: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
@@ -76,8 +77,8 @@ export default function DashboardPage() {
     );
   }
 
-  const vendorChurnColor = metrics.vendor_churn_pct > 5 ? "#ef4444" : "#0D9488";
-  const webhookColor = metrics.webhook_failure_pct > 0.5 ? "#f59e0b" : "#0D9488";
+  const vendorChurnColor = metrics.vendor_churn_pct > 5 ? trendColors.danger : trendColors.primary;
+  const webhookColor = metrics.webhook_failure_pct > 0.5 ? trendColors.accent : trendColors.primary;
 
   const cards = [
     {
@@ -85,28 +86,28 @@ export default function DashboardPage() {
       value: fmt(metrics.daily_revenue),
       color: "text-primary-600 dark:text-primary-400",
       trend: TREND_WEEKLY,
-      trendColor: "#0D9488",
+      trendColor: trendColors.primary,
     },
     {
       label: "Active Orders",
       value: metrics.active_orders.toString(),
       color: "text-accent-600 dark:text-accent-400",
       trend: TREND_WEEKLY,
-      trendColor: "#f59e0b",
+      trendColor: trendColors.accent,
     },
     {
       label: "Orders Today",
       value: metrics.total_orders_today.toString(),
       color: "text-neutral-900 dark:text-neutral-100",
       trend: TREND_WEEKLY,
-      trendColor: "#6b7280",
+      trendColor: trendColors.neutral,
     },
     {
       label: "Avg Pickup Time",
       value: `${metrics.avg_pickup_time_min} min`,
       color: "text-neutral-700 dark:text-neutral-300",
       trend: TREND_DECREASING,
-      trendColor: "#22c55e",
+      trendColor: trendColors.success,
     },
   ];
 
@@ -181,7 +182,7 @@ export default function DashboardPage() {
             <p className="mt-1 text-2xl font-bold text-neutral-700 dark:text-neutral-300">
               {fmt(metrics.cac_amount)}
             </p>
-            <Sparkline values={TREND_DECREASING} color="#6b7280" />
+            <Sparkline values={TREND_DECREASING} color={trendColors.neutral} />
           </div>
         </div>
         <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
@@ -190,7 +191,7 @@ export default function DashboardPage() {
             <p className="mt-1 text-2xl font-bold text-primary-600 dark:text-primary-400">
               {fmt(metrics.ltv_amount)}
             </p>
-            <Sparkline values={TREND_WEEKLY} color="#0D9488" />
+            <Sparkline values={TREND_WEEKLY} color={trendColors.primary} />
           </div>
         </div>
         <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
@@ -199,7 +200,7 @@ export default function DashboardPage() {
             <p className={`mt-1 text-2xl font-bold ${metrics.cac_ltv_ratio > 1 ? "text-red-500" : "text-primary-500"}`}>
               {metrics.cac_ltv_ratio.toFixed(2)}
             </p>
-            <Sparkline values={[1.2, 0.9, 0.85, 1.0, 0.7, 0.6, metrics.cac_ltv_ratio] as number[]} color={metrics.cac_ltv_ratio > 1 ? "#ef4444" : "#0D9488"} />
+            <Sparkline values={[1.2, 0.9, 0.85, 1.0, 0.7, 0.6, metrics.cac_ltv_ratio] as number[]} color={metrics.cac_ltv_ratio > 1 ? trendColors.danger : trendColors.primary} />
           </div>
           <p className="mt-1 text-xs text-neutral-400">Healthy if &lt; 1.0</p>
         </div>
