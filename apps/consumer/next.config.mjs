@@ -10,7 +10,7 @@ function imageHosts() {
     .map((h) => h.trim())
     .filter(Boolean);
   if (configured.length > 0) return configured;
-  return ["picsum.photos"];
+  return [];
 }
 
 /** @type {import('next').NextConfig} */
