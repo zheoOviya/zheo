@@ -42,3 +42,6 @@ blob-report/
 # Temp
 tmp/
 temp/
+
+# QA artifacts
+qa/output/
