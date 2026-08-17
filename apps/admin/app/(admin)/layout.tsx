@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ArrowRightStartOnRectangleIcon, Bars3Icon } from "@heroicons/react/24/outline";
 import Sidebar from "../../components/Sidebar";
 import { getUserRole, logout } from "../../lib/auth";
 
@@ -47,9 +48,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             className="md:hidden rounded-lg p-2 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900"
             aria-label="Toggle sidebar"
           >
-            <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-            </svg>
+            <Bars3Icon className="h-6 w-6" />
           </button>
           <h1 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
             SnakZap Ops Console
@@ -64,9 +63,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-red-500 transition-colors"
               aria-label="Sign out"
             >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
-              </svg>
+              <ArrowRightStartOnRectangleIcon className="h-4 w-4" />
               <span className="hidden sm:inline">Sign Out</span>
             </button>
           </div>

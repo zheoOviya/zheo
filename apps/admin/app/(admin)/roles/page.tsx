@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { PlusIcon } from "@heroicons/react/24/outline";
 import {
   fetchRoles,
   fetchUsers,
@@ -194,9 +195,7 @@ export default function RolesPage() {
             onClick={() => setShowCreate(true)}
             className="flex items-center gap-2 rounded-lg bg-primary-500 hover:bg-primary-600 px-3 py-2 text-sm font-semibold text-white transition-colors"
           >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-            </svg>
+            <PlusIcon className="h-4 w-4" />
             Add Role
           </button>
         )}
