@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { InboxIcon } from "@heroicons/react/24/outline";
 import { ORDER_STATUS_META, paymentMeta } from "@/lib/status";
 import type { OrderStatus, PaymentMethod } from "@/lib/api";
 
@@ -162,7 +163,10 @@ export function EmptyPanel({
   cta?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center">
+    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-6 py-14 text-center">
+      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-teal-50 text-teal-500">
+        <InboxIcon className="h-6 w-6" aria-hidden="true" />
+      </div>
       <p className="text-sm font-semibold text-slate-700">{title}</p>
       {description && <p className="mt-1 max-w-sm text-sm text-slate-500">{description}</p>}
       {cta && <div className="mt-4">{cta}</div>}
@@ -191,7 +195,7 @@ export function PrimaryButton({
     <button
       type="button"
       {...props}
-      className={`inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+      className={`inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-teal-600/20 transition-colors hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
     >
       {children}
     </button>
@@ -207,7 +211,7 @@ export function SecondaryButton({
     <button
       type="button"
       {...props}
-      className={`inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+      className={`inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
     >
       {children}
     </button>
