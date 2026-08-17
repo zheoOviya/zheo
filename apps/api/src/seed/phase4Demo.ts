@@ -1,4 +1,5 @@
 import { sharedChainRepo, sharedIdentityRepo } from "../repositories/shared";
+import { SEED_OWNERS } from "./catalogData";
 
 // ============================================
 // Phase 4 demo seed (dev server only, never in tests)
@@ -51,6 +52,20 @@ export function seedPhase4DemoData(): void {
     totp_enabled: false,
     created_at: new Date().toISOString(),
   });
+
+  // Catalog vendor owners (Biryani House, Green Bowl, Closed Kitchen). Seeded
+  // into the identity repo so each owner can sign in with their phone and see
+  // their own restaurant in the vendor console (mirrors the Postgres users seed).
+  for (const owner of SEED_OWNERS) {
+    sharedIdentityRepo._seed({
+      id: owner.id,
+      phone: owner.phone,
+      role: owner.role,
+      is_suspended: false,
+      totp_enabled: false,
+      created_at: new Date().toISOString(),
+    });
+  }
 
   sharedChainRepo._seed(
     {
