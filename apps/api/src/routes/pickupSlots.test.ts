@@ -7,26 +7,32 @@ describe("Pickup Slots API", () => {
   const app = createApp();
   const REST_ID = "a0000000-0000-4000-8000-000000000001";
 
+  // Use a fixed future date (always non-today) so the "today" lead-time logic
+  // (next-hour start) can't produce an empty slot list late in the day. The
+  // endpoint intentionally returns no future slots for "today" after the last
+  // pickup window closes, which would make these assertions time-dependent.
+  const FUTURE_DATE = new Date(Date.now() + 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+
   it("GET /restaurants/:id/pickup-slots returns 15-minute slots", async () => {
-    const today = new Date().toISOString().slice(0, 10);
     const res = await request(app)
       .get(`/api/v1/restaurants/${REST_ID}/pickup-slots`)
-      .query({ date: today })
+      .query({ date: FUTURE_DATE })
       .expect(200);
 
     expect(ApiEnvelopeSchema.safeParse(res.body).success).toBe(true);
     expect(res.body.success).toBe(true);
     expect(res.body.data.restaurant_id).toBe(REST_ID);
-    expect(res.body.data.date).toBe(today);
+    expect(res.body.data.date).toBe(FUTURE_DATE);
     expect(Array.isArray(res.body.data.slots)).toBe(true);
     expect(res.body.data.slots.length).toBeGreaterThan(0);
   });
 
   it("each slot has correct shape", async () => {
-    const today = new Date().toISOString().slice(0, 10);
     const res = await request(app)
       .get(`/api/v1/restaurants/${REST_ID}/pickup-slots`)
-      .query({ date: today })
+      .query({ date: FUTURE_DATE })
       .expect(200);
 
     const slot = res.body.data.slots[0];
