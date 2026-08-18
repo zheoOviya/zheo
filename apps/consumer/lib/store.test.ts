@@ -246,4 +246,43 @@ describe("Auth store", () => {
     expect(useAuthStore.getState().accessToken).toBe("tok-1");
     expect(useAuthStore.getState().isAuthenticated).toBe(true);
   });
+
+  it("hydrates the current user (including suspension state) after refresh", async () => {
+    const fetchMock = vi.fn((url: unknown) => {
+      const u = String(url);
+      if (u.includes("/auth/refresh")) {
+        return Promise.resolve({
+          json: async () => ({ success: true, data: { access_token: "tok-1" } }),
+        });
+      }
+      if (u.includes("/auth/me")) {
+        return Promise.resolve({
+          json: async () => ({
+            success: true,
+            data: {
+              user: {
+                id: "u1",
+                phone: "9876500001",
+                role: "CONSUMER",
+                is_suspended: true,
+              },
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ json: async () => ({ success: false }) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ok = await useAuthStore.getState().refreshAccessToken();
+
+    expect(ok).toBe(true);
+    expect(useAuthStore.getState().accessToken).toBe("tok-1");
+    expect(useAuthStore.getState().user).toEqual({
+      id: "u1",
+      phone: "9876500001",
+      role: "CONSUMER",
+      is_suspended: true,
+    });
+  });
 });

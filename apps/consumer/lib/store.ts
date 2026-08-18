@@ -108,6 +108,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             return false;
           }
           set({ accessToken: body.data.access_token, isAuthenticated: true });
+          // The refresh response only carries the access token, so hydrate the
+          // current user (role + suspension state) from /auth/me. The suspended
+          // account banner depends on this after a hard reload.
+          try {
+            const meRes = await fetch(`${API_BASE}/api/v1/auth/me`, {
+              credentials: "include",
+            });
+            const meBody = await meRes.json();
+            if (meBody.success && meBody.data?.user) {
+              set({ user: meBody.data.user });
+            }
+          } catch {
+            // Best-effort: the access token is already valid.
+          }
           return true;
         } finally {
           refreshInFlight = null;
