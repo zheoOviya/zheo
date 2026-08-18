@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useCartStore, useAuthStore } from "./store";
 
 describe("Cart store", () => {
@@ -206,5 +206,44 @@ describe("Cart store", () => {
 
     expect(useCartStore.getState().items).toHaveLength(0);
     expect(useCartStore.getState().restaurantId).toBeNull();
+  });
+});
+
+describe("Auth store", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    useAuthStore.setState({
+      accessToken: null,
+      user: null,
+      isAuthenticated: false,
+    });
+  });
+
+  it("dedupes concurrent refresh calls into a single request", async () => {
+    let resolveFetch!: (r: { json: () => Promise<unknown> }) => void;
+    const pending = new Promise<{ json: () => Promise<unknown> }>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const fetchMock = vi.fn(() => pending);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const p1 = useAuthStore.getState().refreshAccessToken();
+    const p2 = useAuthStore.getState().refreshAccessToken();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    resolveFetch({
+      json: async () => ({
+        success: true,
+        data: { access_token: "tok-1" },
+      }),
+    });
+
+    const [r1, r2] = await Promise.all([p1, p2]);
+
+    expect(r1).toBe(true);
+    expect(r2).toBe(true);
+    expect(useAuthStore.getState().accessToken).toBe("tok-1");
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
   });
 });
