@@ -11,8 +11,10 @@ test.describe("vendor orders", () => {
       page.getByRole("heading", { name: "Orders" }),
     ).toBeVisible();
 
-    // Status filter chips are always rendered even with zero orders.
-    await expect(page.getByRole("button", { name: /All/ })).toBeVisible();
+    // Status filter chips are always rendered even with zero orders. There are
+    // two "All" chips (status + payment); scope to the exact payment-filter one
+    // so the locator stays unambiguous.
+    await expect(page.getByRole("button", { name: "All", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /Today/ })).toBeVisible();
   });
 });

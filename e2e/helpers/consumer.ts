@@ -8,6 +8,12 @@ export async function consumerLogin(
   page: Page,
   phone = "9876500001",
 ): Promise<void> {
+  // The first-run OnboardingGate redirects any visitor without the completion
+  // flag to /onboarding. Seed it before navigation so login lands on the home
+  // page (which carries the account menu) instead of the intro carousel.
+  await page.addInitScript(() => {
+    localStorage.setItem("snakzap_onboarded", "1");
+  });
   await page.goto("/login");
   await page.locator("#phone-input").fill(phone);
   await page.getByRole("button", { name: "Send OTP" }).click();
