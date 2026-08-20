@@ -34,6 +34,7 @@ function makeOrder(
     customizations: [],
     customization_total: 0,
     item_subtotal: totalAmount,
+    gift_id: null,
   };
   return {
     id,

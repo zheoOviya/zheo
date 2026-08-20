@@ -203,6 +203,7 @@ export class GroupOrderService {
         base_price: oi.base_price,
         quantity: oi.quantity,
         customizations: oi.customizations,
+        gift_id: null,
         customization_total:
           breakdown.items.find((b) => b.menu_item_id === oi.menu_item_id)
             ?.customization_total ?? 0,

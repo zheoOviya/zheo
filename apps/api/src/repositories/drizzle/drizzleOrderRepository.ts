@@ -55,6 +55,7 @@ function mapOrderItemRow(row: Record<string, unknown>): OrderItemDTO {
     customizations: (row.customizations as OrderItemDTO["customizations"]) ?? [],
     customization_total: Number(row.customization_total),
     item_subtotal: Number(row.item_subtotal),
+    gift_id: (row.gift_id as string | null) ?? null,
   };
 }
 
@@ -100,6 +101,7 @@ export class DrizzleOrderRepository implements OrderRepository {
         customizations: item.customizations,
         customization_total: String(item.customization_total),
         item_subtotal: String(item.item_subtotal),
+        gift_id: item.gift_id,
       });
       items.push({
         id: itemId,
@@ -110,6 +112,7 @@ export class DrizzleOrderRepository implements OrderRepository {
         customizations: item.customizations,
         customization_total: item.customization_total,
         item_subtotal: item.item_subtotal,
+        gift_id: item.gift_id,
       });
     }
 
@@ -298,6 +301,7 @@ export class DrizzleOrderRepository implements OrderRepository {
         customizations: item.customizations,
         customization_total: String(item.customization_total),
         item_subtotal: String(item.item_subtotal),
+        gift_id: item.gift_id,
       });
       newItems.push({ id: itemId, ...item });
     }
@@ -346,6 +350,7 @@ export class DrizzleOrderRepository implements OrderRepository {
         customizations: item.customizations,
         customization_total: String(item.customization_total),
         item_subtotal: String(item.item_subtotal),
+        gift_id: item.gift_id ?? null,
       }).catch((err) => {
         logger.warn({ message: "order_item_seed_failed", error: err instanceof Error ? err.message : String(err) });
       });

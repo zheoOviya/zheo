@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CatalogRepository } from "../repositories/catalogRepository";
+import type { GiftRepository } from "../repositories/giftRepository";
 import { createEventEnvelope, emit } from "../lib/eventBus";
 import { AppError } from "../middleware/envelope";
 import {
@@ -25,6 +26,7 @@ export interface PlaceOrderRequest {
     menu_item_id: string;
     quantity: number;
     customizations: CustomizationDelta[];
+    gift_id?: string;
   }[];
   scheduled_pickup_time?: string;
 }
@@ -33,6 +35,7 @@ export class OrderingService {
   constructor(
     private readonly orderRepo: OrderRepository,
     private readonly catalogRepo: CatalogRepository,
+    private readonly giftRepo?: GiftRepository,
   ) {}
 
   async placeOrder(request: PlaceOrderRequest): Promise<OrderDTO> {
@@ -81,12 +84,47 @@ export class OrderingService {
         );
       }
 
+      let basePrice = menuItem.price;
+      let customizations = item.customizations;
+      let giftId: string | null = null;
+
+      if (item.gift_id) {
+        if (!this.giftRepo) {
+          throw new AppError("GIFT_REPO_MISSING", "Gift repository is not configured", 500);
+        }
+        const gift = await this.giftRepo.getById(item.gift_id);
+        if (!gift) {
+          throw new AppError("GIFT_NOT_FOUND", "Gift not found", 404);
+        }
+        if (gift.status !== "CLAIMED" || gift.claimed_by !== request.user_id) {
+          throw new AppError(
+            "ITEM_GIFT_MISMATCH",
+            `Gift ${gift.id} is not claimed by this user`,
+            400,
+          );
+        }
+        if (gift.restaurant_id !== request.restaurant_id || gift.menu_item_id !== item.menu_item_id) {
+          throw new AppError(
+            "ITEM_GIFT_MISMATCH",
+            `Gift ${gift.id} does not match the requested item or restaurant`,
+            400,
+          );
+        }
+        if (Date.parse(gift.expires_at) <= Date.now()) {
+          throw new AppError("GIFT_EXPIRED", "This gift has expired", 400);
+        }
+        basePrice = 0;
+        customizations = gift.item_snapshot.customizations;
+        giftId = gift.id;
+      }
+
       orderItems.push({
         menu_item_id: item.menu_item_id,
         name: menuItem.name,
-        base_price: menuItem.price,
+        base_price: basePrice,
         quantity: item.quantity,
-        customizations: item.customizations,
+        customizations,
+        gift_id: giftId,
       });
     }
 
@@ -101,6 +139,7 @@ export class OrderingService {
         base_price: oi.base_price,
         quantity: oi.quantity,
         customizations: oi.customizations,
+        gift_id: oi.gift_id ?? null,
         customization_total:
           breakdown.items.find((b) => b.menu_item_id === oi.menu_item_id)
             ?.customization_total ?? 0,
@@ -133,6 +172,7 @@ export class OrderingService {
       menu_item_id: item.menu_item_id,
       quantity: item.quantity,
       customizations: item.customizations,
+      gift_id: undefined,
     }));
 
     return this.placeOrder({

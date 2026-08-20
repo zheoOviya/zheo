@@ -3,6 +3,7 @@ import { createEventEnvelope, emit } from "../lib/eventBus";
 import { publishStatusUpdate } from "../lib/websocket";
 import { AppError } from "../middleware/envelope";
 import type { OrderDTO, OrderRepository } from "../repositories/orderRepository";
+import type { GiftRepository } from "../repositories/giftRepository";
 import type { OrderStatus } from "@snakzap/types";
 
 // ============================================
@@ -36,7 +37,10 @@ const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
 };
 
 export class FulfillmentService {
-  constructor(private readonly orderRepo: OrderRepository) {}
+  constructor(
+    private readonly orderRepo: OrderRepository,
+    private readonly giftRepo?: GiftRepository,
+  ) {}
 
   /**
    * Vendor cancellation. Allowed only before the order becomes ready for
@@ -67,6 +71,13 @@ export class FulfillmentService {
       restaurant_id: order.restaurant_id,
       status: "CANCELLED",
     });
+
+    if (this.giftRepo) {
+      const giftLines = order.items.filter((i) => i.gift_id);
+      for (const line of giftLines) {
+        if (line.gift_id) await this.giftRepo.release(line.gift_id);
+      }
+    }
     return updated;
   }
 
@@ -222,6 +233,27 @@ export class FulfillmentService {
       }),
     );
 
+    await this.fulfillGifts(updated);
+
     return updated;
+  }
+
+  private async fulfillGifts(order: OrderDTO): Promise<void> {
+    if (!this.giftRepo) return;
+    const giftLines = order.items.filter((i) => i.gift_id);
+    for (const line of giftLines) {
+      const giftId = line.gift_id;
+      if (!giftId) continue;
+      const gift = await this.giftRepo.markFulfilled(giftId);
+      if (!gift) continue;
+      await emit(
+        createEventEnvelope("GiftFulfilled", giftId, {
+          gift_id: giftId,
+          sender_id: gift.sender_id,
+          restaurant_id: gift.restaurant_id,
+          order_id: order.id,
+        }),
+      );
+    }
   }
 }

@@ -9,6 +9,7 @@ import {
   sharedOrderRepo,
   sharedPaymentRepo,
   sharedIdentityRepo,
+  sharedGiftRepo,
 } from "../repositories/shared";
 import { FulfillmentService } from "../services/fulfillment";
 import { GeoFenceService } from "../services/geoFence";
@@ -33,7 +34,7 @@ const LocationUpdateSchema = z.object({
   lng: z.number().min(-180).max(180),
 });
 
-const fulfillmentService = new FulfillmentService(sharedOrderRepo);
+const fulfillmentService = new FulfillmentService(sharedOrderRepo, sharedGiftRepo);
 const geoFenceService = new GeoFenceService(sharedOrderRepo);
 
 function orderId(id: string | string[] | undefined): string {

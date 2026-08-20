@@ -226,6 +226,44 @@ export class LoyaltyService {
 
     return card;
   }
+
+  /**
+   * GiftFulfilled hook. The SENDER earns the stamp for a gifted pickup
+   * (recipient does not double-dip with their own paid items).
+   */
+  async onGiftFulfilled(event: {
+    gift_id: string;
+    sender_id: string;
+    restaurant_id: string;
+  }): Promise<StampCard | null> {
+    const before = await this.repo.getStampCard(event.sender_id, event.restaurant_id);
+    const { card, reward_unlocked } = await this.repo.incrementStamp(
+      event.sender_id,
+      event.restaurant_id,
+    );
+
+    await sharedAuditRepo.log(event.sender_id, "gift_stamp_incremented", {
+      gift_id: event.gift_id,
+      restaurant_id: event.restaurant_id,
+      stamp_count: card.stamp_count,
+      total_orders: card.total_orders,
+      reward_unlocked,
+    });
+
+    if (reward_unlocked) {
+      await emit(
+        createEventEnvelope("StampCardRewardUnlocked", event.sender_id, {
+          user_id: event.sender_id,
+          restaurant_id: event.restaurant_id,
+          reward_type: "FREE_ITEM",
+          stamp_count_before: before?.stamp_count ?? STAMP_CARD_SIZE,
+          rewards_earned: card.rewards_earned,
+        }),
+      );
+    }
+
+    return card;
+  }
 }
 
 // ============================================
@@ -250,5 +288,13 @@ export function registerLoyaltyEventHandlers(): void {
   onEvent("OrderPickedUp", async (event) => {
     const payload = event.payload as { order_id: string };
     await loyaltyService.onOrderPickedUp(payload.order_id);
+  });
+  onEvent("GiftFulfilled", async (event) => {
+    const payload = event.payload as {
+      gift_id: string;
+      sender_id: string;
+      restaurant_id: string;
+    };
+    await loyaltyService.onGiftFulfilled(payload);
   });
 }

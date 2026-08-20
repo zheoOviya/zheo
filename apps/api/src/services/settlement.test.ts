@@ -25,6 +25,7 @@ function item(overrides: Partial<OrderItemDTO>): OrderItemDTO {
     customizations: [],
     customization_total: 0,
     item_subtotal: 220,
+    gift_id: null,
     ...overrides,
   };
 }

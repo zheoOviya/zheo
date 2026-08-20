@@ -2,7 +2,7 @@ import { Router } from "express";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
 import { getCatalogRepository } from "./catalog";
-import { sharedOrderRepo } from "../repositories/shared";
+import { sharedOrderRepo, sharedGiftRepo } from "../repositories/shared";
 import { OrderingService } from "../services/ordering";
 import { createEventEnvelope, emit } from "../lib/eventBus";
 
@@ -26,6 +26,7 @@ const ACTIVE_WEAR_STATUSES = new Set([
 const orderingService = new OrderingService(
   sharedOrderRepo,
   getCatalogRepository(),
+  sharedGiftRepo,
 );
 
 export const wearRouter: Router = Router();

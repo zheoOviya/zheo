@@ -3,7 +3,7 @@ import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
 import { getCatalogRepository } from "./catalog";
-import { sharedOrderRepo } from "../repositories/shared";
+import { sharedOrderRepo, sharedGiftRepo } from "../repositories/shared";
 import { OrderingService } from "../services/ordering";
 
 // ============================================
@@ -21,6 +21,7 @@ const OrderItemSchema = z.object({
   menu_item_id: z.string().uuid(),
   quantity: z.number().int().min(1).max(50),
   customizations: z.array(CustomizationSchema).default([]),
+  gift_id: z.string().uuid().optional(),
 });
 
 const CreateOrderSchema = z.object({
@@ -36,7 +37,7 @@ const ReorderSchema = z.object({
   old_order_id: z.string().uuid(),
 });
 
-const orderingService = new OrderingService(sharedOrderRepo, getCatalogRepository());
+const orderingService = new OrderingService(sharedOrderRepo, getCatalogRepository(), sharedGiftRepo);
 
 export const ordersRouter: Router = Router();
 

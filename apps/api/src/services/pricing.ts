@@ -16,6 +16,7 @@ export interface OrderItemInput {
   base_price: number;
   quantity: number;
   customizations: CustomizationDelta[];
+  gift_id?: string | null;
 }
 
 export interface ItemBreakdown {

@@ -18,6 +18,8 @@ export interface OrderItemDTO {
   customizations: CustomizationDelta[];
   customization_total: number;
   item_subtotal: number;
+  /** Set when the line is a redeemed ₹0 gift. */
+  gift_id: string | null;
 }
 
 export interface OrderDTO {

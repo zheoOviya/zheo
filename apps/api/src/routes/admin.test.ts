@@ -1023,7 +1023,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
         user_id: USER_ID,
         restaurant_id: RESTAURANT_ID,
         restaurant_name: "Test Cafe",
-        items: [{ id: "od-item-000000000000001", menu_item_id: "m1", name: "Burger", base_price: 100, quantity: 2, customizations: [], customization_total: 0, item_subtotal: 200 }],
+        items: [{ id: "od-item-000000000000001", menu_item_id: "m1", name: "Burger", base_price: 100, quantity: 2, customizations: [], customization_total: 0, item_subtotal: 200, gift_id: null }],
         total_amount: 200,
         status: "CONFIRMED",
         commission_rate: 0.1,

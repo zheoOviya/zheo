@@ -138,6 +138,7 @@ export class CateringService {
           base_price: line.base_price,
           quantity: line.quantity,
           customizations: line.customizations,
+          gift_id: null,
           customization_total: b?.customization_total ?? 0,
           item_subtotal: b?.item_subtotal ?? 0,
         };
