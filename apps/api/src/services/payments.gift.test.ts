@@ -86,6 +86,40 @@ describe("PaymentService gift path", () => {
     expect((await giftRepo.getById(gift.id))?.status).toBe("PENDING");
   });
 
+  it("returns the captured payment over a stale PENDING row after a retry", async () => {
+    const gift = await giftRepo.create({
+      sender_id: "11111111-1111-4111-8111-111111111111",
+      restaurant_id: "22222222-2222-4222-8222-222222222222",
+      menu_item_id: "33333333-3333-4333-8333-333333333333",
+      item_snapshot: { name: "Samosa", price: 30, image_url: null, dietary_tags: {}, spice_level: 1, customizations: [] },
+      price_paid: 30,
+      message: null,
+      recipient_name: null,
+      claim_token: "tok-3",
+      claim_code: "ABC12347",
+      expires_at: new Date(Date.now() + 90 * 24 * 3600_000).toISOString(),
+    });
+
+    // First attempt is left unpaid (stale PENDING row), then a retry creates
+    // a second payment which is actually captured.
+    const stale = await service.createGiftPayment(gift.id);
+    const retry = await service.createGiftPayment(gift.id);
+    expect(retry.razorpay_order_id).not.toBe(stale.razorpay_order_id);
+
+    const webhook = razorpayService.buildMockWebhook(
+      retry.razorpay_order_id,
+      3000,
+      "payment.captured",
+    );
+    await service.processWebhook(webhook.rawBody, webhook.signature);
+
+    // Refund/cancel lookups must land on the captured row, not the stale one.
+    const payment = await paymentRepo.getByGiftId(gift.id);
+    expect(payment).not.toBeNull();
+    expect(payment?.razorpay_order_id).toBe(retry.razorpay_order_id);
+    expect(payment?.razorpay_payment_id).not.toBeNull();
+  });
+
   it("marks a gift REFUNDED on a refund webhook", async () => {
     const gift = await giftRepo.create({
       sender_id: "11111111-1111-4111-8111-111111111111",

@@ -18,6 +18,24 @@ describe("CartPersistenceService", () => {
     expect(loaded.expires_at).toBe("2026-02-02T10:00:00.000Z");
   });
 
+  it("round-trips gift_id and gift_token so a reload keeps the gift line", async () => {
+    const service = new CartPersistenceService(undefined, () => new Date("2026-02-01T10:00:00Z"));
+    await service.saveCart("u-1", [
+      {
+        menu_item_id: "b0000000-0000-4000-8000-000000000001",
+        quantity: 1,
+        gift_id: "11111111-1111-4111-8111-111111111111",
+        gift_token: "tok-gift-1",
+      },
+    ]);
+
+    const loaded = await service.loadCart("u-1");
+    expect(loaded.items[0]).toMatchObject({
+      gift_id: "11111111-1111-4111-8111-111111111111",
+      gift_token: "tok-gift-1",
+    });
+  });
+
   it("returns empty when nothing was saved", async () => {
     const service = new CartPersistenceService(undefined, () => new Date("2026-02-01T10:00:00Z"));
     expect(await service.loadCart("u-nobody")).toEqual({

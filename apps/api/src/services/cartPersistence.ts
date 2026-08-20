@@ -22,6 +22,8 @@ export interface CartItemInput {
   base_price?: number;
   customizations?: { name: string; price_delta: number }[];
   restaurant_id?: string;
+  gift_id?: string;
+  gift_token?: string;
 }
 
 export interface CartSnapshot {

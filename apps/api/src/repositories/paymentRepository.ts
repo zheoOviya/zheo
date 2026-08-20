@@ -94,10 +94,18 @@ export class MemoryPaymentRepository implements PaymentRepository {
   }
 
   async getByGiftId(giftId: string): Promise<PaymentDTO | null> {
-    for (const p of this.payments.values()) {
-      if (p.gift_id === giftId) return p;
-    }
-    return null;
+    // A gift may have multiple payment rows (retries). Prefer the most recent
+    // captured payment so refund lookups hit the row that actually carries a
+    // razorpay_payment_id instead of a stale PENDING one.
+    const matches = [...this.payments.values()].filter((p) => p.gift_id === giftId);
+    if (matches.length === 0) return null;
+    matches.sort((a, b) => {
+      const aCaptured = a.razorpay_payment_id ? 1 : 0;
+      const bCaptured = b.razorpay_payment_id ? 1 : 0;
+      if (aCaptured !== bCaptured) return bCaptured - aCaptured;
+      return b.created_at.localeCompare(a.created_at);
+    });
+    return matches[0] ?? null;
   }
 
   async getByOrderId(orderId: string): Promise<PaymentDTO | null> {

@@ -231,7 +231,11 @@ export const useCartStore = create<CartState>((set, get) => ({
     }
 
     const state = get();
-    const existing = state.items.find((i) => i.menuItemId === item.menuItemId);
+    const existing = state.items.find(
+      (i) =>
+        i.menuItemId === item.menuItemId &&
+        (i.giftId ?? null) === (item.giftId ?? null),
+    );
     if (existing) {
       set({
         items: state.items.map((i) =>

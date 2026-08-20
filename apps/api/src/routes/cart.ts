@@ -19,6 +19,8 @@ const CartItemSchema = z.object({
     .array(z.object({ name: z.string(), price_delta: z.number() }))
     .optional(),
   restaurant_id: z.string().uuid().optional(),
+  gift_id: z.string().uuid().optional(),
+  gift_token: z.string().optional(),
 });
 
 const SaveCartSchema = z.object({

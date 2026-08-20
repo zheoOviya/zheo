@@ -114,7 +114,13 @@ export class OrderingService {
           throw new AppError("GIFT_EXPIRED", "This gift has expired", 400);
         }
         basePrice = 0;
-        customizations = gift.item_snapshot.customizations;
+        // The sender already paid for the customizations in gift.price_paid;
+        // keep the names for display but zero the deltas so the recipient
+        // pays nothing.
+        customizations = gift.item_snapshot.customizations.map((c) => ({
+          name: c.name,
+          price_delta: 0,
+        }));
         giftId = gift.id;
       }
 
@@ -122,7 +128,8 @@ export class OrderingService {
         menu_item_id: item.menu_item_id,
         name: menuItem.name,
         base_price: basePrice,
-        quantity: item.quantity,
+        // A claimed gift redeems exactly one unit server-side.
+        quantity: item.gift_id ? 1 : item.quantity,
         customizations,
         gift_id: giftId,
       });

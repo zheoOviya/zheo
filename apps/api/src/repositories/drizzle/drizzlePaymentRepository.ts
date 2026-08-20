@@ -103,11 +103,22 @@ export class DrizzlePaymentRepository implements PaymentRepository {
   }
 
   async getByGiftId(giftId: string): Promise<PaymentDTO | null> {
+    // A gift may have multiple payment rows (retries). Prefer the most recent
+    // captured payment (one that carries a razorpay_payment_id) so refund
+    // lookups don't land on a stale PENDING row.
     const rows = (await this.db
       .select()
       .from(payments)
       .where(eq(payments.gift_id, giftId))) as Record<string, unknown>[];
-    return rows[0] ? mapPaymentRow(rows[0]) : null;
+    const sorted = rows
+      .map((r) => mapPaymentRow(r))
+      .sort((a, b) => {
+        const aCaptured = a.razorpay_payment_id ? 1 : 0;
+        const bCaptured = b.razorpay_payment_id ? 1 : 0;
+        if (aCaptured !== bCaptured) return bCaptured - aCaptured;
+        return b.created_at.localeCompare(a.created_at);
+      });
+    return sorted[0] ?? null;
   }
 
   async getByOrderId(orderId: string): Promise<PaymentDTO | null> {

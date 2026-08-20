@@ -34,6 +34,7 @@ async function seedClaimedGift(
   userId: string,
   menuItemId = MENU_ITEM_1,
   restaurantId = REST_ID,
+  customizations: { name: string; price_delta: number }[] = [],
 ): Promise<string> {
   const gift = await sharedGiftRepo.create({
     sender_id: "u00000000-0000-4000-8000-0000000000aa",
@@ -45,9 +46,9 @@ async function seedClaimedGift(
       image_url: null,
       dietary_tags: { NON_VEG: true },
       spice_level: 5,
-      customizations: [],
+      customizations,
     },
-    price_paid: 220,
+    price_paid: 220 + customizations.reduce((s, c) => s + c.price_delta, 0),
     message: null,
     recipient_name: null,
     claim_token: `tok-${Math.random().toString(36).slice(2)}`,
@@ -143,5 +144,62 @@ describe("POST /api/v1/orders with a gift line", () => {
       .expect(400);
 
     expect(res.body.error.code).toBe("ITEM_GIFT_MISMATCH");
+  });
+
+  it("charges the recipient nothing for gift customizations the sender already paid", async () => {
+    const giftId = await seedClaimedGift(TEST_USER_ID, MENU_ITEM_1, REST_ID, [
+      { name: "Extra Cheese", price_delta: 30 },
+    ]);
+
+    const res = await request(app)
+      .post("/api/v1/orders")
+      .set(authHeaders())
+      .send({
+        restaurant_id: REST_ID,
+        items: [
+          {
+            menu_item_id: MENU_ITEM_1,
+            quantity: 1,
+            customizations: [],
+            gift_id: giftId,
+          },
+        ],
+      })
+      .expect(201);
+
+    const order = res.body.data;
+    expect(order.items[0].base_price).toBe(0);
+    // Customization names are kept for display, but deltas are zeroed.
+    expect(order.items[0].customizations).toEqual([
+      { name: "Extra Cheese", price_delta: 0 },
+    ]);
+    expect(order.items[0].customization_total ?? 0).toBe(0);
+    // Free line: packaging + GST only.
+    expect(order.total_amount).toBe(11.8);
+  });
+
+  it("caps a gift line at quantity 1 server-side", async () => {
+    const giftId = await seedClaimedGift(TEST_USER_ID);
+
+    const res = await request(app)
+      .post("/api/v1/orders")
+      .set(authHeaders())
+      .send({
+        restaurant_id: REST_ID,
+        items: [
+          {
+            menu_item_id: MENU_ITEM_1,
+            quantity: 5,
+            customizations: [],
+            gift_id: giftId,
+          },
+        ],
+      })
+      .expect(201);
+
+    const order = res.body.data;
+    expect(order.items[0].quantity).toBe(1);
+    expect(order.items[0].base_price).toBe(0);
+    expect(order.total_amount).toBe(11.8);
   });
 });
