@@ -3,6 +3,8 @@ export { restaurants, menu_items } from "./src/schema/catalog";
 export { chains } from "./src/schema/chain";
 export { orderStatusEnum, orders, order_items } from "./src/schema/ordering";
 export { paymentStatusEnum, payments } from "./src/schema/payments";
+export { giftStatusEnum, gifts } from "./src/schema/gifts";
+export type { GiftItemSnapshot } from "./src/schema/gifts";
 export { order_status_history } from "./src/schema/fulfillment";
 export { killSwitches } from "./src/schema/killswitches";
 export { support_tickets } from "./src/schema/supporttickets";
