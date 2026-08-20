@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@heroicons/react": "^2.2.0",
     "@snakzap/config": "workspace:*",
     "@snakzap/types": "workspace:*"
   },

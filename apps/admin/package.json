@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@heroicons/react": "^2.2.0",
     "@snakzap/config": "workspace:*",
     "@snakzap/types": "workspace:*",
     "@snakzap/ui": "workspace:*",
@@ -30,6 +31,6 @@
     "jsdom": "^30.0.1",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0"
+    "vitest": "^3.2.6"
   }
 }

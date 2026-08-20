@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
+import { ChevronLeftIcon, CheckIcon } from "@heroicons/react/24/outline";
 import { useParams, useRouter } from "next/navigation";
 import AuthGate from "@/components/AuthGate";
 import StampCardProgress from "@/components/StampCardProgress";
@@ -193,16 +194,7 @@ function TrackingContent() {
           onClick={() => router.push("/")}
           className="mb-4 inline-flex items-center gap-1 text-sm font-semibold text-primary-600 transition-colors hover:text-primary-700 dark:text-primary-400"
         >
-          <svg
-            className="h-4 w-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2.5}
-            aria-hidden="true"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
+          <ChevronLeftIcon className="h-4 w-4" />
           Back
         </button>
         <p className="section-eyebrow">Live</p>
@@ -275,15 +267,7 @@ function TrackingContent() {
           <div className="surface-card p-6">
             {checkedIn ? (
               <div className="flex items-center gap-2 text-sm text-green-600">
-                <svg
-                  className="h-5 w-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
+                <CheckIcon className="h-5 w-5" />
                 You are checked in. Staff knows you are here.
               </div>
             ) : (
@@ -323,15 +307,7 @@ function TrackingContent() {
         {isPickedUp && (
           <div className="rounded-3xl bg-green-50 p-6 text-center ring-1 ring-green-600/20 dark:bg-green-900/20">
             <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-green-100 dark:bg-green-800">
-              <svg
-                className="h-7 w-7 text-green-600 dark:text-green-300"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
+              <CheckIcon className="h-7 w-7 text-green-600 dark:text-green-300" />
             </div>
             <p className="text-lg font-semibold text-green-700 dark:text-green-300">
               Order Picked Up!

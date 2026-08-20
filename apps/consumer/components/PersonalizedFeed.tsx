@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { m } from "framer-motion";
 import { Badge } from "@snakzap/ui";
+import { BrandImage } from "@/components/BrandImage";
 import { fetchPersonalizedHomepage, type PersonalizedHomepage } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 
@@ -70,15 +70,10 @@ export function PersonalizedFeed() {
                 className="group block overflow-hidden rounded-2xl bg-white shadow-elevation-1 ring-1 ring-neutral-900/5 transition-all duration-200 hover:-translate-y-1 hover:shadow-elevation-3 dark:bg-neutral-900 dark:ring-white/5"
               >
                 <div className="relative h-24 w-full overflow-hidden bg-primary-100 dark:bg-primary-900/30">
-                  <Image
-                    src={
-                      pick.restaurant.cover_image ??
-                      `https://picsum.photos/seed/${pick.restaurant.id}/400/200`
-                    }
+                  <BrandImage
+                    src={pick.restaurant.cover_image}
                     alt=""
-                    fill
                     sizes="(max-width: 640px) 50vw, 25vw"
-                    loading="lazy"
                     className="img-zoom object-cover"
                   />
                   <div
@@ -119,15 +114,10 @@ export function PersonalizedFeed() {
                 className="group block overflow-hidden rounded-2xl border-2 border-amber-400/60 bg-gradient-to-br from-amber-50 to-white shadow-elevation-1 transition-all duration-200 hover:-translate-y-1 hover:shadow-elevation-3 dark:from-amber-500/10 dark:to-neutral-900"
               >
                 <div className="relative h-24 w-full overflow-hidden bg-amber-100 dark:bg-amber-900/20">
-                  <Image
-                    src={
-                      feed.surprise_restaurant.restaurant.cover_image ??
-                      `https://picsum.photos/seed/${feed.surprise_restaurant.restaurant.id}/400/200`
-                    }
+                  <BrandImage
+                    src={feed.surprise_restaurant.restaurant.cover_image}
                     alt=""
-                    fill
                     sizes="(max-width: 640px) 50vw, 25vw"
-                    loading="lazy"
                     className="img-zoom object-cover"
                   />
                   <div

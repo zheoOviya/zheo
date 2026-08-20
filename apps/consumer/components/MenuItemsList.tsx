@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import Image from "next/image";
+import { CheckIcon, ChevronRightIcon } from "@heroicons/react/24/outline";
 import toast, { type Toast } from "react-hot-toast";
 import type { MenuItem } from "@/lib/api";
+import { BrandImage } from "@/components/BrandImage";
 import {
   useCartStore,
   type CartCustomization,
@@ -146,12 +147,10 @@ export function MenuItemsList({
           return (
             <div key={item.id} className="surface-card flex items-center gap-3.5 p-3.5">
               <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-primary-100 dark:bg-primary-900/30">
-                <Image
-                  src={item.image_url ?? `https://picsum.photos/seed/${item.id}/160/160`}
+                <BrandImage
+                  src={item.image_url}
                   alt=""
-                  fill
                   sizes="64px"
-                  loading="lazy"
                   className="object-cover"
                 />
                 {tags[0] && (
@@ -190,20 +189,11 @@ export function MenuItemsList({
                 onClick={() => setPickerItem(item)}
                 aria-label={isJustAdded ? `Added ${item.name}` : `Add ${item.name}`}
                 className={`shrink-0 rounded-full px-4 py-2 text-xs font-bold text-white transition-transform active:scale-95 ${
-                  isJustAdded ? "bg-green-500" : "bg-primary-500 hover:bg-primary-hover"
+                  isJustAdded ? "animate-pop bg-green-500" : "bg-primary-500 hover:bg-primary-hover"
                 }`}
               >
                 {isJustAdded ? (
-                  <svg
-                    className="mx-auto h-4 w-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    aria-hidden="true"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
+                  <CheckIcon className="mx-auto h-4 w-4" />
                 ) : (
                   "Add +"
                 )}
@@ -255,7 +245,7 @@ export function MenuItemsList({
       <CartDrawer open={cartOpen} onClose={() => setCartOpen(false)} />
 
       {count > 0 && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 px-4 pb-3">
+        <div className="pointer-events-none fixed inset-x-0 bottom-20 z-40 px-4">
           <button
             type="button"
             onClick={() => setCartOpen(true)}
@@ -263,23 +253,17 @@ export function MenuItemsList({
             className="pointer-events-auto flex w-full items-center justify-between rounded-2xl bg-gradient-to-r from-primary-700 to-primary-600 px-6 py-4 text-white shadow-elevation-3 shadow-primary-900/30 transition-transform hover:from-primary-800 hover:to-primary-700 active:scale-[0.99]"
           >
             <span className="flex items-center gap-2.5 text-sm font-bold">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/20 text-xs">
+              <span
+                key={count}
+                className="flex h-6 w-6 animate-pop items-center justify-center rounded-full bg-white/20 text-xs"
+              >
                 {count}
               </span>
               View Cart
             </span>
             <span className="flex items-center gap-1.5 text-sm font-extrabold">
               {formatINR(breakdown.total)}
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2.5}
-                aria-hidden="true"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
+              <ChevronRightIcon className="h-4 w-4" />
             </span>
           </button>
         </div>

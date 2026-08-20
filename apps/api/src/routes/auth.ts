@@ -11,7 +11,7 @@ import { requireRole } from "../middleware/requireRoles";
 import { sharedAuditRepo, sharedIdentityRepo } from "../repositories/shared";
 import type { IdentityUser } from "../repositories/identityRepository";
 import { jwtService } from "../services/jwt";
-import { sendOtp, verifyOtp, maskPhone } from "../services/otp";
+import { sendOtp, verifyOtp, maskPhone, normalizePhone } from "../services/otp";
 import {
   buildOtpauthUrl,
   generateTotpSecret,
@@ -23,11 +23,17 @@ import {
 // ============================================
 
 const PhoneSchema = z.object({
-  phone: z.string().regex(/^\+?[0-9]{10,15}$/, "Invalid phone number"),
+  phone: z
+    .string()
+    .regex(/^\+?[0-9]{10,15}$/, "Invalid phone number")
+    .transform((p) => normalizePhone(p)),
 });
 
 const VerifyOtpSchema = z.object({
-  phone: z.string().regex(/^\+?[0-9]{10,15}$/, "Invalid phone number"),
+  phone: z
+    .string()
+    .regex(/^\+?[0-9]{10,15}$/, "Invalid phone number")
+    .transform((p) => normalizePhone(p)),
   otp: z.string().regex(/^[0-9]{6}$/, "OTP must be 6 digits"),
   device_fingerprint: z.string().min(8, "device_fingerprint too short"),
 });

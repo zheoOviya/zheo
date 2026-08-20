@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --font-inter: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", "Fira Code", monospace;
+}
+
 @layer base {
   *:focus-visible {
     @apply outline-2 outline-offset-2 outline-primary-500;
@@ -92,7 +97,32 @@
   }
 }
 
+/* Signature "pop" used for add-to-cart and badge-count feedback. */
+@keyframes pop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.3);
+  }
+  70% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
 @layer utilities {
+  /* Branded easing curve: quick start, smooth decelerate. */
+  .ease-brand {
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .animate-pop {
+    animation: pop 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
   .sr-only {
     position: absolute;
     width: 1px;

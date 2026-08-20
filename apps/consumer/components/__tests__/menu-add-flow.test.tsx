@@ -104,6 +104,29 @@ describe("cross-restaurant warning + Undo (I-04)", () => {
   });
 });
 
+describe("bottom-nav overlay layering (QA fix)", () => {
+  it("renders the customization picker above the persistent nav (z-[60])", () => {
+    renderMenu("restB", "Green Bowl");
+    fireEvent.click(screen.getByRole("button", { name: "Add Veg Bowl" }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.parentElement?.className).toContain("z-[60]");
+  });
+
+  it("lifts the View Cart bar above the persistent nav (bottom-20)", async () => {
+    renderMenu("restB", "Green Bowl");
+    openPickerAndConfirm();
+
+    await waitFor(
+      () => expect(useCartStore.getState().items).toHaveLength(1),
+      { timeout: 3000 },
+    );
+
+    const viewCart = screen.getByRole("button", { name: /View cart/ });
+    expect(viewCart.parentElement?.className).toContain("bottom-20");
+  });
+});
+
 describe("add-to-cart feedback (I-07)", () => {
   it("shows a spinner (aria-busy) while processing, then a checkmark, then closes", async () => {
     renderMenu("restB", "Green Bowl");

@@ -11,6 +11,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@heroicons/react": "^2.2.0",
     "@snakzap/config": "workspace:*",
     "@snakzap/types": "workspace:*",
     "@snakzap/ui": "workspace:*",
@@ -39,6 +42,6 @@
     "postcss": "^8.4.0",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0"
+    "vitest": "^3.2.6"
   }
 }

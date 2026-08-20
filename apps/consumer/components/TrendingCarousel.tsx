@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { m } from "framer-motion";
 import { Badge } from "@snakzap/ui";
+import { BrandImage } from "@/components/BrandImage";
 import { fetchTrending, type TrendingDish } from "@/lib/api";
 import { formatINR } from "@/lib/pricing";
 
@@ -107,12 +107,9 @@ export function TrendingCarousel() {
                   className="group block overflow-hidden rounded-3xl bg-white shadow-elevation-1 ring-1 ring-neutral-900/5 transition-all duration-200 hover:-translate-y-1 hover:shadow-elevation-3 dark:bg-neutral-900 dark:ring-white/5"
                 >
                   <div className="relative h-28 w-full overflow-hidden bg-primary-100 dark:bg-primary-900/30">
-                    <Image
-                      src={`https://picsum.photos/seed/${dish.menu_item_id}/400/220`}
+                    <BrandImage
                       alt=""
-                      fill
                       sizes="(max-width: 640px) 224px, 224px"
-                      loading="lazy"
                       className="img-zoom object-cover"
                     />
                     <div

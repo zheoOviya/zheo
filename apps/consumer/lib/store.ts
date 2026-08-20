@@ -32,6 +32,14 @@ interface AuthState {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
+// Single-flight guard for the refresh endpoint. The refresh token is rotated
+// (old jti blacklisted) on every /auth/refresh call, so two concurrent calls
+// sharing the same cookie race: the first succeeds and the second gets
+// REFRESH_TOKEN_REUSED (401), which AuthGate misreads as "logged out" and
+// redirects to /login. React StrictMode double-invokes effects in dev, so a
+// naive refresh call fires twice. Dedupe concurrent calls onto one promise.
+let refreshInFlight: Promise<boolean> | null = null;
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   accessToken: null,
   user: null,
@@ -80,24 +88,33 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     });
   },
 
-  refreshAccessToken: async () => {
-    const deviceFingerprint = getDeviceFingerprint();
-    const res = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-device-fingerprint": deviceFingerprint,
-      },
-      body: JSON.stringify({ device_fingerprint: deviceFingerprint }),
-      credentials: "include",
-    });
-    const body = await res.json();
-    if (!body.success) {
-      set({ accessToken: null, user: null, isAuthenticated: false });
-      return false;
+  refreshAccessToken: () => {
+    if (!refreshInFlight) {
+      refreshInFlight = (async () => {
+        try {
+          const deviceFingerprint = getDeviceFingerprint();
+          const res = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-device-fingerprint": deviceFingerprint,
+            },
+            body: JSON.stringify({ device_fingerprint: deviceFingerprint }),
+            credentials: "include",
+          });
+          const body = await res.json();
+          if (!body.success) {
+            set({ accessToken: null, user: null, isAuthenticated: false });
+            return false;
+          }
+          set({ accessToken: body.data.access_token, isAuthenticated: true });
+          return true;
+        } finally {
+          refreshInFlight = null;
+        }
+      })();
     }
-    set({ accessToken: body.data.access_token });
-    return true;
+    return refreshInFlight;
   },
 
   logout: async () => {

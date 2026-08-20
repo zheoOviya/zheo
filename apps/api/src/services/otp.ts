@@ -36,6 +36,22 @@ export function maskPhone(phone: string): string {
   return `${phone.slice(0, 2)}****${phone.slice(-2)}`;
 }
 
+/**
+ * Canonicalizes a phone number to E.164 (+91XXXXXXXXXX for Indian mobiles).
+ * Users commonly enter the 10-digit number without the country code, which
+ * would otherwise be stored as a distinct (and orphaned) account from the
+ * canonical +91-prefixed seed/demo records. Normalizing before lookup and
+ * storage makes "9876000102" resolve to "+919876000102".
+ */
+export function normalizePhone(input: string): string {
+  const digits = input.replace(/\D/g, "");
+  if (/^[6-9]\d{9}$/.test(digits)) return `+91${digits}`;
+  if (/^0[6-9]\d{9}$/.test(digits)) return `+91${digits.slice(1)}`;
+  if (/^91[6-9]\d{9}$/.test(digits)) return `+${digits}`;
+  if (digits.length >= 10) return `+${digits}`;
+  return input;
+}
+
 export async function sendSms(
   phone: string,
   otp: string,

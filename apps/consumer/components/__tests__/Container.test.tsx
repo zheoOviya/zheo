@@ -30,6 +30,26 @@ describe("Container", () => {
     expect(el.className).not.toContain("max-w-5xl");
   });
 
+  it("supports the 4xl and 6xl width stops", () => {
+    const { rerender } = render(<Container maxWidth="4xl">content</Container>);
+    expect(screen.getByText("content").className).toContain("max-w-4xl");
+    rerender(<Container maxWidth="6xl">content</Container>);
+    expect(screen.getByText("content").className).toContain("max-w-6xl");
+  });
+
+  it("omits the horizontal gutter when gutter={false}", () => {
+    render(<Container gutter={false}>content</Container>);
+    const el = screen.getByText("content");
+    expect(el.className).not.toContain("px-4");
+    expect(el.className).toContain("mx-auto");
+    expect(el.className).toContain("max-w-5xl");
+  });
+
+  it("renders a landmark element via as", () => {
+    render(<Container as="main">content</Container>);
+    expect(screen.getByRole("main")).toBeTruthy();
+  });
+
   it("merges a caller className without dropping the global gutter", () => {
     render(<Container className="py-6">content</Container>);
     const el = screen.getByText("content");

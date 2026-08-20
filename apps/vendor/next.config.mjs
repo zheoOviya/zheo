@@ -2,12 +2,7 @@
 const nextConfig = {
   allowedDevOrigins: ["*.monkeycode-ai.live"],
   images: {
-    remotePatterns: [
-      {
-        protocol: "https",
-        hostname: "picsum.photos",
-      },
-    ],
+    remotePatterns: [],
   },
   async rewrites() {
     return [
