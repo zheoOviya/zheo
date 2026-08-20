@@ -26,6 +26,7 @@ interface AuthState {
   login: (phone: string, otp: string) => Promise<void>;
   sendOtp: (phone: string) => Promise<{ sent: boolean; expiresIn: number; demoOtp?: string }>;
   refreshAccessToken: () => Promise<boolean>;
+  fetchMe: () => Promise<void>;
   logout: () => Promise<void>;
   getAuthHeaders: () => Record<string, string>;
 }
@@ -115,6 +116,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       })();
     }
     return refreshInFlight;
+  },
+
+  fetchMe: async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/auth/me`, {
+        method: "GET",
+        credentials: "include",
+      });
+      const body = await res.json();
+      if (!body.success) {
+        return;
+      }
+      set({ user: body.data.user });
+    } catch {
+      // Non-fatal: keep the existing session state on network errors.
+    }
   },
 
   logout: async () => {

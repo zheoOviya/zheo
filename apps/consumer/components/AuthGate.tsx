@@ -6,21 +6,26 @@ import { useAuthStore } from "@/lib/store";
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { accessToken, isAuthenticated, refreshAccessToken } = useAuthStore();
+  const { accessToken, isAuthenticated, refreshAccessToken, fetchMe } = useAuthStore();
 
   useEffect(() => {
-    if (isAuthenticated) return;
+    if (isAuthenticated) {
+      fetchMe();
+      return;
+    }
 
     refreshAccessToken()
       .then((ok) => {
         if (!ok) {
           router.replace("/login");
+        } else {
+          fetchMe();
         }
       })
       .catch(() => {
         router.replace("/login");
       });
-  }, [isAuthenticated, refreshAccessToken, router]);
+  }, [isAuthenticated, refreshAccessToken, fetchMe, router]);
 
   if (!accessToken) {
     return (

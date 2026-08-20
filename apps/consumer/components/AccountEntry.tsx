@@ -55,12 +55,15 @@ export function AccountEntry() {
 
   useEffect(() => {
     setMounted(true);
-    if (!useAuthStore.getState().accessToken) {
-      useAuthStore
-        .getState()
-        .refreshAccessToken()
-        .catch(() => {});
-    }
+    // Ensure the session user is hydrated on every hard load. AuthGate only
+    // wraps protected pages, so on public routes (e.g. home) this header is
+    // the only component that can refresh the cookie session and then fetch
+    // the current user (including suspension state) for the banner.
+    const state = useAuthStore.getState();
+    const ready = state.accessToken
+      ? Promise.resolve(true)
+      : state.refreshAccessToken();
+    ready.then(() => state.fetchMe()).catch(() => {});
   }, [refreshAccessToken]);
 
   useEffect(() => {
