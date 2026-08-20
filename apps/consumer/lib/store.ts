@@ -138,6 +138,8 @@ export interface CartItem {
   customizations: CartCustomization[];
   restaurantId: string;
   restaurantName?: string;
+  /** Set on a redeemed ₹0 gift line; quantity is locked to 1. */
+  giftId?: string;
 }
 
 /** Opaque snapshot of the cart used by the cross-restaurant "Undo" action. */
@@ -187,6 +189,7 @@ function persistCurrent() {
       base_price: i.basePrice,
       customizations: i.customizations,
       restaurant_id: i.restaurantId,
+      gift_id: i.giftId,
     })),
   }).catch(() => {
     // Offline / server hiccup: local cart stays authoritative.
@@ -313,6 +316,7 @@ export const useCartStore = create<CartState>((set, get) => ({
           quantity: i.quantity,
           customizations: i.customizations ?? [],
           restaurantId: i.restaurant_id ?? saved.restaurant_id ?? "",
+          giftId: (i as { gift_id?: string | null }).gift_id ?? undefined,
         })),
         restaurantId: saved.restaurant_id,
         restaurantName: saved.restaurant_name,
