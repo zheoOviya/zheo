@@ -15,7 +15,7 @@ describe("Event Envelope (EOS Layer 1.2)", () => {
     ).toBe(true);
   });
 
-  it("EventNameSchema contains all 28 core events", () => {
+  it("EventNameSchema contains all 32 core events", () => {
     expect(EventNameSchema.options).toEqual([
       "OrderCreated",
       "PaymentSucceeded",
@@ -35,6 +35,10 @@ describe("Event Envelope (EOS Layer 1.2)", () => {
       "TrendingQueried",
       "GroupOrderCreated",
       "GroupOrderItemAdded",
+      "GiftPaid",
+      "GiftFulfilled",
+      "GiftExpired",
+      "GiftRefunded",
       "UserArrivedAtRestaurant",
       "WalletCashbackCredited",
       "StreakBadgeUnlocked",
