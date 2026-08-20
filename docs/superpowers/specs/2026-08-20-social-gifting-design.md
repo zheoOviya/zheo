@@ -188,3 +188,5 @@ Follows the existing repo pattern (interface + Drizzle + Memory):
 - Push notifications
 - Meal-plan sync
 - Vendor-configured loyalty
+
+**Phase 2 extension:** wallet-gift or multi-item gift support can be added later (e.g., gift a ₹ amount or bundle several items in one gift), but they are out of scope for the MVP.
