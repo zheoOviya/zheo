@@ -39,7 +39,7 @@ Scope is limited to gifting a **specific menu item, one item per gift**. Monetar
 | recipient_name | text nullable | optional personalization shown on landing page |
 | claim_token | text unique NOT NULL | high-entropy random, same pattern as `group_cart_token` |
 | claim_code | text NOT NULL | 8-char uppercase (manual entry) |
-| status | enum | `PENDING`, `ACTIVE`, `CLAIMED`, `FULFILLED`, `EXPIRED`, `REFUNDED`, `CANCELLED` |
+| status | enum | `PENDING`, `ACTIVE`, `CLAIMED`, `FULFILLED`, `EXPIRED`, `REFUNDING`, `REFUNDED`, `CANCELLED` |
 | payment_id | uuid FK → payments nullable | set when a payment record is created |
 | claimed_by | uuid FK → users nullable | |
 | claimed_at | timestamptz nullable | |
@@ -54,8 +54,9 @@ Scope is limited to gifting a **specific menu item, one item per gift**. Monetar
 - `CLAIMED` — recipient claimed it into their cart (reserved).
 - `FULFILLED` — recipient's order containing the gift was picked up.
 - `EXPIRED` — unfulfilled gift past `expires_at` (sweep).
+- `REFUNDING` — transient: a refund was submitted to Razorpay but the refund webhook has not yet confirmed. Claim/release are locked while `REFUNDING`.
 - `REFUNDED` — sender refunded (expiry refund or sender cancel).
-- `CANCELLED` — sender cancelled while unpaid/paid (final terminal alongside REFUNDED where money moved).
+- `CANCELLED` — sender cancelled while unpaid (terminal; paid cancels route through `REFUNDING` → `REFUNDED`).
 
 ### Schema tweaks
 
@@ -69,7 +70,7 @@ All under `/api/v1/gifts`. Consumer app routes, existing auth + envelope middlew
 | Method + Path | Auth | Purpose / behavior |
 |---|---|---|
 | `POST /api/v1/gifts` | sender | Body: `{ restaurant_id, menu_item_id, customizations?, message?, recipient_name? }`. Server loads the menu item, validates restaurant match + availability, **computes price server-side** (base + customization deltas), creates gift `PENDING` + payment record (`gift_id`) + Razorpay order. Returns `{ gift, razorpay_order_id, amount }`. |
-| `POST /api/v1/gifts/:id/cancel` | sender | Allowed only on `PENDING` / `ACTIVE` (never after CLAIMED/FULFILLED). Unpaid (`PENDING`) → `CANCELLED`. Paid (`ACTIVE`) → initiate Razorpay **refund**; status → `REFUNDED` **only after the Razorpay refund webhook confirms** (see Refund flow). |
+| `POST /api/v1/gifts/:id/cancel` | sender | Allowed only on `PENDING` / `ACTIVE` (never after CLAIMED/FULFILLED). Unpaid (`PENDING`) → `CANCELLED`. Paid (`ACTIVE`) → gift `REFUNDING` + initiate Razorpay **refund**; status → `REFUNDED` **only after the Razorpay refund webhook confirms** (see Refund flow). |
 | `GET /api/v1/gifts/mine` | sender | Sender's sent gifts, newest first, with status + share link + code. Powers Profile → My Gifts. |
 | `GET /api/v1/gifts/t/:token` | public | Gift landing data: item snapshot, restaurant, masked sender (name or phone), message, recipient_name, status, expires_at, claimed_at, fulfilled_at. No auth. |
 | `POST /api/v1/gifts/t/:token/claim` | recipient | Validates: gift is `ACTIVE`, not expired, **not a self-gift** (claimed_by != sender_id), not already claimed. On success: gift → `CLAIMED`, `claimed_by` set, returns gift + snapshot so client adds a ₹0 cart line. |
@@ -110,7 +111,7 @@ All under `/api/v1/gifts`. Consumer app routes, existing auth + envelope middlew
 - Refund step: for each `EXPIRED` paid gift, submit a Razorpay **refund**; status → `REFUNDED` **only after the Razorpay refund webhook confirms** (idempotent, consistent with Razorpay). Notification to sender via existing notification outbox.
 - Sender cancel before claim (paid): same refund path.
 
-**Refund flow (unified, webhook-driven):** cancel/expiry → submit Razorpay refund request → Razorpay refund webhook → mark payment `REFUNDED` + gift `REFUNDED` + `refunded_at` → notify sender. Refunds are idempotent per gift.
+**Refund flow (unified, webhook-driven):** cancel/expiry → gift `REFUNDING` → submit Razorpay refund request → Razorpay refund webhook → mark payment `REFUNDED` + gift `REFUNDED` + `refunded_at` → notify sender. Refunds are idempotent per gift; a failed submission stays `REFUNDING` and the daily sweep retries it.
 
 ## Key Invariants
 
