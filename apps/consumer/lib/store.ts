@@ -3,6 +3,7 @@ import { getDeviceFingerprint } from "./deviceFingerprint";
 import {
   clearPersistedCart,
   fetchPersistedCart,
+  releaseGift,
   savePersistedCart,
 } from "./api";
 
@@ -140,6 +141,8 @@ export interface CartItem {
   restaurantName?: string;
   /** Set on a redeemed ₹0 gift line; quantity is locked to 1. */
   giftId?: string;
+  /** Claim token for a redeemed gift line; release-on-remove needs it. */
+  giftToken?: string;
 }
 
 /** Opaque snapshot of the cart used by the cross-restaurant "Undo" action. */
@@ -190,6 +193,7 @@ function persistCurrent() {
       customizations: i.customizations,
       restaurant_id: i.restaurantId,
       gift_id: i.giftId,
+      gift_token: i.giftToken,
     })),
   }).catch(() => {
     // Offline / server hiccup: local cart stays authoritative.
@@ -250,13 +254,21 @@ export const useCartStore = create<CartState>((set, get) => ({
   },
 
   removeItem: (menuItemId) => {
-    const next = get().items.filter((i) => i.menuItemId !== menuItemId);
+    const current = get();
+    const removed = current.items.find((i) => i.menuItemId === menuItemId);
+    const next = current.items.filter((i) => i.menuItemId !== menuItemId);
     set({
       items: next,
-      restaurantId: next.length > 0 ? get().restaurantId : null,
-      restaurantName: next.length > 0 ? get().restaurantName : null,
+      restaurantId: next.length > 0 ? current.restaurantId : null,
+      restaurantName: next.length > 0 ? current.restaurantName : null,
     });
     persistCurrent();
+    const token = useAuthStore.getState().accessToken;
+    if (token && removed?.giftToken) {
+      void releaseGift(token, removed.giftToken).catch(() => {
+        // best-effort: the server sweep reclaims expired claims
+      });
+    }
   },
 
   updateQuantity: (menuItemId, quantity) => {
@@ -317,6 +329,7 @@ export const useCartStore = create<CartState>((set, get) => ({
           customizations: i.customizations ?? [],
           restaurantId: i.restaurant_id ?? saved.restaurant_id ?? "",
           giftId: (i as { gift_id?: string | null }).gift_id ?? undefined,
+          giftToken: (i as { gift_token?: string | null }).gift_token ?? undefined,
         })),
         restaurantId: saved.restaurant_id,
         restaurantName: saved.restaurant_name,

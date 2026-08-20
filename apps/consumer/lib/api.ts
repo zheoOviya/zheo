@@ -219,6 +219,7 @@ export interface PersistedCartItem {
   customizations?: { name: string; price_delta: number }[];
   restaurant_id?: string;
   gift_id?: string | null;
+  gift_token?: string | null;
 }
 
 export interface PersistedCart {

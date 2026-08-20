@@ -359,6 +359,7 @@ function CheckoutContent() {
             menu_item_id: item.menuItemId,
             quantity: item.quantity,
             customizations: item.customizations,
+            ...(item.giftId ? { gift_id: item.giftId } : {}),
           })),
           ...(scheduledPickupTime ? { scheduled_pickup_time: scheduledPickupTime } : {}),
         }),

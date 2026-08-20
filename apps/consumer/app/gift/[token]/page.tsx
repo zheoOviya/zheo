@@ -56,6 +56,7 @@ export default function GiftClaimPage({ params }: { params: Promise<{ token: str
         customizations: gift.item_snapshot.customizations,
         restaurantId: gift.restaurant_id,
         giftId: gift.id,
+        giftToken: gift.claim_token,
       });
       toast.success("Gift claimed! It is in your cart at no cost.");
       router.push(`/restaurants/${encodeURIComponent(gift.restaurant_id)}`);

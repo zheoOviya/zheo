@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { XMarkIcon, ShoppingBagIcon } from "@heroicons/react/24/outline";
+import { GiftIcon, XMarkIcon, ShoppingBagIcon } from "@heroicons/react/24/outline";
 import { useRouter } from "next/navigation";
 import { BrandImage } from "@/components/BrandImage";
 import { useAuthStore, useCartStore } from "@/lib/store";
@@ -270,6 +270,12 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
                   <p className="truncate text-sm font-bold text-neutral-800 dark:text-neutral-100">
                     {item.name}
                   </p>
+                  {item.giftId && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-primary-500/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-primary-700">
+                      <GiftIcon className="h-3 w-3" />
+                      Gift
+                    </span>
+                  )}
                   {item.customizations.length > 0 && (
                     <p className="line-clamp-1 text-xs text-neutral-400">
                       {item.customizations.map((c) => c.name).join(", ")}
@@ -279,27 +285,29 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
                     {formatINR(itemUnitPrice(item))} each
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <button
-                    type="button"
-                    aria-label="Decrease quantity"
-                    onClick={() => updateQuantity(item.menuItemId, item.quantity - 1)}
-                    className="flex h-9 w-9 items-center justify-center rounded-full bg-neutral-100 text-base font-bold text-neutral-600 transition-colors hover:bg-primary-500/15 hover:text-primary-700 dark:bg-neutral-800 dark:text-neutral-300"
-                  >
-                    -
-                  </button>
-                  <span className="w-6 text-center text-sm font-bold text-neutral-800 dark:text-neutral-100">
-                    {item.quantity}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Increase quantity"
-                    onClick={() => updateQuantity(item.menuItemId, item.quantity + 1)}
-                    className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-500 text-base font-bold text-white transition-colors hover:bg-primary-hover"
-                  >
-                    +
-                  </button>
-                </div>
+                {!item.giftId && (
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      aria-label="Decrease quantity"
+                      onClick={() => updateQuantity(item.menuItemId, item.quantity - 1)}
+                      className="flex h-9 w-9 items-center justify-center rounded-full bg-neutral-100 text-base font-bold text-neutral-600 transition-colors hover:bg-primary-500/15 hover:text-primary-700 dark:bg-neutral-800 dark:text-neutral-300"
+                    >
+                      -
+                    </button>
+                    <span className="w-6 text-center text-sm font-bold text-neutral-800 dark:text-neutral-100">
+                      {item.quantity}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="Increase quantity"
+                      onClick={() => updateQuantity(item.menuItemId, item.quantity + 1)}
+                      className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-500 text-base font-bold text-white transition-colors hover:bg-primary-hover"
+                    >
+                      +
+                    </button>
+                  </div>
+                )}
                 <button
                   type="button"
                   aria-label={`Remove ${item.name}`}
