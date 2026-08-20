@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { CheckIcon, ChevronRightIcon } from "@heroicons/react/24/outline";
+import { CheckIcon, ChevronRightIcon, GiftIcon } from "@heroicons/react/24/outline";
 import toast, { type Toast } from "react-hot-toast";
 import type { MenuItem } from "@/lib/api";
 import { BrandImage } from "@/components/BrandImage";
@@ -15,6 +15,7 @@ import { computePriceBreakdown, formatINR, itemUnitPrice } from "@/lib/pricing";
 import { ADD_PROCESSING_MS, ADD_SUCCESS_MS } from "@/lib/addFeedback";
 import { CustomizationPicker } from "./CustomizationPicker";
 import { CartDrawer } from "./CartDrawer";
+import GiftModal from "./GiftModal";
 
 // ============================================
 // Menu items client island. Owns the 3-tap flow:
@@ -79,6 +80,11 @@ export function MenuItemsList({
 }) {
   const { items: cartItems, addItem, itemCount } = useCartStore();
   const [pickerItem, setPickerItem] = useState<MenuItem | null>(null);
+  const [pickerMode, setPickerMode] = useState<"add" | "gift">("add");
+  const [giftPayload, setGiftPayload] = useState<{
+    item: MenuItem;
+    customizations: CartCustomization[];
+  } | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
@@ -186,7 +192,10 @@ export function MenuItemsList({
               </div>
               <button
                 type="button"
-                onClick={() => setPickerItem(item)}
+                onClick={() => {
+                  setPickerMode("add");
+                  setPickerItem(item);
+                }}
                 aria-label={isJustAdded ? `Added ${item.name}` : `Add ${item.name}`}
                 className={`shrink-0 rounded-full px-4 py-2 text-xs font-bold text-white transition-transform active:scale-95 ${
                   isJustAdded ? "animate-pop bg-green-500" : "bg-primary-500 hover:bg-primary-hover"
@@ -197,6 +206,17 @@ export function MenuItemsList({
                 ) : (
                   "Add +"
                 )}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPickerMode("gift");
+                  setPickerItem(item);
+                }}
+                aria-label={`Gift ${item.name}`}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-500/10 text-primary-600 transition-transform active:scale-95 hover:bg-primary-500/20"
+              >
+                <GiftIcon className="h-5 w-5" />
               </button>
             </div>
           );
@@ -235,10 +255,30 @@ export function MenuItemsList({
           availableCustomizations={toCustomizations(pickerItem.customizations)}
           pending={adding}
           success={added}
-          onConfirm={(selected) => handleAdd(pickerItem, selected)}
+          onConfirm={(selected) => {
+            if (pickerMode === "gift") {
+              setGiftPayload({ item: pickerItem, customizations: selected });
+              setPickerItem(null);
+            } else {
+              handleAdd(pickerItem, selected);
+            }
+          }}
           onCancel={() => {
             if (!addingRef.current) setPickerItem(null);
           }}
+        />
+      )}
+
+      {giftPayload && (
+        <GiftModal
+          restaurantId={restaurantId}
+          item={giftPayload.item}
+          customizations={giftPayload.customizations}
+          onPaid={(_gift) => {
+            setGiftPayload(null);
+            toast.success("Gift sent!");
+          }}
+          onClose={() => setGiftPayload(null)}
         />
       )}
 
