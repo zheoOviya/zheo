@@ -1,7 +1,8 @@
 import { createEventEnvelope, emit } from "../lib/eventBus";
 import { AppError } from "../middleware/envelope";
+import type { GiftRepository } from "../repositories/giftRepository";
 import type { OrderRepository } from "../repositories/orderRepository";
-import type { PaymentRepository, PaymentDTO } from "../repositories/paymentRepository";
+import type { PaymentRepository } from "../repositories/paymentRepository";
 import { razorpayService, type RazorpayWebhookPayload } from "./razorpay";
 
 // ============================================
@@ -20,6 +21,7 @@ export class PaymentService {
   constructor(
     private readonly paymentRepo: PaymentRepository,
     private readonly orderRepo: OrderRepository,
+    private readonly giftRepo?: GiftRepository,
   ) {}
 
   async createPaymentOrder(
@@ -92,6 +94,47 @@ export class PaymentService {
     };
   }
 
+  async createGiftPayment(giftId: string): Promise<{
+    gift_id: string;
+    razorpay_order_id: string;
+    amount: number;
+    currency: string;
+  }> {
+    if (!this.giftRepo) {
+      throw new AppError("GIFT_REPO_MISSING", "Gift repository is not configured", 500);
+    }
+    const gift = await this.giftRepo.getById(giftId);
+    if (!gift) {
+      throw new AppError("GIFT_NOT_FOUND", "Gift not found", 404);
+    }
+    if (gift.status !== "PENDING" && gift.status !== "ACTIVE") {
+      throw new AppError(
+        "GIFT_NOT_PAYABLE",
+        `Gift is ${gift.status}, not payable`,
+        400,
+      );
+    }
+
+    const amountInPaise = Math.round(gift.price_paid * 100);
+    const rpOrder = await razorpayService.createOrder(
+      amountInPaise,
+      `gift_${gift.id.slice(0, 8)}`,
+    );
+
+    await this.paymentRepo.create({
+      gift_id: gift.id,
+      razorpay_order_id: rpOrder.id,
+      amount: gift.price_paid,
+    });
+
+    return {
+      gift_id: gift.id,
+      razorpay_order_id: rpOrder.id,
+      amount: gift.price_paid,
+      currency: "INR",
+    };
+  }
+
   async processWebhook(
     rawBody: string,
     signatureHeader: string,
@@ -99,12 +142,16 @@ export class PaymentService {
     processed: boolean;
     idempotent: boolean;
     orderStatus?: string;
+    giftStatus?: string;
   }> {
     if (!razorpayService.verifyWebhookSignature(rawBody, signatureHeader)) {
       throw new AppError("INVALID_WEBHOOK_SIGNATURE", "Webhook signature verification failed", 401);
     }
 
     const payload: RazorpayWebhookPayload = JSON.parse(rawBody);
+    if (payload.event === "refund.processed" || payload.event === "refund.cleared") {
+      return this.processRefundWebhook(payload);
+    }
     const entity = payload.payload?.payment?.entity;
     if (!entity?.id) {
       throw new AppError(
@@ -131,6 +178,39 @@ export class PaymentService {
     }
 
     const isCaptured = entity.captured || entity.status === "captured";
+
+    if (payment.gift_id) {
+      const updated = await this.paymentRepo.updateWebhookResult(payment.id, {
+        razorpay_payment_id: entity.id,
+        status: isCaptured ? "CAPTURED" : "FAILED",
+        method: entity.method ?? "unknown",
+        webhook_event: payload.event,
+        webhook_raw: payload,
+      });
+      if (!updated) {
+        throw new AppError("PAYMENT_UPDATE_FAILED", "Failed to update payment record", 500);
+      }
+      if (isCaptured && this.giftRepo) {
+        const gift = await this.giftRepo.updateStatus(payment.gift_id, "ACTIVE");
+        await emit(
+          createEventEnvelope("GiftPaid", payment.gift_id, {
+            gift_id: payment.gift_id,
+            payment_id: payment.id,
+            amount: payment.amount,
+          }),
+        );
+        return { processed: true, idempotent: false, giftStatus: gift?.status ?? "ACTIVE" };
+      }
+      return { processed: true, idempotent: false, giftStatus: "PENDING" };
+    }
+
+    if (!payment.order_id) {
+      throw new AppError(
+        "PAYMENT_MISSING_ORDER",
+        "Payment record has no order_id to update",
+        500,
+      );
+    }
 
     const updated = await this.paymentRepo.updateWebhookResult(payment.id, {
       razorpay_payment_id: entity.id,
@@ -165,5 +245,55 @@ export class PaymentService {
       }),
     );
     return { processed: true, idempotent: false, orderStatus: "PAYMENT_FAILED" };
+  }
+
+  private async processRefundWebhook(
+    payload: { event: string; payload: { payment?: unknown; refund?: { entity?: { payment_id?: string; amount?: number } } } },
+  ): Promise<{
+    processed: boolean;
+    idempotent: boolean;
+    orderStatus?: string;
+    giftStatus?: string;
+  }> {
+    const refundEntity = payload.payload?.refund?.entity;
+    const razorpayPaymentId = refundEntity?.payment_id;
+    if (!razorpayPaymentId) {
+      throw new AppError("INVALID_WEBHOOK", "Malformed refund webhook: missing payment_id", 400);
+    }
+
+    const payment = await this.paymentRepo.findByRazorpayPaymentId(razorpayPaymentId);
+    if (!payment) {
+      throw new AppError("PAYMENT_NOT_FOUND", "No payment record found for this refund", 404);
+    }
+    if (payment.status === "REFUNDED") {
+      return { processed: false, idempotent: true };
+    }
+
+    await this.paymentRepo.updateWebhookResult(payment.id, {
+      razorpay_payment_id: razorpayPaymentId,
+      status: "REFUNDED",
+      method: payment.method ?? "unknown",
+      webhook_event: payload.event,
+      webhook_raw: payload,
+    });
+
+    if (payment.gift_id) {
+      if (this.giftRepo) {
+        const gift = await this.giftRepo.markRefunded(payment.gift_id);
+        await emit(
+          createEventEnvelope("GiftRefunded", payment.gift_id, {
+            gift_id: payment.gift_id,
+            sender_id: gift?.sender_id ?? "",
+            amount: payment.amount,
+          }),
+        );
+      }
+      return { processed: true, idempotent: false, giftStatus: "REFUNDED" };
+    }
+
+    if (payment.order_id) {
+      await this.orderRepo.updateStatus(payment.order_id, "REFUNDED");
+    }
+    return { processed: true, idempotent: false, orderStatus: "REFUNDED" };
   }
 }

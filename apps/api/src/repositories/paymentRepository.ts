@@ -8,7 +8,8 @@ export type PaymentStatus = "CREATED" | "AUTHORIZED" | "CAPTURED" | "FAILED" | "
 
 export interface PaymentDTO {
   id: string;
-  order_id: string;
+  order_id: string | null;
+  gift_id: string | null;
   razorpay_order_id: string;
   razorpay_payment_id: string | null;
   amount: number;
@@ -22,7 +23,8 @@ export interface PaymentDTO {
 }
 
 export interface CreatePaymentInput {
-  order_id: string;
+  order_id?: string | null;
+  gift_id?: string | null;
   razorpay_order_id: string;
   amount: number;
   currency?: string;
@@ -40,6 +42,8 @@ export interface WebhookUpdate {
 
 export interface PaymentRepository {
   create(input: CreatePaymentInput): Promise<PaymentDTO>;
+  getById(id: string): Promise<PaymentDTO | null>;
+  getByGiftId(giftId: string): Promise<PaymentDTO | null>;
   getByOrderId(orderId: string): Promise<PaymentDTO | null>;
   findByRazorpayPaymentId(razorpayPaymentId: string): Promise<PaymentDTO | null>;
   findByRazorpayOrderId(razorpayOrderId: string): Promise<PaymentDTO | null>;
@@ -54,7 +58,8 @@ export class MemoryPaymentRepository implements PaymentRepository {
     const now = new Date().toISOString();
     const payment: PaymentDTO = {
       id: randomUUID(),
-      order_id: input.order_id,
+      order_id: input.order_id ?? null,
+      gift_id: input.gift_id ?? null,
       razorpay_order_id: input.razorpay_order_id,
       razorpay_payment_id: null,
       amount: input.amount,
@@ -80,6 +85,17 @@ export class MemoryPaymentRepository implements PaymentRepository {
   async findByRazorpayOrderId(razorpayOrderId: string): Promise<PaymentDTO | null> {
     for (const p of this.payments.values()) {
       if (p.razorpay_order_id === razorpayOrderId) return p;
+    }
+    return null;
+  }
+
+  async getById(id: string): Promise<PaymentDTO | null> {
+    return this.payments.get(id) ?? null;
+  }
+
+  async getByGiftId(giftId: string): Promise<PaymentDTO | null> {
+    for (const p of this.payments.values()) {
+      if (p.gift_id === giftId) return p;
     }
     return null;
   }

@@ -18,7 +18,8 @@ function mapPaymentRow(row: Record<string, unknown>): PaymentDTO {
   const meta = (row.metadata as Record<string, unknown>) ?? {};
   return {
     id: row.id as string,
-    order_id: row.order_id as string,
+    order_id: (row.order_id as string | null) ?? null,
+    gift_id: (row.gift_id as string | null) ?? null,
     razorpay_order_id: row.provider_transaction_id as string,
     razorpay_payment_id: (meta.razorpay_payment_id as string) ?? null,
     amount: Number(row.amount),
@@ -40,7 +41,8 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     const now = new Date();
     await this.db.insert(payments).values({
       id,
-      order_id: input.order_id,
+      order_id: input.order_id ?? null,
+      gift_id: input.gift_id ?? null,
       provider: "razorpay",
       provider_transaction_id: input.razorpay_order_id,
       amount: String(input.amount),
@@ -51,7 +53,8 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     });
     return {
       id,
-      order_id: input.order_id,
+      order_id: input.order_id ?? null,
+      gift_id: input.gift_id ?? null,
       razorpay_order_id: input.razorpay_order_id,
       razorpay_payment_id: null,
       amount: input.amount,
@@ -89,6 +92,22 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       .where(eq(payments.provider_transaction_id, razorpayOrderId))) as Record<string, unknown>[];
     const row = rows[0];
     return row ? mapPaymentRow(row) : null;
+  }
+
+  async getById(id: string): Promise<PaymentDTO | null> {
+    const rows = (await this.db
+      .select()
+      .from(payments)
+      .where(eq(payments.id, id))) as Record<string, unknown>[];
+    return rows[0] ? mapPaymentRow(rows[0]) : null;
+  }
+
+  async getByGiftId(giftId: string): Promise<PaymentDTO | null> {
+    const rows = (await this.db
+      .select()
+      .from(payments)
+      .where(eq(payments.gift_id, giftId))) as Record<string, unknown>[];
+    return rows[0] ? mapPaymentRow(rows[0]) : null;
   }
 
   async getByOrderId(orderId: string): Promise<PaymentDTO | null> {
