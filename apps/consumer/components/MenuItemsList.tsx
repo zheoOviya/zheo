@@ -274,8 +274,7 @@ export function MenuItemsList({
           restaurantId={restaurantId}
           item={giftPayload.item}
           customizations={giftPayload.customizations}
-          onPaid={(_gift) => {
-            setGiftPayload(null);
+          onPaid={() => {
             toast.success("Gift sent!");
           }}
           onClose={() => setGiftPayload(null)}

@@ -81,7 +81,7 @@ export default function GiftModal({
   }
 
   if (paidGift) {
-    return <GiftSuccess gift={paidGift} />;
+    return <GiftSuccess gift={paidGift} onClose={onClose} />;
   }
 
   return (

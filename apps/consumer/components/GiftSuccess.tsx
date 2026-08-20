@@ -1,12 +1,23 @@
 "use client";
 
 import { useState } from "react";
-import { CheckIcon, DocumentDuplicateIcon, ShareIcon } from "@heroicons/react/24/outline";
+import {
+  CheckIcon,
+  DocumentDuplicateIcon,
+  ShareIcon,
+  XMarkIcon,
+} from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import type { Gift } from "@/lib/api";
 import { formatINR } from "@/lib/pricing";
 
-export function GiftSuccess({ gift }: { gift: Gift }) {
+export function GiftSuccess({
+  gift,
+  onClose,
+}: {
+  gift: Gift;
+  onClose?: () => void;
+}) {
   const [copied, setCopied] = useState<"link" | "code" | null>(null);
   const link =
     typeof window !== "undefined"
@@ -46,8 +57,18 @@ export function GiftSuccess({ gift }: { gift: Gift }) {
         role="dialog"
         aria-modal="true"
         aria-label="Gift sent"
-        className="w-full max-w-md rounded-t-3xl bg-white p-6 text-center shadow-elevation-3 dark:bg-neutral-900"
+        className="relative w-full max-w-md rounded-t-3xl bg-white p-6 text-center shadow-elevation-3 dark:bg-neutral-900"
       >
+        {onClose && (
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            className="absolute right-4 top-4 flex min-h-11 min-w-11 items-center justify-center rounded-full bg-neutral-100 text-neutral-500 hover:bg-neutral-200 dark:bg-neutral-800"
+          >
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        )}
         <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-500/10">
           <CheckIcon className="h-8 w-8 text-green-500" />
         </div>
