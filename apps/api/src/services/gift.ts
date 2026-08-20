@@ -201,7 +201,8 @@ export class GiftService {
       return refunded ?? updated;
     }
     if (!payment.razorpay_payment_id) {
-      // Not yet captured (PENDING payment): nothing to refund; stay CANCELLED/EXPIRED.
+      // Not yet captured (PENDING payment): nothing to refund; stay REFUNDING
+      // so the expiry sweep retries once a capture lands.
       return updated;
     }
     try {
