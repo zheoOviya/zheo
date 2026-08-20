@@ -8,7 +8,6 @@ import {
   timestamp,
   uuid,
 } from "drizzle-orm/pg-core";
-import { orders } from "./ordering";
 
 export const paymentStatusEnum = pgEnum("payment_status", [
   "CREATED",
@@ -22,9 +21,10 @@ export const payments = pgTable(
   "payments",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    order_id: uuid("order_id")
-      .notNull()
-      .references(() => orders.id),
+    order_id: uuid("order_id"),
+    // Gift payments carry a gift_id instead of an order_id. The
+    // exactly-one-of invariant is enforced in the payment repository/service.
+    gift_id: uuid("gift_id"),
     provider: text("provider").notNull().default("razorpay"),
     provider_transaction_id: text("provider_transaction_id").notNull().unique(),
     amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
@@ -36,6 +36,7 @@ export const payments = pgTable(
   },
   (table) => ({
     orderIdx: index("payments_order_idx").on(table.order_id),
+    giftIdx: index("payments_gift_id_idx").on(table.gift_id),
     providerTxnIdx: index("payments_provider_txn_idx").on(
       table.provider_transaction_id,
     ),

@@ -91,6 +91,8 @@ export const order_items = pgTable(
       .default("0.00"),
     item_subtotal: decimal("item_subtotal", { precision: 10, scale: 2 })
       .notNull(),
+    // Redeemed gift id; a paid gift line is recorded at ₹0.
+    gift_id: uuid("gift_id"),
     created_at: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
