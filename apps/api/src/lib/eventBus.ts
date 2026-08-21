@@ -20,6 +20,15 @@ export type EventHandler = (
 
 const handlers = new Map<EventName, EventHandler[]>();
 let subscriberInitialized = false;
+// Bounded set of event_ids this process has emitted, so broadcasts that loop
+// back to the originating instance are not dispatched a second time.
+const recentlyEmitted = new Set<string>();
+
+export function resetEventBusForTests(): void {
+  handlers.clear();
+  subscriberInitialized = false;
+  recentlyEmitted.clear();
+}
 
 export function onEvent(name: EventName, handler: EventHandler): void {
   const list = handlers.get(name) ?? [];
@@ -53,6 +62,10 @@ export async function emit<K extends EventName>(
   event: TypedEventEnvelope<K>,
 ): Promise<void> {
   await dispatchToHandlers(event as TypedEventEnvelope<EventName>);
+  recentlyEmitted.add(event.event_id);
+  if (recentlyEmitted.size > 10_000) {
+    recentlyEmitted.clear();
+  }
 
   try {
     const redis = getRedis();
@@ -72,11 +85,13 @@ export async function initEventSubscriber(): Promise<void> {
 
   try {
     const redis = getRedis();
-    await redis.subscribe(EVENT_CHANNEL, async (channel, message) => {
+    const sub = redis.duplicate();
+    sub.on("message", (channel: unknown, message: unknown) => {
       if (channel !== EVENT_CHANNEL) return;
       try {
-        const event: TypedEventEnvelope<EventName> = JSON.parse(message);
-        await dispatchToHandlers(event);
+        const event = JSON.parse(message as string) as TypedEventEnvelope<EventName>;
+        if (recentlyEmitted.has(event.event_id)) return;
+        void dispatchToHandlers(event);
       } catch (err) {
         logger.error({
           message: "event_subscriber_dispatch_error",
@@ -84,6 +99,10 @@ export async function initEventSubscriber(): Promise<void> {
         });
       }
     });
+    // Ensure the dedicated connection is up before issuing SUBSCRIBE; a
+    // lazy client with enableOfflineQueue:false rejects the first command.
+    await sub.connect();
+    await sub.subscribe(EVENT_CHANNEL);
     logger.info({ message: "event_subscriber_initialized", channel: EVENT_CHANNEL });
   } catch (err) {
     logger.warn({

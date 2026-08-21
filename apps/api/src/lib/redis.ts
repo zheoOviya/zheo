@@ -9,6 +9,7 @@ import { logger } from "./logger";
 // ============================================
 
 export interface RedisLike {
+  connect(): Promise<void>;
   ping(): Promise<string>;
   get(key: string): Promise<string | null>;
   set(
@@ -26,7 +27,7 @@ export interface RedisLike {
   on(event: string, listener: (...args: unknown[]) => void): unknown;
   duplicate(): RedisLike;
   publish(channel: string, message: string): Promise<number>;
-  subscribe(channel: string, onMessage: (channel: string, message: string) => void): Promise<void>;
+  subscribe(channel: string, onMessage?: (channel: string, message: string) => void): Promise<void>;
   status: string;
 }
 
@@ -35,6 +36,10 @@ export class MemoryRedis implements RedisLike {
   private zsets = new Map<string, Map<string, number>>();
 
   status = "ready";
+
+  async connect(): Promise<void> {
+    return Promise.resolve();
+  }
 
   async ping(): Promise<string> {
     return "PONG";
@@ -110,12 +115,15 @@ export class MemoryRedis implements RedisLike {
     return "OK";
   }
 
-  on(): unknown {
+  on(_event: string, _listener: (...args: unknown[]) => void): unknown {
     return this;
   }
 
   duplicate(): RedisLike {
-    return this;
+    const copy = new MemoryRedis();
+    copy.store = this.store;
+    copy.zsets = this.zsets;
+    return copy;
   }
 
   async publish(): Promise<number> {
