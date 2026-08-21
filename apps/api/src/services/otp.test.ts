@@ -129,7 +129,9 @@ describe("OTP service", () => {
     (config.auth as { allowDevAuthBypass: boolean }).allowDevAuthBypass = true;
     // Pin a memory client so flipping NODE_ENV does not construct a real ioredis.
     setRedisForTests(new MemoryRedis());
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("ok", { status: 200 }));
     try {
       const result = await sendOtp("+919876543210");
       // The on-screen OTP still works and NO real SMS is dispatched (no
