@@ -54,6 +54,19 @@ export class OrderingService {
       throw new AppError("EMPTY_ORDER", "At least one item is required", 400);
     }
 
+    // A gift is single-use: reject a request that lists the same gift_id on
+    // more than one line before anything is priced or persisted.
+    const requestedGiftIds = request.items
+      .map((i) => i.gift_id)
+      .filter((g): g is string => !!g);
+    if (new Set(requestedGiftIds).size !== requestedGiftIds.length) {
+      throw new AppError(
+        "DUPLICATE_GIFT",
+        "A gift can only be redeemed once per order",
+        400,
+      );
+    }
+
     const orderItems: OrderItemInput[] = [];
 
     for (const item of request.items) {
@@ -174,8 +187,9 @@ export class OrderingService {
         if (!boundGift) {
           // A concurrent order already redeemed this gift (or it was released
           // mid-checkout). Roll back the binds we already made so the gift is
-          // left consistent, then reject the order.
+          // left consistent, retire the leaked DRAFT order, then reject.
           for (const b of bound) await this.giftRepo.releaseFromOrder(b, order.id);
+          await this.orderRepo.updateStatus(order.id, "CANCELLED");
           throw new AppError(
             "GIFT_ALREADY_REDEEMED",
             `Gift ${giftId} has already been redeemed in another order`,

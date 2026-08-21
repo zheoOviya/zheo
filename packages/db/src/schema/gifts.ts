@@ -61,8 +61,10 @@ export const gifts = pgTable(
     refunded_at: timestamp("refunded_at", { withTimezone: true }),
     /**
      * Order that redeemed this gift (single-use: a gift binds to at most one
-     * order). FK to orders is declared in the migration (gifts -> orders);
-     * kept as a bare column here to avoid a schema import cycle.
+     * order). Deliberately has NO DB FK to orders: the app-layer CAS
+     * (bindToOrder/markFulfilled only match redeemed_order_id === orderId)
+     * plus the enforced order_items.gift_id -> gifts.id FK guarantee
+     * single-use, and a FK here would require a schema import cycle.
      */
     redeemed_order_id: uuid("redeemed_order_id"),
     /** Set once a Razorpay refund has been successfully submitted; guards the expiry sweep against double refunds. */

@@ -30,6 +30,11 @@ export async function runGiftExpirySweep(
 
   for (const gift of due) {
     try {
+      // A gift already committed to an order is in flight: never expire or
+      // refund it, or the recipient's ₹0 meal at pickup would be voided and
+      // the sender double-paid.
+      if (gift.redeemed_order_id) continue;
+
       if (gift.status === "ACTIVE" || gift.status === "CLAIMED" || gift.status === "PENDING") {
         await giftRepo.updateStatus(gift.id, "EXPIRED");
         result.expired += 1;
@@ -40,8 +45,10 @@ export async function runGiftExpirySweep(
 
       const payment = await paymentRepo.getByGiftId(gift.id);
       if (!payment) continue;
-      if (payment.status === "REFUNDED") continue;
-      if (!payment.razorpay_payment_id) continue;
+      // Only a captured payment can be refunded. FAILED payments carry a
+      // razorpay_payment_id but were never charged, so refunding one would
+      // invent money in mock mode and 400-loop in production.
+      if (payment.status !== "CAPTURED") continue;
       // A refund was already submitted (or is being resolved); skip so we
       // never double-refund a gift whose webhook is still in flight.
       if (gift.refund_requested_at) continue;

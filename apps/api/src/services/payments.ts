@@ -17,6 +17,21 @@ import { razorpayService, type RazorpayWebhookPayload } from "./razorpay";
 // supports 100+ methods); "cod" is pay-at-pickup with no gateway.
 export type PaymentMethod = "upi" | "card" | "netbanking" | "wallet" | "cod";
 
+// In-process per-gift serialization for payment-order creation. The
+// get-then-create idempotency check is read-then-write; without a unique
+// constraint on payments.gift_id two concurrent first-time calls could mint
+// two Razorpay orders. The mutex closes that window within a single process.
+const giftPaymentLocks = new Map<string, Promise<unknown>>();
+
+function withGiftPaymentLock<T>(giftId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = giftPaymentLocks.get(giftId) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  giftPaymentLocks.set(giftId, run);
+  return run.finally(() => {
+    if (giftPaymentLocks.get(giftId) === run) giftPaymentLocks.delete(giftId);
+  });
+}
+
 export class PaymentService {
   constructor(
     private readonly paymentRepo: PaymentRepository,
@@ -95,6 +110,17 @@ export class PaymentService {
   }
 
   async createGiftPayment(giftId: string): Promise<{
+    gift_id: string;
+    razorpay_order_id: string;
+    amount: number;
+    currency: string;
+  }> {
+    return withGiftPaymentLock(giftId, async () => {
+      return this.createGiftPaymentUnlocked(giftId);
+    });
+  }
+
+  private async createGiftPaymentUnlocked(giftId: string): Promise<{
     gift_id: string;
     razorpay_order_id: string;
     amount: number;

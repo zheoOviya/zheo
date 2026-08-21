@@ -16,6 +16,9 @@ export default function GiftClaimPage({ params }: { params: Promise<{ token: str
   const [landing, setLanding] = useState<GiftLanding | null>(null);
   const [error, setError] = useState("");
   const [claiming, setClaiming] = useState(false);
+  // True while the silent session-hydration refresh is in flight, so a
+  // returning user with a valid cookie isn't bounced to /login mid-check.
+  const [sessionHydrating, setSessionHydrating] = useState(true);
   const { accessToken, isAuthenticated, refreshAccessToken } = useAuthStore();
   const addItem = useCartStore((s) => s.addItem);
 
@@ -25,11 +28,16 @@ export default function GiftClaimPage({ params }: { params: Promise<{ token: str
 
   // Session hydration: this is a public page, so a returning user whose
   // refresh cookie is still valid is silently re-authenticated (no redirect,
-  // unlike AuthGate).
+  // unlike AuthGate). refreshAccessToken only sets accessToken (not
+  // isAuthenticated), so the claim gate keys on accessToken alone.
   useEffect(() => {
-    if (!isAuthenticated) {
-      void refreshAccessToken().catch(() => undefined);
+    if (isAuthenticated) {
+      setSessionHydrating(false);
+      return;
     }
+    void refreshAccessToken()
+      .catch(() => undefined)
+      .finally(() => setSessionHydrating(false));
   }, [isAuthenticated, refreshAccessToken]);
 
   const load = useCallback(async () => {
@@ -48,7 +56,10 @@ export default function GiftClaimPage({ params }: { params: Promise<{ token: str
 
   async function handleClaim() {
     if (!token) return;
-    if (!isAuthenticated || !accessToken) {
+    // Key on accessToken (not isAuthenticated): refreshAccessToken never sets
+    // isAuthenticated, so an auth check against it would bounce a valid
+    // session back to /login even after successful silent hydration.
+    if (!accessToken) {
       router.push(`/login?from=/gift/${encodeURIComponent(token)}`);
       return;
     }
@@ -154,7 +165,7 @@ export default function GiftClaimPage({ params }: { params: Promise<{ token: str
           {landing.claimable ? (
             <button
               type="button"
-              disabled={claiming}
+              disabled={claiming || sessionHydrating}
               onClick={() => void handleClaim()}
               className="mt-5 flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-primary-700 to-primary-500 py-3 text-sm font-bold text-white shadow-sm disabled:opacity-50"
             >

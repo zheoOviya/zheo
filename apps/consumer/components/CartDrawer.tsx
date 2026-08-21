@@ -262,7 +262,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
         ) : (
           <div className="space-y-3 p-5">
             {items.map((item) => (
-              <div key={item.menuItemId} className="surface-card flex items-center gap-3 p-3">
+              <div key={item.lineKey ?? item.menuItemId} className="surface-card flex items-center gap-3 p-3">
                 <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-primary-100 dark:bg-primary-900/30">
                   <BrandImage alt="" sizes="56px" className="object-cover" />
                 </div>

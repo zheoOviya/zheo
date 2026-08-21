@@ -135,6 +135,16 @@ describe("MemoryGiftRepository", () => {
       expect((await repo.getById(gift.id))?.refund_requested_at).toBeNull();
     });
 
+    it("refuses to start a refund for a FULFILLED gift (no status regression)", async () => {
+      const gift = await seed(repo);
+      await repo.updateStatus(gift.id, "ACTIVE");
+      await repo.markClaimed(gift.id, "u1");
+      await repo.bindToOrder(gift.id, "order-1");
+      await repo.markFulfilled(gift.id, "order-1");
+      expect(await repo.markRefundSubmitted(gift.id)).toBeNull();
+      expect((await repo.getById(gift.id))?.status).toBe("FULFILLED");
+    });
+
     it("only pays a PENDING gift into ACTIVE", async () => {
       const gift = await seed(repo);
       await repo.updateStatus(gift.id, "CANCELLED");

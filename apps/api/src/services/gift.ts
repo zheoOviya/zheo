@@ -228,8 +228,9 @@ export async function submitGiftRefund(
   }
   if (payment.status === "REFUNDED") {
     const refunded = await giftRepo.markRefunded(gift.id);
-    if (!refunded) throw new AppError("REFUND_FAILED", "Failed to start refund", 500);
-    return refunded;
+    // Already REFUNDED is a success, not an error — a caller racing the
+    // webhook should not see a 500 for a gift that is already settled.
+    return refunded ?? (await giftRepo.getById(gift.id)) ?? gift;
   }
   if (!payment.razorpay_payment_id) {
     // Not yet captured: nothing to refund; stay REFUNDING so the expiry sweep
@@ -253,31 +254,41 @@ export async function submitGiftRefund(
   try {
     await razorpayService.refund(payment.razorpay_payment_id, Math.round(gift.price_paid * 100));
   } catch {
-    await giftRepo.clearRefundSubmitted(gift.id);
-    // status REFUNDING + no reservation -> sweep retries the next run.
-    return reserved;
+    // Keep the reservation even when the call throws: the gateway may have
+    // accepted the refund and lost the response, so clearing the marker and
+    // retrying on the next sweep could fire a real duplicate refund. Stuck
+    // REFUNDING gifts are resolved by the refund webhook / reconciliation.
+    return (await giftRepo.getById(gift.id)) ?? reserved;
   }
 
   if (isRazorpayMockMode()) {
     // No refund webhook will ever arrive in mock/preview mode: resolve now.
-    await paymentRepo.updateWebhookResult(payment.id, {
-      razorpay_payment_id: payment.razorpay_payment_id,
-      status: "REFUNDED",
-      method: payment.method ?? "unknown",
-      webhook_event: "refund.processed",
-      webhook_raw: null,
-    });
-    const refunded = await giftRepo.markRefunded(gift.id);
-    if (refunded) {
-      await emit(
-        createEventEnvelope("GiftRefunded", gift.id, {
-          gift_id: gift.id,
-          sender_id: gift.sender_id,
-          amount: gift.price_paid,
-        }),
-      );
+    // If the local resolution fails, clear the reservation so the sweep can
+    // retry — otherwise the gift would be stuck REFUNDING with no webhook
+    // ever coming.
+    try {
+      await paymentRepo.updateWebhookResult(payment.id, {
+        razorpay_payment_id: payment.razorpay_payment_id,
+        status: "REFUNDED",
+        method: payment.method ?? "unknown",
+        webhook_event: "refund.processed",
+        webhook_raw: null,
+      });
+      const refunded = await giftRepo.markRefunded(gift.id);
+      if (refunded) {
+        await emit(
+          createEventEnvelope("GiftRefunded", gift.id, {
+            gift_id: gift.id,
+            sender_id: gift.sender_id,
+            amount: gift.price_paid,
+          }),
+        );
+      }
+      return refunded ?? reserved;
+    } catch {
+      await giftRepo.clearRefundSubmitted(gift.id);
+      return reserved;
     }
-    return refunded ?? reserved;
   }
 
   return reserved;

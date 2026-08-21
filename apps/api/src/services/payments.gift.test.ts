@@ -145,6 +145,35 @@ describe("PaymentService gift path", () => {
     expect((await giftRepo.getById(gift.id))?.status).toBe("ACTIVE");
   });
 
+  it("mints a fresh Razorpay order when the first payment attempt FAILED", async () => {
+    const gift = await giftRepo.create({
+      sender_id: "11111111-1111-4111-8111-111111111111",
+      restaurant_id: "22222222-2222-4222-8222-222222222222",
+      menu_item_id: "33333333-3333-4333-8333-333333333333",
+      item_snapshot: { name: "Samosa", price: 30, image_url: null, dietary_tags: {}, spice_level: 1, customizations: [] },
+      price_paid: 30,
+      message: null,
+      recipient_name: null,
+      claim_token: "tok-fail",
+      claim_code: "ABCFAIL7",
+      expires_at: new Date(Date.now() + 90 * 24 * 3600_000).toISOString(),
+    });
+
+    // A FAILED Razorpay order is dead; re-presenting it would reject. The
+    // retry therefore mints a brand-new order instead of reusing the old one.
+    const first = await service.createGiftPayment(gift.id);
+    const failed = razorpayService.buildMockWebhook(first.razorpay_order_id, 3000, "payment.failed");
+    await service.processWebhook(failed.rawBody, failed.signature);
+
+    const retry = await service.createGiftPayment(gift.id);
+    expect(retry.razorpay_order_id).not.toBe(first.razorpay_order_id);
+
+    const captured = razorpayService.buildMockWebhook(retry.razorpay_order_id, 3000, "payment.captured");
+    const processed = await service.processWebhook(captured.rawBody, captured.signature);
+    expect(processed.giftStatus).toBe("ACTIVE");
+    expect((await giftRepo.getById(gift.id))?.status).toBe("ACTIVE");
+  });
+
   it("marks a gift REFUNDED on a refund webhook", async () => {
     const gift = await giftRepo.create({
       sender_id: "11111111-1111-4111-8111-111111111111",

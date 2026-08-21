@@ -228,7 +228,11 @@ export class MemoryGiftRepository implements GiftRepository {
   async markRefundSubmitted(id: string): Promise<GiftDTO | null> {
     const gift = this.gifts.get(id);
     if (!gift) return null;
+    // CAS: exactly one submission, and never regress a FULFILLED/CANCELLED/
+    // PENDING/CLAIMED-bound gift (bound gifts are excluded upstream by the
+    // sweep, this guard is the last line of defense).
     if (gift.refund_requested_at !== null) return null;
+    if (!["ACTIVE", "CLAIMED", "EXPIRED", "REFUNDING"].includes(gift.status)) return null;
     const updated = {
       ...gift,
       status: "REFUNDING" as const,

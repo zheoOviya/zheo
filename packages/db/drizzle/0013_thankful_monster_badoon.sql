@@ -4,8 +4,8 @@ EXCEPTION
  WHEN undefined_object THEN null;
 END $$;
 --> statement-breakpoint
-ALTER TABLE "gifts" ADD COLUMN "redeemed_order_id" uuid;--> statement-breakpoint
-ALTER TABLE "gifts" ADD COLUMN "refund_requested_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "gifts" ADD COLUMN IF NOT EXISTS "redeemed_order_id" uuid;--> statement-breakpoint
+ALTER TABLE "gifts" ADD COLUMN IF NOT EXISTS "refund_requested_at" timestamp with time zone;--> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "order_items" ADD CONSTRAINT "order_items_gift_id_gifts_id_fk" FOREIGN KEY ("gift_id") REFERENCES "public"."gifts"("id") ON DELETE no action ON UPDATE no action;
 EXCEPTION
@@ -24,4 +24,8 @@ EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
 --> statement-breakpoint
-ALTER TABLE "payments" ADD CONSTRAINT "payments_exactly_one_target" CHECK ((order_id IS NOT NULL AND gift_id IS NULL) OR (order_id IS NULL AND gift_id IS NOT NULL));
+DO $$ BEGIN
+ ALTER TABLE "payments" ADD CONSTRAINT "payments_exactly_one_target" CHECK ((order_id IS NOT NULL AND gift_id IS NULL) OR (order_id IS NULL AND gift_id IS NOT NULL));
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;

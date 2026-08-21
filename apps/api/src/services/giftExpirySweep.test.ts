@@ -1,7 +1,8 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import { MemoryGiftRepository } from "../repositories/giftRepository";
 import { MemoryPaymentRepository } from "../repositories/paymentRepository";
 import { runGiftExpirySweep } from "./giftExpirySweep";
+import { razorpayService } from "./razorpay";
 import type { GiftDTO } from "../repositories/giftRepository";
 
 function seedGift(repo: MemoryGiftRepository, daysFromNow: number, status: GiftDTO["status"]): Promise<GiftDTO> {
@@ -125,6 +126,52 @@ describe("runGiftExpirySweep", () => {
     expect(result.refunded).toBe(0);
     // The gift expires; without a captured payment there is nothing to refund.
     expect((await giftRepo.getById(gift.id))?.status).toBe("EXPIRED");
+  });
+
+  it("never refunds an expired gift whose payment FAILED (never charged)", async () => {
+    const gift = await seedGift(giftRepo, -1, "ACTIVE");
+    const payment = await paymentRepo.create({
+      gift_id: gift.id,
+      razorpay_order_id: "order_mock_failed",
+      amount: 30,
+    });
+    // A FAILED payment still carries a razorpay_payment_id but no money ever
+    // moved; refunding it would invent a refund.
+    await paymentRepo.updateWebhookResult(payment.id, {
+      razorpay_payment_id: "pay_mock_failed",
+      status: "FAILED",
+      method: "upi",
+      webhook_event: "payment.failed",
+      webhook_raw: null,
+    });
+    const result = await runGiftExpirySweep(giftRepo, paymentRepo, new Date());
+    expect(result.expired).toBe(1);
+    expect(result.refunded).toBe(0);
+    expect((await giftRepo.getById(gift.id))?.status).toBe("EXPIRED");
+  });
+
+  it("never expires or refunds a gift that is already bound to an order", async () => {
+    const gift = await seedGift(giftRepo, -1, "ACTIVE");
+    const payment = await paymentRepo.create({
+      gift_id: gift.id,
+      razorpay_order_id: "order_mock_bound",
+      amount: 30,
+    });
+    await paymentRepo.updateWebhookResult(payment.id, {
+      razorpay_payment_id: "pay_mock_bound",
+      status: "CAPTURED",
+      method: "upi",
+      webhook_event: "payment.captured",
+      webhook_raw: null,
+    });
+    await giftRepo.markClaimed(gift.id, "user-recipient");
+    await giftRepo.bindToOrder(gift.id, "order-in-flight");
+    const result = await runGiftExpirySweep(giftRepo, paymentRepo, new Date());
+    expect(result.expired).toBe(0);
+    expect(result.refunded).toBe(0);
+    // In-flight (claimed + bound) gifts are never expired or refunded.
+    expect((await giftRepo.getById(gift.id))?.status).toBe("CLAIMED");
+    expect((await giftRepo.getById(gift.id))?.redeemed_order_id).toBe("order-in-flight");
   });
 
   it("leaves unexpired gifts alone", async () => {

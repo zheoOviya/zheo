@@ -130,6 +130,50 @@ describe("Gift routes", () => {
 
       expect(res.body.data.status).toBe("CANCELLED");
     });
+
+    it("refunds a paid ACTIVE gift on sender cancel (mock env resolves immediately)", async () => {
+      const gift = await sharedGiftRepo.create({
+        sender_id: TEST_USER_ID,
+        restaurant_id: REST_ID,
+        menu_item_id: MENU_ITEM_1,
+        item_snapshot: {
+          name: "Chicken Biryani",
+          price: 220,
+          image_url: null,
+          dietary_tags: { NON_VEG: true },
+          spice_level: 5,
+          customizations: [],
+        },
+        price_paid: 220,
+        message: null,
+        recipient_name: null,
+        claim_token: `tok-${Math.random().toString(36).slice(2)}`,
+        claim_code: "TSTREF",
+        expires_at: new Date(Date.now() + 24 * 3600_000).toISOString(),
+      });
+      const active = await sharedGiftRepo.markPaid(gift.id);
+      if (!active) throw new Error("failed to activate gift");
+      const payment = await sharedPaymentRepo.create({
+        gift_id: gift.id,
+        razorpay_order_id: "order_mock_refund",
+        amount: 220,
+      });
+      await sharedPaymentRepo.updateWebhookResult(payment.id, {
+        razorpay_payment_id: "pay_mock_refund",
+        status: "CAPTURED",
+        method: "upi",
+        webhook_event: "payment.captured",
+        webhook_raw: null,
+      });
+
+      const res = await request(app)
+        .post(`/api/v1/gifts/${gift.id}/cancel`)
+        .set(authHeaders())
+        .expect(200);
+
+      expect(res.body.data.status).toBe("REFUNDED");
+      expect(res.body.data.refunded_at).not.toBeNull();
+    });
   });
 
   describe("GET /api/v1/gifts/t/:token", () => {

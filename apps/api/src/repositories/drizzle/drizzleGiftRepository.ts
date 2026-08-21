@@ -200,7 +200,11 @@ export class DrizzleGiftRepository implements GiftRepository {
     const ok = await this.casUpdate(
       gifts,
       { status: "REFUNDING", refund_requested_at: now, updated_at: now },
-      and(eq(gifts.id, id), isNull(gifts.refund_requested_at)),
+      and(
+        eq(gifts.id, id),
+        isNull(gifts.refund_requested_at),
+        inArray(gifts.status, ["ACTIVE", "CLAIMED", "EXPIRED", "REFUNDING"]),
+      ),
     );
     if (!ok) return null;
     return this.getById(id);
