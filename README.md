@@ -2,7 +2,7 @@
 
 **Pickup-First Food Ordering Platform**
 
-[![Tests](https://img.shields.io/badge/tests-386-brightgreen)](https://github.com)
+[![Tests](https://img.shields.io/badge/tests-742-brightgreen)](https://github.com)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)](https://www.typescriptlang.org/)
 [![Next.js](https://img.shields.io/badge/Next.js-15.5-black)](https://nextjs.org/)
 [![pnpm](https://img.shields.io/badge/pnpm-9.15-orange)](https://pnpm.io/)
@@ -27,7 +27,7 @@ This is a **startup-grade / portfolio monorepo** built as a demonstration of ful
 | Events | Redis Pub/Sub (`snakzap:events` channel) with in-process fallback |
 | Payments | Razorpay integration (mock seam in dev) |
 | POS | Petpooja integration (mock seam in dev) |
-| Testing | Vitest, Supertest -- 386 tests across 45 files |
+| Testing | Vitest, Supertest -- 742 tests across 92 files; Playwright e2e (18 specs) |
 | Tooling | pnpm 9.15, Turborepo 2.3, TypeScript 5.7 |
 
 ## Repository Layout
@@ -117,7 +117,7 @@ Edge middleware (JWT cookie check), OTP admin login, sidebar navigation. Kill sw
 
 ```bash
 pnpm install
-cp .env.example apps/api/.env
+cp .env.example .env
 pnpm dev
 ```
 
@@ -144,7 +144,8 @@ origins.
 ### Verification
 
 ```bash
-pnpm vitest run    # 386 tests / 45 files
+pnpm vitest run    # 742 unit tests / 92 files
+pnpm test:e2e      # 18 Playwright end-to-end specs (requires API + apps)
 pnpm typecheck      # Turbo typecheck all packages
 ```
 

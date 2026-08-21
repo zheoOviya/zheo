@@ -13,7 +13,12 @@ out/
 .env
 .env.local
 .env.*.local
+.env.production
+.env.test
+.env.staging
+.env.development
 *.env
+!.env.example
 
 # IDE
 .vscode/

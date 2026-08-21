@@ -9,7 +9,7 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -30,11 +30,22 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test (API + packages)
-        run: pnpm test
+      - name: Production build (gate)
+        run: pnpm build
+
+      - name: Test (API + packages) with coverage gate
+        run: pnpm exec vitest run --coverage
 
       - name: Test (frontend suites)
         run: |
-          pnpm --filter consumer test
-          pnpm --filter vendor test
-          pnpm --filter admin test
+          pnpm --filter @snakzap/consumer test
+          pnpm --filter @snakzap/vendor test
+          pnpm --filter @snakzap/admin test
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: E2E (Playwright)
+        run: pnpm test:e2e
+        env:
+          RATE_LIMIT_OTP_PER_MINUTE: "50"

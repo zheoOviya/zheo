@@ -60,9 +60,7 @@ export function AccountEntry() {
     // the only component that can refresh the cookie session and then fetch
     // the current user (including suspension state) for the banner.
     const state = useAuthStore.getState();
-    const ready = state.accessToken
-      ? Promise.resolve(true)
-      : state.refreshAccessToken();
+    const ready = state.accessToken ? Promise.resolve(true) : state.refreshAccessToken();
     ready.then(() => state.fetchMe()).catch(() => {});
   }, [refreshAccessToken]);
 

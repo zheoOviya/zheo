@@ -1,0 +1,66 @@
+# SnakZap local stack.
+# Brings up PostgreSQL + Redis and the production-built API image.
+#
+#   docker compose up --build
+#
+# Required: JWT_SECRET and JWT_REFRESH_SECRET (see .env.example).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: snakzap
+      POSTGRES_PASSWORD: snakzap
+      POSTGRES_DB: snakzap
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U snakzap"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://snakzap:snakzap@postgres:5432/snakzap
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:3002,http://localhost:3003}
+      # The API refuses to boot in NODE_ENV=production without real payment
+      # credentials (see apps/api/src/services/{razorpay,posPetpooja}.ts).
+      # Set these in .env, or set NODE_ENV=development for a mock-mode run.
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+      PETPOOJA_WEBHOOK_SECRET: ${PETPOOJA_WEBHOOK_SECRET:-}
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:

@@ -1,0 +1,42 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build outputs
+dist
+.next
+.turbo
+out
+*.tsbuildinfo
+
+# Tests & tooling
+coverage
+test-results
+playwright-report
+blob-report
+.playwright
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# VCS / CI
+.git
+.github
+.gitignore
+
+# Local tooling / docs (not needed in the image)
+docs
+e2e
+work-logs
+qa
+tmp
+temp
+logs
+*.log
+
+# OS / IDE
+.DS_Store
+.vscode
+.idea

@@ -38,6 +38,12 @@ export interface RazorpayWebhookPayload {
 
 const MOCK_MODE = config.env === "test" || !config.razorpay.keyId;
 
+// Hard-fail in production when the gateway is unconfigured instead of silently
+// accepting mock payments for real traffic.
+if (config.env === "production" && (!config.razorpay.keyId || !config.razorpay.keySecret)) {
+  throw new Error("RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET are required in production");
+}
+
 function razorpayOrderId(): string {
   return `order_mock_${randomUUID().slice(0, 8)}`;
 }
@@ -47,10 +53,7 @@ function razorpayPaymentId(): string {
 }
 
 export class RazorpayService {
-  async createOrder(
-    amountInPaise: number,
-    receipt: string,
-  ): Promise<RazorpayOrder> {
+  async createOrder(amountInPaise: number, receipt: string): Promise<RazorpayOrder> {
     if (MOCK_MODE) {
       return {
         id: razorpayOrderId(),
@@ -63,9 +66,9 @@ export class RazorpayService {
       };
     }
 
-    const auth = Buffer.from(
-      `${config.razorpay.keyId}:${config.razorpay.keySecret}`,
-    ).toString("base64");
+    const auth = Buffer.from(`${config.razorpay.keyId}:${config.razorpay.keySecret}`).toString(
+      "base64",
+    );
 
     const res = await fetch("https://api.razorpay.com/v1/orders", {
       method: "POST",
@@ -88,10 +91,7 @@ export class RazorpayService {
     return res.json();
   }
 
-  verifyWebhookSignature(
-    rawBody: string,
-    signature: string,
-  ): boolean {
+  verifyWebhookSignature(rawBody: string, signature: string): boolean {
     if (MOCK_MODE) {
       return signature.startsWith("valid_sig_");
     }
@@ -99,9 +99,7 @@ export class RazorpayService {
     const secret = config.razorpay.webhookSecret;
     if (!secret) return false;
 
-    const expected = createHmac("sha256", secret)
-      .update(rawBody)
-      .digest("hex");
+    const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
 
     return signature === expected;
   }

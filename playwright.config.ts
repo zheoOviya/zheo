@@ -60,7 +60,10 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "pnpm --filter @snakzap/api dev",
+      // The admin e2e suite signs in repeatedly inside one OTP window, so the
+      // per-minute cap is raised for the e2e environment (default is 3/min).
+      command:
+        "RATE_LIMIT_OTP_PER_MINUTE=50 ALLOW_DEV_AUTH_BYPASS=true pnpm --filter @snakzap/api dev",
       url: `http://localhost:${PORT.api}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 180_000,

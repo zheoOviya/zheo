@@ -58,6 +58,12 @@ export async function sendSms(
 ): Promise<boolean> {
   if (process.env.NODE_ENV === "test") return true;
 
+  // In dev/preview builds with the on-screen demo OTP enabled, the demo code
+  // IS the delivery channel: skip the real provider call so a slow or failing
+  // SMS gateway cannot report `sent: false` (which the consumer UI treats as
+  // a hard login failure). Production is unaffected (bypass is never active).
+  if (isDevBypassActive()) return true;
+
   const authKey = config.msg91.authKey;
   const templateId = config.msg91.templateId;
   try {

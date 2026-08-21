@@ -59,10 +59,36 @@ export function createApp(): Express {
   app.use(helmet());
   app.use(
     cors({
-      origin: config.cors.origins
-        .split(",")
-        .map((origin) => origin.trim())
-        .filter(Boolean),
+      // Exact-match allowlist plus wildcard dev/preview hosts so the hosted
+      // preview origins (e.g. *.monkeycode-ai.live) can call the API directly.
+      origin: (origin, cb) => {
+        if (!origin) {
+          cb(null, true);
+          return;
+        }
+        const exact = config.cors.origins
+          .split(",")
+          .map((o) => o.trim())
+          .filter(Boolean);
+        if (exact.includes(origin)) {
+          cb(null, true);
+          return;
+        }
+        try {
+          const host = new URL(origin).hostname;
+          const wildcards = config.cors.wildcardHosts
+            .split(",")
+            .map((w) => w.trim())
+            .filter(Boolean);
+          const allowed = wildcards.some((suffix) => {
+            const s = suffix.startsWith(".") ? suffix : `.${suffix}`;
+            return host === s.slice(1) || host.endsWith(s);
+          });
+          cb(null, allowed);
+        } catch {
+          cb(null, false);
+        }
+      },
       credentials: true,
     }),
   );

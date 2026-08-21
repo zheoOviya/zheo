@@ -16,6 +16,19 @@ export default defineConfig({
     // consumer, vendor. Admin tests run under apps/admin/vitest.config.ts.
     exclude: ["**/node_modules/**", "apps/consumer/**", "apps/vendor/**", "apps/admin/**"],
     environment: "node",
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json-summary"],
+      // Scope to what this suite actually exercises (API + db/types schema).
+      // Frontends run under their own configs; packages/ui and qa scripts are
+      // not covered here.
+      include: ["apps/api/**", "packages/db/**", "packages/types/**"],
+      thresholds: {
+        lines: 70,
+        branches: 70,
+        functions: 65,
+      },
+    },
     env: {
       NODE_ENV: "test",
       REDIS_URL: "redis://localhost:6379",

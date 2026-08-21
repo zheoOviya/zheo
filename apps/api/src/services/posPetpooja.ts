@@ -34,6 +34,12 @@ import { OrderingService } from "./ordering";
 
 const MOCK_MODE = config.env === "test" || !config.petpooja.webhookSecret;
 
+// Hard-fail in production when the POS provider is unconfigured instead of
+// silently accepting mock webhook signatures for real traffic.
+if (config.env === "production" && !config.petpooja.webhookSecret) {
+  throw new Error("PETPOOJA_WEBHOOK_SECRET is required in production");
+}
+
 export const POS_WALKIN_PHONE = "0000000000";
 
 const CustomizationSchema = z.object({
@@ -88,22 +94,13 @@ export class PetpoojaPosService {
     }
     const secret = config.petpooja.webhookSecret;
     if (!secret) return false;
-    const expected = createHmac("sha256", secret)
-      .update(rawBody)
-      .digest("hex");
+    const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
     return signature === expected;
   }
 
-  async processOrderWebhook(
-    rawBody: string,
-    signatureHeader: string,
-  ): Promise<PosImportResult> {
+  async processOrderWebhook(rawBody: string, signatureHeader: string): Promise<PosImportResult> {
     if (!this.verifySignature(rawBody, signatureHeader)) {
-      throw new AppError(
-        "INVALID_WEBHOOK_SIGNATURE",
-        "Webhook signature verification failed",
-        401,
-      );
+      throw new AppError("INVALID_WEBHOOK_SIGNATURE", "Webhook signature verification failed", 401);
     }
 
     let payload: PetpoojaWebhookOrder;
@@ -129,8 +126,7 @@ export class PetpoojaPosService {
       };
     }
 
-    const restaurantId =
-      payload.restaurant_id ?? config.petpooja.defaultRestaurantId;
+    const restaurantId = payload.restaurant_id ?? config.petpooja.defaultRestaurantId;
     const restaurant = await this.catalogRepo.getRestaurantById(restaurantId);
     if (!restaurant || !restaurant.is_active) {
       throw new AppError(
@@ -180,11 +176,7 @@ export class PetpoojaPosService {
     // Pre-paid POS order -> skip DRAFT/PAYMENT_PENDING, go straight to CONFIRMED.
     await this.orderRepo.updateStatus(order.id, "CONFIRMED");
 
-    await this.posRepo.recordOrder(
-      payload.pos_order_id,
-      order.id,
-      restaurantId,
-    );
+    await this.posRepo.recordOrder(payload.pos_order_id, order.id, restaurantId);
 
     await emit(
       createEventEnvelope("PosOrderImported", order.id, {
