@@ -39,7 +39,7 @@ describe("runGiftExpirySweep", () => {
     expect((await giftRepo.getById(gift.id))?.status).toBe("EXPIRED");
   });
 
-  it("moves an expired paid gift to REFUNDING and requests a refund", async () => {
+  it("refunds an expired captured gift to REFUNDED in mock mode", async () => {
     const gift = await seedGift(giftRepo, -1, "ACTIVE");
     const payment = await paymentRepo.create({
       gift_id: gift.id,
@@ -58,7 +58,73 @@ describe("runGiftExpirySweep", () => {
     const result = await runGiftExpirySweep(giftRepo, paymentRepo, new Date());
     expect(result.refunded).toBe(1);
     const after = await giftRepo.getById(gift.id);
-    expect(after?.status).toBe("REFUNDING");
+    // No refund webhook exists in mock/test mode, so the submission resolves
+    // immediately instead of lingering in REFUNDING forever.
+    expect(after?.status).toBe("REFUNDED");
+    expect(after?.refunded_at).not.toBeNull();
+    expect(after?.refund_requested_at).not.toBeNull();
+  });
+
+  it("never refunds the same gift twice across sweeps", async () => {
+    const gift = await seedGift(giftRepo, -1, "ACTIVE");
+    const payment = await paymentRepo.create({
+      gift_id: gift.id,
+      razorpay_order_id: "order_mock_paid",
+      amount: 30,
+    });
+    await paymentRepo.updateWebhookResult(payment.id, {
+      razorpay_payment_id: "pay_mock_paid",
+      status: "CAPTURED",
+      method: "upi",
+      webhook_event: "payment.captured",
+      webhook_raw: null,
+    });
+
+    const first = await runGiftExpirySweep(giftRepo, paymentRepo, new Date());
+    expect(first.refunded).toBe(1);
+    expect((await giftRepo.getById(gift.id))?.status).toBe("REFUNDED");
+
+    const second = await runGiftExpirySweep(giftRepo, paymentRepo, new Date());
+    expect(second.refunded).toBe(0);
+    expect(second.expired).toBe(0);
+  });
+
+  it("skips a gift whose refund was already submitted (refund_requested_at set)", async () => {
+    const gift = await seedGift(giftRepo, -1, "ACTIVE");
+    const payment = await paymentRepo.create({
+      gift_id: gift.id,
+      razorpay_order_id: "order_mock_paid",
+      amount: 30,
+    });
+    await paymentRepo.updateWebhookResult(payment.id, {
+      razorpay_payment_id: "pay_mock_paid",
+      status: "CAPTURED",
+      method: "upi",
+      webhook_event: "payment.captured",
+      webhook_raw: null,
+    });
+
+    // Simulate a submission that is in-flight awaiting the (mock-less)
+    // refund webhook: the marker is set but nothing has resolved yet.
+    const submitted = await giftRepo.markRefundSubmitted(gift.id);
+    expect(submitted).not.toBeNull();
+    const result = await runGiftExpirySweep(giftRepo, paymentRepo, new Date());
+    expect(result.refunded).toBe(0);
+    expect((await giftRepo.getById(gift.id))?.status).toBe("REFUNDING");
+  });
+
+  it("does not refund an expired gift whose payment was never captured", async () => {
+    const gift = await seedGift(giftRepo, -1, "ACTIVE");
+    await paymentRepo.create({
+      gift_id: gift.id,
+      razorpay_order_id: "order_mock_unpaid",
+      amount: 30,
+    });
+    const result = await runGiftExpirySweep(giftRepo, paymentRepo, new Date());
+    expect(result.expired).toBe(1);
+    expect(result.refunded).toBe(0);
+    // The gift expires; without a captured payment there is nothing to refund.
+    expect((await giftRepo.getById(gift.id))?.status).toBe("EXPIRED");
   });
 
   it("leaves unexpired gifts alone", async () => {

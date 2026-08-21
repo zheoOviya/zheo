@@ -16,17 +16,17 @@ const MENU_ITEM_2 = "b0000000-0000-4000-8000-000000000002"; // Veg Biryani Rs 18
 const TEST_USER_ID = "u00000000-0000-4000-8000-000000000001";
 const OTHER_USER_ID = "u00000000-0000-4000-8000-000000000099";
 
-function authToken(userId = TEST_USER_ID): string {
+function authToken(userId = TEST_USER_ID, role = "CONSUMER"): string {
   return jwtService.signAccessToken({
     sub: userId,
     phone: "+919876543210",
-    role: "CONSUMER",
+    role,
     device_fingerprint: "fp_test_device_abc1234",
   });
 }
 
-function authHeaders(userId?: string) {
-  return { Authorization: `Bearer ${authToken(userId)}` };
+function authHeaders(userId?: string, role = "CONSUMER") {
+  return { Authorization: `Bearer ${authToken(userId, role)}` };
 }
 
 /** Seeds a gift via the shared repo and marks it CLAIMED by `userId`. */
@@ -55,6 +55,8 @@ async function seedClaimedGift(
     claim_code: "TEST12",
     expires_at: new Date(Date.now() + 24 * 3600_000).toISOString(),
   });
+  const active = await sharedGiftRepo.markPaid(gift.id);
+  if (!active) throw new Error("failed to activate seeded gift");
   const claimed = await sharedGiftRepo.markClaimed(gift.id, userId);
   if (!claimed) throw new Error("failed to claim seeded gift");
   return gift.id;
@@ -201,5 +203,99 @@ describe("POST /api/v1/orders with a gift line", () => {
     expect(order.items[0].quantity).toBe(1);
     expect(order.items[0].base_price).toBe(0);
     expect(order.total_amount).toBe(11.8);
+  });
+
+  it("binds the gift to the redeeming order", async () => {
+    const giftId = await seedClaimedGift(TEST_USER_ID);
+
+    const res = await request(app)
+      .post("/api/v1/orders")
+      .set(authHeaders())
+      .send({
+        restaurant_id: REST_ID,
+        items: [
+          {
+            menu_item_id: MENU_ITEM_1,
+            quantity: 1,
+            customizations: [],
+            gift_id: giftId,
+          },
+        ],
+      })
+      .expect(201);
+
+    const bound = await sharedGiftRepo.getById(giftId);
+    expect(bound?.redeemed_order_id).toBe(res.body.data.id);
+    expect(bound?.status).toBe("CLAIMED");
+  });
+
+  it("rejects a second order for an already-redeemed gift (single-use)", async () => {
+    const giftId = await seedClaimedGift(TEST_USER_ID);
+
+    await request(app)
+      .post("/api/v1/orders")
+      .set(authHeaders())
+      .send({
+        restaurant_id: REST_ID,
+        items: [
+          {
+            menu_item_id: MENU_ITEM_1,
+            quantity: 1,
+            customizations: [],
+            gift_id: giftId,
+          },
+        ],
+      })
+      .expect(201);
+
+    const res = await request(app)
+      .post("/api/v1/orders")
+      .set(authHeaders())
+      .send({
+        restaurant_id: REST_ID,
+        items: [
+          {
+            menu_item_id: MENU_ITEM_1,
+            quantity: 1,
+            customizations: [],
+            gift_id: giftId,
+          },
+        ],
+      })
+      .expect(409);
+
+    expect(res.body.error.code).toBe("GIFT_ALREADY_REDEEMED");
+  });
+
+  it("releases a gift back to ACTIVE when the redeeming order is cancelled", async () => {
+    const giftId = await seedClaimedGift(TEST_USER_ID);
+
+    const placed = await request(app)
+      .post("/api/v1/orders")
+      .set(authHeaders())
+      .send({
+        restaurant_id: REST_ID,
+        items: [
+          {
+            menu_item_id: MENU_ITEM_1,
+            quantity: 1,
+            customizations: [],
+            gift_id: giftId,
+          },
+        ],
+      })
+      .expect(201);
+    const orderId = placed.body.data.id as string;
+
+    // Vendor cancel path unwinds the gift binding (FulfillmentService).
+    const cancelRes = await request(app)
+      .put(`/api/vendor/orders/${orderId}/cancel`)
+      .set(authHeaders("e0000000-0000-4000-a000-000000000001", "VENDOR_OWNER"))
+      .expect(200);
+
+    expect(cancelRes.body.data.status).toBe("CANCELLED");
+    const released = await sharedGiftRepo.getById(giftId);
+    expect(released?.status).toBe("ACTIVE");
+    expect(released?.redeemed_order_id).toBeNull();
   });
 });

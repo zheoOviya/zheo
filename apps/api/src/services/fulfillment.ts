@@ -75,7 +75,9 @@ export class FulfillmentService {
     if (this.giftRepo) {
       const giftLines = order.items.filter((i) => i.gift_id);
       for (const line of giftLines) {
-        if (line.gift_id) await this.giftRepo.release(line.gift_id);
+        // Unbind only when THIS order holds the gift (CAS); a gift already
+        // re-deployed into another order stays put.
+        if (line.gift_id) await this.giftRepo.releaseFromOrder(line.gift_id, order.id);
       }
     }
     return updated;
@@ -244,7 +246,10 @@ export class FulfillmentService {
     for (const line of giftLines) {
       const giftId = line.gift_id;
       if (!giftId) continue;
-      const gift = await this.giftRepo.markFulfilled(giftId);
+      // CAS fulfill: only from CLAIMED and only when THIS order is the one the
+      // gift is bound to. A gift bound to another order (or already fulfilled)
+      // returns null, so it is fulfilled and stamped exactly once.
+      const gift = await this.giftRepo.markFulfilled(giftId, order.id);
       if (!gift) continue;
       await emit(
         createEventEnvelope("GiftFulfilled", giftId, {

@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { AppError } from "../middleware/envelope";
+import { createEventEnvelope, emit } from "../lib/eventBus";
 import type { CatalogRepository } from "../repositories/catalogRepository";
 import type { GiftRepository, GiftDTO } from "../repositories/giftRepository";
 import type { PaymentRepository } from "../repositories/paymentRepository";
 import type { CustomizationDelta } from "./pricing";
-import { razorpayService } from "./razorpay";
+import { isRazorpayMockMode, razorpayService } from "./razorpay";
 
 export const GIFT_TTL_DAYS = 90;
 
@@ -131,7 +132,9 @@ export class GiftService {
       restaurant: restaurant
         ? { name: restaurant.name, image_url: restaurant.cover_image ?? null }
         : null,
-      sender_display: gift.recipient_name ? gift.recipient_name : "A friend",
+      // Senders are anonymous (no name stored); surface the recipient's name
+      // as the personalization instead of mislabelling it as the sender.
+      sender_display: "Your friend",
       claimable,
       claim_block_reason: claimBlockReason,
     };
@@ -148,8 +151,12 @@ export class GiftService {
     if (Date.parse(gift.expires_at) <= Date.now()) {
       throw new AppError("GIFT_EXPIRED", "This gift has expired", 400);
     }
+    // markClaimed is a CAS (WHERE status='ACTIVE' AND claimed_by IS NULL): a
+    // concurrent claim wins exactly once; losers get null and a clean 409.
     const claimed = await this.giftRepo.markClaimed(gift.id, userId);
-    if (!claimed) throw new AppError("CLAIM_FAILED", "Failed to claim gift", 500);
+    if (!claimed) {
+      throw new AppError("GIFT_ALREADY_CLAIMED", "This gift has already been claimed", 409);
+    }
     return claimed;
   }
 
@@ -158,8 +165,11 @@ export class GiftService {
     if (gift.status !== "CLAIMED" || gift.claimed_by !== userId) {
       throw new AppError("GIFT_NOT_RELEASABLE", "Gift is not claimed by this user", 400);
     }
+    // CAS: only from CLAIMED and never when the gift is already bound to an order.
     const released = await this.giftRepo.release(gift.id);
-    if (!released) throw new AppError("RELEASE_FAILED", "Failed to release gift", 500);
+    if (!released) {
+      throw new AppError("GIFT_NOT_RELEASABLE", "Gift cannot be released once redeemed", 409);
+    }
     return released;
   }
 
@@ -174,7 +184,7 @@ export class GiftService {
       return updated;
     }
     if (gift.status === "ACTIVE") {
-      return this.requestRefund(gift);
+      return submitGiftRefund(gift, this.giftRepo, this.paymentRepo);
     }
     throw new AppError(
       "GIFT_NOT_CANCELLABLE",
@@ -185,31 +195,90 @@ export class GiftService {
 
   /**
    * Submits a Razorpay refund for a paid gift. Used by sender-cancel and the
-   * expiry sweep. The gift moves to REFUNDING and only becomes REFUNDED when
-   * the Razorpay refund webhook confirms (see PaymentService.processWebhook).
+   * expiry sweep. The refund submission is CAS-reserved (refund_requested_at)
+   * so a gift is never refunded twice; the gift only reaches REFUNDED when the
+   * refund webhook confirms — except in mock/preview mode where no webhook will
+   * ever arrive, so it resolves immediately.
    */
   async requestRefund(gift: GiftDTO): Promise<GiftDTO> {
-    const updated = await this.giftRepo.updateStatus(gift.id, "REFUNDING");
-    if (!updated) throw new AppError("REFUND_FAILED", "Failed to start refund", 500);
+    return submitGiftRefund(gift, this.giftRepo, this.paymentRepo);
+  }
+}
 
-    const payment = await this.paymentRepo.getByGiftId(gift.id);
-    if (!payment) {
-      throw new AppError("PAYMENT_NOT_FOUND", "No payment record for this gift", 404);
-    }
-    if (payment.status === "REFUNDED") {
-      const refunded = await this.giftRepo.markRefunded(gift.id);
-      return refunded ?? updated;
-    }
-    if (!payment.razorpay_payment_id) {
-      // Not yet captured (PENDING payment): nothing to refund; stay REFUNDING
-      // so the expiry sweep retries once a capture lands.
-      return updated;
-    }
-    try {
-      await razorpayService.refund(payment.razorpay_payment_id, Math.round(gift.price_paid * 100));
-    } catch {
-      // Refund submission failed; keep REFUNDING so the sweep retries.
-    }
+/**
+ * Shared refund pipeline used by both sender-cancel and the expiry sweep.
+ *
+ * Refund exactly once:
+ *   1. A captured payment (razorpay_payment_id) is required.
+ *   2. The submission is CAS-reserved via giftRepo.markRefundSubmitted() —
+ *      only the first caller wins; concurrent/duplicate callers skip.
+ *   3. After a successful gateway call the reservation stays set so later
+ *      sweeps skip the gift (awaiting the webhook) instead of double-refunding.
+ *   4. Mock mode (no real gateway) resolves straight to REFUNDED because no
+ *      refund webhook is ever emitted in preview/test environments.
+ */
+export async function submitGiftRefund(
+  gift: GiftDTO,
+  giftRepo: GiftRepository,
+  paymentRepo: PaymentRepository,
+): Promise<GiftDTO> {
+  const payment = await paymentRepo.getByGiftId(gift.id);
+  if (!payment) {
+    throw new AppError("PAYMENT_NOT_FOUND", "No payment record for this gift", 404);
+  }
+  if (payment.status === "REFUNDED") {
+    const refunded = await giftRepo.markRefunded(gift.id);
+    if (!refunded) throw new AppError("REFUND_FAILED", "Failed to start refund", 500);
+    return refunded;
+  }
+  if (!payment.razorpay_payment_id) {
+    // Not yet captured: nothing to refund; stay REFUNDING so the expiry sweep
+    // retries once a capture lands.
+    const updated = await giftRepo.updateStatus(gift.id, "REFUNDING");
+    if (!updated) throw new AppError("REFUND_FAILED", "Failed to start refund", 500);
     return updated;
   }
+  if (gift.refund_requested_at) {
+    // Refund already submitted; awaiting webhook confirmation.
+    const updated = await giftRepo.updateStatus(gift.id, "REFUNDING");
+    return updated ?? gift;
+  }
+
+  // CAS-reserve the submission so two concurrent refunds never both fire.
+  const reserved = await giftRepo.markRefundSubmitted(gift.id);
+  if (!reserved) {
+    return (await giftRepo.getById(gift.id)) ?? gift;
+  }
+
+  try {
+    await razorpayService.refund(payment.razorpay_payment_id, Math.round(gift.price_paid * 100));
+  } catch {
+    await giftRepo.clearRefundSubmitted(gift.id);
+    // status REFUNDING + no reservation -> sweep retries the next run.
+    return reserved;
+  }
+
+  if (isRazorpayMockMode()) {
+    // No refund webhook will ever arrive in mock/preview mode: resolve now.
+    await paymentRepo.updateWebhookResult(payment.id, {
+      razorpay_payment_id: payment.razorpay_payment_id,
+      status: "REFUNDED",
+      method: payment.method ?? "unknown",
+      webhook_event: "refund.processed",
+      webhook_raw: null,
+    });
+    const refunded = await giftRepo.markRefunded(gift.id);
+    if (refunded) {
+      await emit(
+        createEventEnvelope("GiftRefunded", gift.id, {
+          gift_id: gift.id,
+          sender_id: gift.sender_id,
+          amount: gift.price_paid,
+        }),
+      );
+    }
+    return refunded ?? reserved;
+  }
+
+  return reserved;
 }

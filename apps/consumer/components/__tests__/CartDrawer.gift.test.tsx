@@ -25,6 +25,7 @@ beforeEach(() => {
   useCartStore.setState({
     items: [
       {
+        lineKey: "gift:g1",
         menuItemId: "m1",
         name: "Paneer Wrap",
         basePrice: 0,
@@ -35,6 +36,7 @@ beforeEach(() => {
         giftToken: "g1",
       },
       {
+        lineKey: "m2",
         menuItemId: "m2",
         name: "Cold Coffee",
         basePrice: 120,

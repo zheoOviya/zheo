@@ -290,7 +290,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
                     <button
                       type="button"
                       aria-label="Decrease quantity"
-                      onClick={() => updateQuantity(item.menuItemId, item.quantity - 1)}
+                      onClick={() => updateQuantity(item.lineKey ?? item.menuItemId, item.quantity - 1)}
                       className="flex h-9 w-9 items-center justify-center rounded-full bg-neutral-100 text-base font-bold text-neutral-600 transition-colors hover:bg-primary-500/15 hover:text-primary-700 dark:bg-neutral-800 dark:text-neutral-300"
                     >
                       -
@@ -301,7 +301,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
                     <button
                       type="button"
                       aria-label="Increase quantity"
-                      onClick={() => updateQuantity(item.menuItemId, item.quantity + 1)}
+                      onClick={() => updateQuantity(item.lineKey ?? item.menuItemId, item.quantity + 1)}
                       className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-500 text-base font-bold text-white transition-colors hover:bg-primary-hover"
                     >
                       +
@@ -311,7 +311,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
                 <button
                   type="button"
                   aria-label={`Remove ${item.name}`}
-                  onClick={() => removeItem(item.menuItemId)}
+                  onClick={() => removeItem(item.lineKey ?? item.menuItemId)}
                   className="shrink-0 text-xs text-neutral-400 transition-colors hover:text-red-500"
                 >
                   Remove

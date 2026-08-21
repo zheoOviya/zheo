@@ -10,7 +10,6 @@ import {
 } from "drizzle-orm/pg-core";
 import { menu_items, restaurants } from "./catalog";
 import { users } from "./identity";
-import { payments } from "./payments";
 
 export const giftStatusEnum = pgEnum("gift_status", [
   "PENDING",
@@ -53,11 +52,21 @@ export const gifts = pgTable(
     claim_token: text("claim_token").notNull().unique(),
     claim_code: text("claim_code").notNull(),
     status: giftStatusEnum("status").notNull().default("PENDING"),
-    payment_id: uuid("payment_id").references(() => payments.id),
+    // Legacy, unpopulated link to a payment row. Kept as a bare column: the
+    // reverse direction (payments.gift_id -> gifts.id) is the enforced FK.
+    payment_id: uuid("payment_id"),
     claimed_by: uuid("claimed_by").references(() => users.id),
     claimed_at: timestamp("claimed_at", { withTimezone: true }),
     fulfilled_at: timestamp("fulfilled_at", { withTimezone: true }),
     refunded_at: timestamp("refunded_at", { withTimezone: true }),
+    /**
+     * Order that redeemed this gift (single-use: a gift binds to at most one
+     * order). FK to orders is declared in the migration (gifts -> orders);
+     * kept as a bare column here to avoid a schema import cycle.
+     */
+    redeemed_order_id: uuid("redeemed_order_id"),
+    /** Set once a Razorpay refund has been successfully submitted; guards the expiry sweep against double refunds. */
+    refund_requested_at: timestamp("refund_requested_at", { withTimezone: true }),
     expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
     created_at: timestamp("created_at", { withTimezone: true })
       .notNull()

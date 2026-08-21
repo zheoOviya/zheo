@@ -62,7 +62,13 @@ paymentsRouter.post(
       throw new AppError("MISSING_SIGNATURE", "X-Razorpay-Signature header is required", 401);
     }
 
-    const rawBody = JSON.stringify(req.body);
+    // HMAC must cover the exact bytes Razorpay sent — JSON.stringify(req.body)
+    // re-serializes and breaks the signature. req.rawBody is captured by the
+    // body-parser middleware in app.ts.
+    const rawBody =
+      typeof req.rawBody === "string"
+        ? req.rawBody
+        : req.rawBody?.toString("utf8") ?? JSON.stringify(req.body);
 
     const result = await paymentService.processWebhook(rawBody, signature);
 

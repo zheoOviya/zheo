@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS "gifts" (
 DO $$ BEGIN
  ALTER TABLE "payments" DROP CONSTRAINT "payments_order_id_orders_id_fk";
 EXCEPTION
- WHEN duplicate_object THEN null;
+ WHEN undefined_object THEN null;
 END $$;
 --> statement-breakpoint
 ALTER TABLE "payments" ALTER COLUMN "order_id" DROP NOT NULL;--> statement-breakpoint

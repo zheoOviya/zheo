@@ -115,6 +115,28 @@ export class PaymentService {
       );
     }
 
+    // Idempotency: if a Razorpay order was already created for this gift and
+    // hasn't been settled, return it instead of minting a duplicate order. A
+    // settled payment cannot be re-charged; a FAILED one may be retried.
+    const existing = await this.paymentRepo.getByGiftId(giftId);
+    if (existing) {
+      if (existing.status === "CREATED" || existing.status === "AUTHORIZED") {
+        return {
+          gift_id: gift.id,
+          razorpay_order_id: existing.razorpay_order_id,
+          amount: existing.amount,
+          currency: existing.currency,
+        };
+      }
+      if (existing.status === "CAPTURED" || existing.status === "REFUNDED") {
+        throw new AppError(
+          "GIFT_ALREADY_PAID",
+          `Gift payment is already ${existing.status}`,
+          400,
+        );
+      }
+    }
+
     const amountInPaise = Math.round(gift.price_paid * 100);
     const rpOrder = await razorpayService.createOrder(
       amountInPaise,
@@ -191,15 +213,20 @@ export class PaymentService {
         throw new AppError("PAYMENT_UPDATE_FAILED", "Failed to update payment record", 500);
       }
       if (isCaptured && this.giftRepo) {
-        const gift = await this.giftRepo.updateStatus(payment.gift_id, "ACTIVE");
-        await emit(
-          createEventEnvelope("GiftPaid", payment.gift_id, {
-            gift_id: payment.gift_id,
-            payment_id: payment.id,
-            amount: payment.amount,
-          }),
-        );
-        return { processed: true, idempotent: false, giftStatus: gift?.status ?? "ACTIVE" };
+        // markPaid is CAS (PENDING -> ACTIVE) so a concurrent cancel can never
+        // be clobbered into ACTIVE; if it fails the gift was cancelled and the
+        // capture will need a manual refund instead.
+        const gift = await this.giftRepo.markPaid(payment.gift_id);
+        if (gift) {
+          await emit(
+            createEventEnvelope("GiftPaid", payment.gift_id, {
+              gift_id: payment.gift_id,
+              payment_id: payment.id,
+              amount: payment.amount,
+            }),
+          );
+        }
+        return { processed: true, idempotent: false, giftStatus: gift?.status ?? "PENDING" };
       }
       return { processed: true, idempotent: false, giftStatus: "PENDING" };
     }
@@ -279,14 +306,18 @@ export class PaymentService {
 
     if (payment.gift_id) {
       if (this.giftRepo) {
+        // markRefunded is CAS (only REFUNDING/EXPIRED/ACTIVE): a gift that was
+        // already fulfilled or cancelled is never regressed by a stale refund.
         const gift = await this.giftRepo.markRefunded(payment.gift_id);
-        await emit(
-          createEventEnvelope("GiftRefunded", payment.gift_id, {
-            gift_id: payment.gift_id,
-            sender_id: gift?.sender_id ?? "",
-            amount: payment.amount,
-          }),
-        );
+        if (gift) {
+          await emit(
+            createEventEnvelope("GiftRefunded", payment.gift_id, {
+              gift_id: payment.gift_id,
+              sender_id: gift.sender_id,
+              amount: payment.amount,
+            }),
+          );
+        }
       }
       return { processed: true, idempotent: false, giftStatus: "REFUNDED" };
     }

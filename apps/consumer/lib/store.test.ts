@@ -258,4 +258,35 @@ describe("Cart store", () => {
     expect(useCartStore.getState().items).toHaveLength(0);
     expect(useCartStore.getState().restaurantId).toBeNull();
   });
+
+  it("keeps a paid item and a claimed gift of the same menu item as separate lines", () => {
+    useCartStore.getState().addItem({
+      menuItemId: "item-1",
+      name: "Paneer Wrap",
+      basePrice: 149,
+      quantity: 1,
+      customizations: [],
+      restaurantId: "rest-1",
+    });
+    useCartStore.getState().addItem({
+      menuItemId: "item-1",
+      name: "Paneer Wrap",
+      basePrice: 0,
+      quantity: 1,
+      customizations: [],
+      restaurantId: "rest-1",
+      giftId: "gift-1",
+      giftToken: "tok-1",
+    });
+
+    const items = useCartStore.getState().items;
+    expect(items).toHaveLength(2);
+    expect(items[0]!.lineKey).toBe("item-1");
+    expect(items[1]!.lineKey).toBe("gift:gift-1");
+
+    // Removing the gift line must not touch the paid line.
+    useCartStore.getState().removeItem("gift:gift-1");
+    expect(useCartStore.getState().items).toHaveLength(1);
+    expect(useCartStore.getState().items[0]!.basePrice).toBe(149);
+  });
 });

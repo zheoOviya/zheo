@@ -13,6 +13,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { menu_items, restaurants } from "./catalog";
 import { users } from "./identity";
+import { gifts } from "./gifts";
 
 // PRD Section 4: Order State Machine - 13 SQL states
 export const orderStatusEnum = pgEnum("order_status", [
@@ -92,7 +93,7 @@ export const order_items = pgTable(
     item_subtotal: decimal("item_subtotal", { precision: 10, scale: 2 })
       .notNull(),
     // Redeemed gift id; a paid gift line is recorded at ₹0.
-    gift_id: uuid("gift_id"),
+    gift_id: uuid("gift_id").references(() => gifts.id),
     created_at: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

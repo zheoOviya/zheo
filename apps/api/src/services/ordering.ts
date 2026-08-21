@@ -160,6 +160,32 @@ export class OrderingService {
 
     const order = await this.orderRepo.create(input);
 
+    // Bind each claimed gift to THIS order (CAS). bindToOrder only succeeds
+    // while the gift is still CLAIMED and unbound, so a gift can never be
+    // redeemed in two orders even under concurrent checkout.
+    const giftIds = [...new Set(orderItems.filter((oi) => oi.gift_id).map((oi) => oi.gift_id!))];
+    const bound: string[] = [];
+    if (giftIds.length > 0) {
+      if (!this.giftRepo) {
+        throw new AppError("GIFT_REPO_MISSING", "Gift repository is not configured", 500);
+      }
+      for (const giftId of giftIds) {
+        const boundGift = await this.giftRepo.bindToOrder(giftId, order.id);
+        if (!boundGift) {
+          // A concurrent order already redeemed this gift (or it was released
+          // mid-checkout). Roll back the binds we already made so the gift is
+          // left consistent, then reject the order.
+          for (const b of bound) await this.giftRepo.releaseFromOrder(b, order.id);
+          throw new AppError(
+            "GIFT_ALREADY_REDEEMED",
+            `Gift ${giftId} has already been redeemed in another order`,
+            409,
+          );
+        }
+        bound.push(giftId);
+      }
+    }
+
     await emit(
       createEventEnvelope("OrderCreated", order.id, { order }, {
         correlation_id: randomUUID(),

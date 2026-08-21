@@ -28,6 +28,10 @@ export interface GiftDTO {
   claimed_at: string | null;
   fulfilled_at: string | null;
   refunded_at: string | null;
+  /** Order that redeemed this gift; null until the gift is bound at checkout. */
+  redeemed_order_id: string | null;
+  /** Set once a refund has been successfully submitted to the gateway. */
+  refund_requested_at: string | null;
   expires_at: string;
   created_at: string;
   updated_at: string;
@@ -52,10 +56,27 @@ export interface GiftRepository {
   getByToken(token: string): Promise<GiftDTO | null>;
   getBySender(senderId: string): Promise<GiftDTO[]>;
   updateStatus(id: string, status: GiftStatus): Promise<GiftDTO | null>;
+  /**
+   * CAS claim: only succeeds while the gift is ACTIVE and unclaimed. Returns
+   * null when a concurrent claim won, so "fulfills exactly once" holds.
+   */
   markClaimed(id: string, claimedBy: string): Promise<GiftDTO | null>;
+  /** CAS release: only from CLAIMED and only if not bound to an order. */
   release(id: string): Promise<GiftDTO | null>;
-  markFulfilled(id: string): Promise<GiftDTO | null>;
+  /** CAS bind: only while CLAIMED and not already redeemed in another order. */
+  bindToOrder(id: string, orderId: string): Promise<GiftDTO | null>;
+  /** CAS unbind: clears the order binding only when this order holds it. */
+  releaseFromOrder(id: string, orderId: string): Promise<GiftDTO | null>;
+  /** CAS fulfill: only from CLAIMED by the order that redeemed the gift. */
+  markFulfilled(id: string, orderId: string): Promise<GiftDTO | null>;
+  /** CAS refund-confirm: only from REFUNDING/EXPIRED/ACTIVE (not yet REFUNDED). */
   markRefunded(id: string): Promise<GiftDTO | null>;
+  /** CAS paid-confirm: only PENDING -> ACTIVE (never clobbers CANCELLED/EXPIRED). */
+  markPaid(id: string): Promise<GiftDTO | null>;
+  /** CAS refund-submit: records the submission exactly once. */
+  markRefundSubmitted(id: string): Promise<GiftDTO | null>;
+  /** Clears the refund-submitted marker after a failed submission. */
+  clearRefundSubmitted(id: string): Promise<GiftDTO | null>;
   listDueForExpiry(nowIso: string): Promise<GiftDTO[]>;
   _reset(): void;
 }
@@ -82,6 +103,8 @@ export class MemoryGiftRepository implements GiftRepository {
       claimed_at: null,
       fulfilled_at: null,
       refunded_at: null,
+      redeemed_order_id: null,
+      refund_requested_at: null,
       expires_at: input.expires_at,
       created_at: now,
       updated_at: now,
@@ -118,6 +141,7 @@ export class MemoryGiftRepository implements GiftRepository {
   async markClaimed(id: string, claimedBy: string): Promise<GiftDTO | null> {
     const gift = this.gifts.get(id);
     if (!gift) return null;
+    if (gift.status !== "ACTIVE" || gift.claimed_by !== null) return null;
     const now = new Date().toISOString();
     const updated = {
       ...gift,
@@ -133,6 +157,7 @@ export class MemoryGiftRepository implements GiftRepository {
   async release(id: string): Promise<GiftDTO | null> {
     const gift = this.gifts.get(id);
     if (!gift) return null;
+    if (gift.status !== "CLAIMED" || gift.redeemed_order_id !== null) return null;
     const now = new Date().toISOString();
     const updated = {
       ...gift,
@@ -145,9 +170,36 @@ export class MemoryGiftRepository implements GiftRepository {
     return updated;
   }
 
-  async markFulfilled(id: string): Promise<GiftDTO | null> {
+  async bindToOrder(id: string, orderId: string): Promise<GiftDTO | null> {
     const gift = this.gifts.get(id);
     if (!gift) return null;
+    if (gift.status !== "CLAIMED" || gift.redeemed_order_id !== null) return null;
+    const updated = { ...gift, redeemed_order_id: orderId, updated_at: new Date().toISOString() };
+    this.gifts.set(id, updated);
+    return updated;
+  }
+
+  async releaseFromOrder(id: string, orderId: string): Promise<GiftDTO | null> {
+    const gift = this.gifts.get(id);
+    if (!gift) return null;
+    if (gift.redeemed_order_id !== orderId) return null;
+    const now = new Date().toISOString();
+    const updated = {
+      ...gift,
+      status: "ACTIVE" as const,
+      claimed_by: null,
+      claimed_at: null,
+      redeemed_order_id: null,
+      updated_at: now,
+    };
+    this.gifts.set(id, updated);
+    return updated;
+  }
+
+  async markFulfilled(id: string, orderId: string): Promise<GiftDTO | null> {
+    const gift = this.gifts.get(id);
+    if (!gift) return null;
+    if (gift.status !== "CLAIMED" || gift.redeemed_order_id !== orderId) return null;
     const now = new Date().toISOString();
     const updated = { ...gift, status: "FULFILLED" as const, fulfilled_at: now, updated_at: now };
     this.gifts.set(id, updated);
@@ -157,8 +209,41 @@ export class MemoryGiftRepository implements GiftRepository {
   async markRefunded(id: string): Promise<GiftDTO | null> {
     const gift = this.gifts.get(id);
     if (!gift) return null;
+    if (!["REFUNDING", "EXPIRED", "ACTIVE"].includes(gift.status)) return null;
     const now = new Date().toISOString();
     const updated = { ...gift, status: "REFUNDED" as const, refunded_at: now, updated_at: now };
+    this.gifts.set(id, updated);
+    return updated;
+  }
+
+  async markPaid(id: string): Promise<GiftDTO | null> {
+    const gift = this.gifts.get(id);
+    if (!gift) return null;
+    if (gift.status !== "PENDING") return null;
+    const updated = { ...gift, status: "ACTIVE" as const, updated_at: new Date().toISOString() };
+    this.gifts.set(id, updated);
+    return updated;
+  }
+
+  async markRefundSubmitted(id: string): Promise<GiftDTO | null> {
+    const gift = this.gifts.get(id);
+    if (!gift) return null;
+    if (gift.refund_requested_at !== null) return null;
+    const updated = {
+      ...gift,
+      status: "REFUNDING" as const,
+      refund_requested_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.gifts.set(id, updated);
+    return updated;
+  }
+
+  async clearRefundSubmitted(id: string): Promise<GiftDTO | null> {
+    const gift = this.gifts.get(id);
+    if (!gift) return null;
+    if (gift.refund_requested_at === null) return null;
+    const updated = { ...gift, refund_requested_at: null, updated_at: new Date().toISOString() };
     this.gifts.set(id, updated);
     return updated;
   }

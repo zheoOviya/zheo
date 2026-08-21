@@ -38,6 +38,11 @@ export interface RazorpayWebhookPayload {
 
 const MOCK_MODE = config.env === "test" || !config.razorpay.keyId;
 
+/** True when the gateway is the offline mock (test/preview without real keys). */
+export function isRazorpayMockMode(): boolean {
+  return MOCK_MODE;
+}
+
 function razorpayOrderId(): string {
   return `order_mock_${randomUUID().slice(0, 8)}`;
 }

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
+import { rateLimiter } from "../middleware/rateLimiter";
 import { getCatalogRepository } from "./catalog";
 import { sharedGiftRepo, sharedOrderRepo, sharedPaymentRepo } from "../repositories/shared";
 import { GiftService } from "../services/gift";
@@ -32,6 +33,18 @@ const giftService = new GiftService(sharedGiftRepo, sharedPaymentRepo, getCatalo
 const paymentService = new PaymentService(sharedPaymentRepo, sharedOrderRepo, sharedGiftRepo);
 
 export const giftsRouter: Router = Router();
+
+// Landing lookups are unauthenticated, so bound them by IP to stop link
+// enumeration / token guessing at the route layer.
+const giftsLimiter = rateLimiter({
+  prefix: "gifts",
+  max: 60,
+  windowMs: 60_000,
+  identifier: (req) => req.ip ?? "unknown",
+  failClosed: true,
+});
+
+giftsRouter.use(giftsLimiter);
 
 giftsRouter.post(
   "/",

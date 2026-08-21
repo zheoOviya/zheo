@@ -16,12 +16,21 @@ export default function GiftClaimPage({ params }: { params: Promise<{ token: str
   const [landing, setLanding] = useState<GiftLanding | null>(null);
   const [error, setError] = useState("");
   const [claiming, setClaiming] = useState(false);
-  const { accessToken, isAuthenticated } = useAuthStore();
+  const { accessToken, isAuthenticated, refreshAccessToken } = useAuthStore();
   const addItem = useCartStore((s) => s.addItem);
 
   useEffect(() => {
     void params.then(({ token: t }) => setToken(t));
   }, [params]);
+
+  // Session hydration: this is a public page, so a returning user whose
+  // refresh cookie is still valid is silently re-authenticated (no redirect,
+  // unlike AuthGate).
+  useEffect(() => {
+    if (!isAuthenticated) {
+      void refreshAccessToken().catch(() => undefined);
+    }
+  }, [isAuthenticated, refreshAccessToken]);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -40,7 +49,7 @@ export default function GiftClaimPage({ params }: { params: Promise<{ token: str
   async function handleClaim() {
     if (!token) return;
     if (!isAuthenticated || !accessToken) {
-      router.push(`/login?next=/gift/${encodeURIComponent(token)}`);
+      router.push(`/login?from=/gift/${encodeURIComponent(token)}`);
       return;
     }
     if (!landing) return;
@@ -48,12 +57,18 @@ export default function GiftClaimPage({ params }: { params: Promise<{ token: str
     setError("");
     try {
       const gift = await claimGift(accessToken, token);
+      // The sender already paid for the customizations; the server charges
+      // ₹0 and zeroes the deltas, so mirror that client-side or the cart
+      // would show a phantom subtotal (e.g. ₹41.60) the user never pays.
       addItem({
         menuItemId: gift.menu_item_id,
         name: gift.item_snapshot.name,
         basePrice: 0,
         quantity: 1,
-        customizations: gift.item_snapshot.customizations,
+        customizations: gift.item_snapshot.customizations.map((c) => ({
+          name: c.name,
+          price_delta: 0,
+        })),
         restaurantId: gift.restaurant_id,
         giftId: gift.id,
         giftToken: gift.claim_token,
@@ -99,6 +114,9 @@ export default function GiftClaimPage({ params }: { params: Promise<{ token: str
           <div className="absolute bottom-3 left-4 text-white">
             <p className="text-xs font-semibold uppercase tracking-wide text-white/80">A gift for you</p>
             <p className="text-lg font-extrabold">{sender_display}</p>
+            {gift.recipient_name && (
+              <p className="text-xs font-semibold text-white/80">For {gift.recipient_name}</p>
+            )}
           </div>
         </div>
 

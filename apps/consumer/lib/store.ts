@@ -132,6 +132,10 @@ export interface CartCustomization {
 }
 
 export interface CartItem {
+  /** Stable per-line key: menuItemId for paid lines, `gift:<id>` for gifts,
+   *  so a paid item and a claimed gift of the same menu item stay separate.
+   *  Computed by the store on add/hydrate; callers may omit it. */
+  lineKey?: string;
   menuItemId: string;
   name: string;
   basePrice: number;
@@ -143,6 +147,10 @@ export interface CartItem {
   giftId?: string;
   /** Claim token for a redeemed gift line; release-on-remove needs it. */
   giftToken?: string;
+}
+
+export function cartLineKey(item: { menuItemId: string; giftId?: string }): string {
+  return item.giftId ? `gift:${item.giftId}` : item.menuItemId;
 }
 
 /** Opaque snapshot of the cart used by the cross-restaurant "Undo" action. */
@@ -165,9 +173,12 @@ interface CartState {
   items: CartItem[];
   restaurantId: string | null;
   restaurantName: string | null;
-  addItem: (item: CartItem) => AddItemResult;
-  removeItem: (menuItemId: string) => void;
-  updateQuantity: (menuItemId: string, quantity: number) => void;
+  /** lineKey is derived from the item; callers may omit it. */
+  addItem: (item: Omit<CartItem, "lineKey"> & { lineKey?: string }) => AddItemResult;
+  /** Keyed by lineKey (menuItemId, or `gift:<id>` for gift lines). */
+  removeItem: (lineKey: string) => void;
+  /** Keyed by lineKey (menuItemId, or `gift:<id>` for gift lines). */
+  updateQuantity: (lineKey: string, quantity: number) => void;
   clear: () => void;
   /** I-04: restore a cart snapshot (used by the toast "Undo" action). */
   restoreSnapshot: (snapshot: CartSnapshot) => void;
@@ -217,7 +228,7 @@ export const useCartStore = create<CartState>((set, get) => ({
         restaurantName: current.restaurantName,
       };
       set({
-        items: [item],
+        items: [{ ...item, lineKey: cartLineKey(item) }],
         restaurantId: item.restaurantId,
         restaurantName: item.restaurantName ?? current.restaurantName,
       });
@@ -231,24 +242,19 @@ export const useCartStore = create<CartState>((set, get) => ({
     }
 
     const state = get();
-    const existing = state.items.find(
-      (i) =>
-        i.menuItemId === item.menuItemId &&
-        (i.giftId ?? null) === (item.giftId ?? null),
-    );
+    const key = cartLineKey(item);
+    const existing = state.items.find((i) => i.lineKey === key);
     if (existing) {
       set({
         items: state.items.map((i) =>
-          i.menuItemId === item.menuItemId
-            ? { ...i, quantity: i.quantity + item.quantity }
-            : i,
+          i.lineKey === key ? { ...i, quantity: i.quantity + item.quantity } : i,
         ),
         restaurantId: item.restaurantId,
         restaurantName: item.restaurantName ?? current.restaurantName,
       });
     } else {
       set({
-        items: [...state.items, item],
+        items: [...state.items, { ...item, lineKey: key }],
         restaurantId: item.restaurantId,
         restaurantName: item.restaurantName ?? current.restaurantName,
       });
@@ -257,10 +263,10 @@ export const useCartStore = create<CartState>((set, get) => ({
     return { cleared: false };
   },
 
-  removeItem: (menuItemId) => {
+  removeItem: (lineKey) => {
     const current = get();
-    const removed = current.items.find((i) => i.menuItemId === menuItemId);
-    const next = current.items.filter((i) => i.menuItemId !== menuItemId);
+    const removed = current.items.find((i) => i.lineKey === lineKey);
+    const next = current.items.filter((i) => i.lineKey !== lineKey);
     set({
       items: next,
       restaurantId: next.length > 0 ? current.restaurantId : null,
@@ -275,14 +281,14 @@ export const useCartStore = create<CartState>((set, get) => ({
     }
   },
 
-  updateQuantity: (menuItemId, quantity) => {
+  updateQuantity: (lineKey, quantity) => {
     if (quantity <= 0) {
-      get().removeItem(menuItemId);
+      get().removeItem(lineKey);
       return;
     }
     set({
       items: get().items.map((i) =>
-        i.menuItemId === menuItemId ? { ...i, quantity } : i,
+        i.lineKey === lineKey ? { ...i, quantity } : i,
       ),
     });
     persistCurrent();
@@ -326,6 +332,9 @@ export const useCartStore = create<CartState>((set, get) => ({
       }
       set({
         items: saved.items.map((i) => ({
+          lineKey: i.gift_id
+            ? `gift:${i.gift_id}`
+            : i.menu_item_id,
           menuItemId: i.menu_item_id,
           name: i.name ?? `Item ${i.menu_item_id.slice(0, 8)}`,
           basePrice: i.base_price ?? 0,

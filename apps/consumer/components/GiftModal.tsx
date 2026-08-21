@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { GiftIcon, XMarkIcon } from "@heroicons/react/24/outline";
-import { createGift, simulatePaymentWebhook, type Gift, type MenuItem } from "@/lib/api";
+import { createGift, retryGiftPayment, simulatePaymentWebhook, type Gift, type MenuItem } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 import { loadRazorpayScript, createRazorpayInstance } from "@/lib/razorpay";
 import { formatINR } from "@/lib/pricing";
@@ -28,6 +28,8 @@ export default function GiftModal({
   const [error, setError] = useState("");
   const [paying, setPaying] = useState(false);
   const [paidGift, setPaidGift] = useState<Gift | null>(null);
+  /** The created gift is reused on retry so a failed webhook never double-charges. */
+  const [createdGift, setCreatedGift] = useState<Gift | null>(null);
 
   const customizationTotal = customizations.reduce((s, c) => s + c.price_delta, 0);
   const amount = item.price + customizationTotal;
@@ -37,13 +39,19 @@ export default function GiftModal({
     setError("");
     setPaying(true);
     try {
-      const result = await createGift(accessToken, {
-        restaurant_id: restaurantId,
-        menu_item_id: item.id,
-        customizations,
-        message: message.trim() || undefined,
-        recipient_name: recipientName.trim() || undefined,
-      });
+      // First attempt creates the gift; a retry (webhook never arrived in the
+      // mock env, gateway modal dismissed, etc.) re-uses it and asks the
+      // server for the same Razorpay order — no second gift, no double charge.
+      const result = createdGift
+        ? await retryGiftPayment(accessToken, createdGift.id)
+        : await createGift(accessToken, {
+            restaurant_id: restaurantId,
+            menu_item_id: item.id,
+            customizations,
+            message: message.trim() || undefined,
+            recipient_name: recipientName.trim() || undefined,
+          });
+      setCreatedGift(result.gift);
 
       const loaded = await loadRazorpayScript();
       if (!loaded) {

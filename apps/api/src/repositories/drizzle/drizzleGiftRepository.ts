@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, and, isNull, inArray, isNotNull, type SQL } from "drizzle-orm";
 import { gifts } from "@snakzap/db";
 import type { DrizzleDb } from "../../lib/dbType";
 import type {
@@ -33,6 +33,10 @@ function mapGiftRow(row: Record<string, unknown>): GiftDTO {
     refunded_at: (row.refunded_at as Date | null)
       ? (row.refunded_at as Date).toISOString()
       : null,
+    redeemed_order_id: (row.redeemed_order_id as string | null) ?? null,
+    refund_requested_at: (row.refund_requested_at as Date | null)
+      ? (row.refund_requested_at as Date).toISOString()
+      : null,
     expires_at: (row.expires_at as Date).toISOString(),
     created_at: (row.created_at as Date).toISOString(),
     updated_at: (row.updated_at as Date).toISOString(),
@@ -41,6 +45,19 @@ function mapGiftRow(row: Record<string, unknown>): GiftDTO {
 
 export class DrizzleGiftRepository implements GiftRepository {
   constructor(private readonly db: DrizzleDb) {}
+
+  /** Runs a guarded UPDATE and reports whether any row matched (CAS). */
+  private async casUpdate(
+    table: unknown,
+    values: Record<string, unknown>,
+    cond: SQL<unknown> | undefined,
+  ): Promise<boolean> {
+    const result = (await this.db
+      .update(table)
+      .set(values)
+      .where(cond as SQL<unknown>)) as unknown as { rowCount?: number };
+    return (result.rowCount ?? 0) > 0;
+  }
 
   async create(input: CreateGiftInput): Promise<GiftDTO> {
     const id = randomUUID();
@@ -83,11 +100,14 @@ export class DrizzleGiftRepository implements GiftRepository {
   }
 
   async getBySender(senderId: string): Promise<GiftDTO[]> {
+    // DrizzleDb type doesn't expose orderBy; sort in memory (newest first).
     const rows = (await this.db
       .select()
       .from(gifts)
       .where(eq(gifts.sender_id, senderId))) as Record<string, unknown>[];
-    return rows.map(mapGiftRow);
+    return rows
+      .map(mapGiftRow)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
 
   async updateStatus(id: string, status: GiftStatus): Promise<GiftDTO | null> {
@@ -100,37 +120,99 @@ export class DrizzleGiftRepository implements GiftRepository {
 
   async markClaimed(id: string, claimedBy: string): Promise<GiftDTO | null> {
     const now = new Date();
-    await this.db
-      .update(gifts)
-      .set({ status: "CLAIMED", claimed_by: claimedBy, claimed_at: now, updated_at: now })
-      .where(eq(gifts.id, id));
+    const ok = await this.casUpdate(
+      gifts,
+      { status: "CLAIMED", claimed_by: claimedBy, claimed_at: now, updated_at: now },
+      and(eq(gifts.id, id), eq(gifts.status, "ACTIVE"), isNull(gifts.claimed_by)),
+    );
+    if (!ok) return null;
     return this.getById(id);
   }
 
   async release(id: string): Promise<GiftDTO | null> {
     const now = new Date();
-    await this.db
-      .update(gifts)
-      .set({ status: "ACTIVE", claimed_by: null, claimed_at: null, updated_at: now })
-      .where(eq(gifts.id, id));
+    const ok = await this.casUpdate(
+      gifts,
+      { status: "ACTIVE", claimed_by: null, claimed_at: null, updated_at: now },
+      and(eq(gifts.id, id), eq(gifts.status, "CLAIMED"), isNull(gifts.redeemed_order_id)),
+    );
+    if (!ok) return null;
     return this.getById(id);
   }
 
-  async markFulfilled(id: string): Promise<GiftDTO | null> {
+  async bindToOrder(id: string, orderId: string): Promise<GiftDTO | null> {
     const now = new Date();
-    await this.db
-      .update(gifts)
-      .set({ status: "FULFILLED", fulfilled_at: now, updated_at: now })
-      .where(eq(gifts.id, id));
+    const ok = await this.casUpdate(
+      gifts,
+      { redeemed_order_id: orderId, updated_at: now },
+      and(eq(gifts.id, id), eq(gifts.status, "CLAIMED"), isNull(gifts.redeemed_order_id)),
+    );
+    if (!ok) return null;
+    return this.getById(id);
+  }
+
+  async releaseFromOrder(id: string, orderId: string): Promise<GiftDTO | null> {
+    const now = new Date();
+    const ok = await this.casUpdate(
+      gifts,
+      { status: "ACTIVE", claimed_by: null, claimed_at: null, redeemed_order_id: null, updated_at: now },
+      and(eq(gifts.id, id), eq(gifts.redeemed_order_id, orderId)),
+    );
+    if (!ok) return null;
+    return this.getById(id);
+  }
+
+  async markFulfilled(id: string, orderId: string): Promise<GiftDTO | null> {
+    const now = new Date();
+    const ok = await this.casUpdate(
+      gifts,
+      { status: "FULFILLED", fulfilled_at: now, updated_at: now },
+      and(eq(gifts.id, id), eq(gifts.status, "CLAIMED"), eq(gifts.redeemed_order_id, orderId)),
+    );
+    if (!ok) return null;
     return this.getById(id);
   }
 
   async markRefunded(id: string): Promise<GiftDTO | null> {
     const now = new Date();
-    await this.db
-      .update(gifts)
-      .set({ status: "REFUNDED", refunded_at: now, updated_at: now })
-      .where(eq(gifts.id, id));
+    const ok = await this.casUpdate(
+      gifts,
+      { status: "REFUNDED", refunded_at: now, updated_at: now },
+      and(eq(gifts.id, id), inArray(gifts.status, ["REFUNDING", "EXPIRED", "ACTIVE"])),
+    );
+    if (!ok) return null;
+    return this.getById(id);
+  }
+
+  async markPaid(id: string): Promise<GiftDTO | null> {
+    const now = new Date();
+    const ok = await this.casUpdate(
+      gifts,
+      { status: "ACTIVE", updated_at: now },
+      and(eq(gifts.id, id), eq(gifts.status, "PENDING")),
+    );
+    if (!ok) return null;
+    return this.getById(id);
+  }
+
+  async markRefundSubmitted(id: string): Promise<GiftDTO | null> {
+    const now = new Date();
+    const ok = await this.casUpdate(
+      gifts,
+      { status: "REFUNDING", refund_requested_at: now, updated_at: now },
+      and(eq(gifts.id, id), isNull(gifts.refund_requested_at)),
+    );
+    if (!ok) return null;
+    return this.getById(id);
+  }
+
+  async clearRefundSubmitted(id: string): Promise<GiftDTO | null> {
+    const ok = await this.casUpdate(
+      gifts,
+      { refund_requested_at: null, updated_at: new Date() },
+      and(eq(gifts.id, id), isNotNull(gifts.refund_requested_at)),
+    );
+    if (!ok) return null;
     return this.getById(id);
   }
 
