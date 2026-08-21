@@ -85,6 +85,20 @@
       "when": 1792560003000,
       "tag": "0011_schema_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1787228318538,
+      "tag": "0012_easy_talos",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1787278987382,
+      "tag": "0013_thankful_monster_badoon",
+      "breakpoints": true
     }
   ]
 }

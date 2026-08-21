@@ -95,3 +95,31 @@ describe("Exported enums", () => {
     expect(userRoleEnum.enumValues).toContain("SUPER_ADMIN");
   });
 });
+
+describe("Social Gifting schema", () => {
+  it("defines the gift_status enum", () => {
+    expect(sql).toMatch(/CREATE TYPE "public"\."gift_status"/);
+    for (const s of ["PENDING", "ACTIVE", "CLAIMED", "FULFILLED", "EXPIRED", "REFUNDING", "REFUNDED", "CANCELLED"]) {
+      expect(sql).toMatch(new RegExp(s));
+    }
+  });
+
+  it("defines the gifts table with token + code + expiry", () => {
+    expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS "gifts"/);
+    expect(sql).toMatch(/"claim_token"/);
+    expect(sql).toMatch(/"claim_code"/);
+    expect(sql).toMatch(/"expires_at"/);
+    expect(sql).toMatch(/"price_paid"/);
+    expect(sql).toMatch(/"item_snapshot"/);
+  });
+
+  it("makes payments.order_id nullable and adds payments.gift_id", () => {
+    expect(sql).toMatch(/"gift_id" uuid/);
+    expect(sql).toMatch(/payments_order_id/);
+    expect(sql).toMatch(/payments_gift_id_idx/);
+  });
+
+  it("adds order_items.gift_id", () => {
+    expect(sql).toMatch(/"gift_id" uuid/);
+  });
+});

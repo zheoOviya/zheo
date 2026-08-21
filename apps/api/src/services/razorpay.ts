@@ -44,6 +44,11 @@ if (config.env === "production" && (!config.razorpay.keyId || !config.razorpay.k
   throw new Error("RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET are required in production");
 }
 
+/** True when the gateway is the offline mock (test/preview without real keys). */
+export function isRazorpayMockMode(): boolean {
+  return MOCK_MODE;
+}
+
 function razorpayOrderId(): string {
   return `order_mock_${randomUUID().slice(0, 8)}`;
 }
@@ -102,6 +107,53 @@ export class RazorpayService {
     const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
 
     return signature === expected;
+  }
+
+  async refund(paymentId: string, amountInPaise: number): Promise<{ id: string; status: string }> {
+    if (MOCK_MODE) {
+      return { id: `refund_mock_${randomUUID().slice(0, 8)}`, status: "processed" };
+    }
+    const auth = Buffer.from(
+      `${config.razorpay.keyId}:${config.razorpay.keySecret}`,
+    ).toString("base64");
+    const res = await fetch(
+      `https://api.razorpay.com/v1/payments/${encodeURIComponent(paymentId)}/refund`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ amount: amountInPaise }),
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Razorpay refund failed: ${res.status} ${body}`);
+    }
+    return res.json();
+  }
+
+  buildMockRefundWebhook(
+    razorpayPaymentId: string,
+    amountInPaise: number,
+  ): { payload: { event: string; payload: { refund: { entity: { id: string; payment_id: string; amount: number; status: string } } } }; rawBody: string; signature: string } {
+    const payload = {
+      event: "refund.processed",
+      payload: {
+        refund: {
+          entity: {
+            id: `refund_mock_${randomUUID().slice(0, 8)}`,
+            payment_id: razorpayPaymentId,
+            amount: amountInPaise,
+            status: "processed",
+          },
+        },
+      },
+    };
+    const rawBody = JSON.stringify(payload);
+    const signature = `valid_sig_${randomUUID().slice(0, 8)}`;
+    return { payload, rawBody, signature };
   }
 
   buildMockWebhook(

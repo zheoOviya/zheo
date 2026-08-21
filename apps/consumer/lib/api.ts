@@ -218,6 +218,8 @@ export interface PersistedCartItem {
   base_price?: number;
   customizations?: { name: string; price_delta: number }[];
   restaurant_id?: string;
+  gift_id?: string | null;
+  gift_token?: string | null;
 }
 
 export interface PersistedCart {
@@ -552,6 +554,114 @@ export function fetchGroupCart(groupCartToken: string): Promise<GroupCartSnapsho
   return fetcher<GroupCartSnapshot>(
     `/api/v1/orders/group/cart?token=${encodeURIComponent(groupCartToken)}`,
   );
+}
+
+// ============================================
+// Social Gifting (Phase 5) - send a menu item to a friend via link + code
+// ============================================
+
+export type GiftStatus =
+  | "PENDING"
+  | "ACTIVE"
+  | "CLAIMED"
+  | "FULFILLED"
+  | "EXPIRED"
+  | "REFUNDING"
+  | "REFUNDED"
+  | "CANCELLED";
+
+export interface GiftItemSnapshot {
+  name: string;
+  price: number;
+  image_url: string | null;
+  dietary_tags: Record<string, boolean>;
+  spice_level: number;
+  customizations: { name: string; price_delta: number }[];
+}
+
+export interface Gift {
+  id: string;
+  sender_id: string;
+  restaurant_id: string;
+  menu_item_id: string;
+  item_snapshot: GiftItemSnapshot;
+  price_paid: number;
+  message: string | null;
+  recipient_name: string | null;
+  claim_token: string;
+  claim_code: string;
+  status: GiftStatus;
+  payment_id: string | null;
+  claimed_by: string | null;
+  claimed_at: string | null;
+  fulfilled_at: string | null;
+  refunded_at: string | null;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GiftLanding {
+  gift: Gift;
+  restaurant: { name: string; image_url: string | null } | null;
+  sender_display: string;
+  claimable: boolean;
+  claim_block_reason?: string;
+}
+
+export interface CreateGiftResult {
+  gift: Gift;
+  razorpay_order_id: string;
+  amount: number;
+  currency: string;
+}
+
+export function createGift(
+  token: string,
+  input: {
+    restaurant_id: string;
+    menu_item_id: string;
+    customizations: { name: string; price_delta: number }[];
+    message?: string;
+    recipient_name?: string;
+  },
+): Promise<CreateGiftResult> {
+  return authedFetcher<CreateGiftResult>("/api/v1/gifts", token, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function retryGiftPayment(token: string, giftId: string): Promise<CreateGiftResult> {
+  return authedFetcher<CreateGiftResult>(`/api/v1/gifts/${encodeURIComponent(giftId)}/pay`, token, {
+    method: "POST",
+  });
+}
+
+export function cancelGift(token: string, giftId: string): Promise<Gift> {
+  return authedFetcher<Gift>(`/api/v1/gifts/${encodeURIComponent(giftId)}/cancel`, token, {
+    method: "POST",
+  });
+}
+
+export function fetchMyGifts(token: string): Promise<Gift[]> {
+  return authedFetcher<Gift[]>("/api/v1/gifts/mine", token);
+}
+
+export function fetchGiftLanding(claimToken: string): Promise<GiftLanding> {
+  return fetcher<GiftLanding>(`/api/v1/gifts/t/${encodeURIComponent(claimToken)}`);
+}
+
+export function claimGift(token: string, claimToken: string): Promise<Gift> {
+  return authedFetcher<Gift>(`/api/v1/gifts/t/${encodeURIComponent(claimToken)}/claim`, token, {
+    method: "POST",
+  });
+}
+
+export function releaseGift(token: string, claimToken: string): Promise<Gift> {
+  return authedFetcher<Gift>(`/api/v1/gifts/t/${encodeURIComponent(claimToken)}/release`, token, {
+    method: "POST",
+  });
 }
 
 // ============================================

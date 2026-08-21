@@ -3,6 +3,7 @@ export * from "./catalog";
 export * from "./chain";
 export * from "./ordering";
 export * from "./payments";
+export * from "./gifts";
 export * from "./fulfillment";
 export * from "./killswitches";
 export * from "./supporttickets";

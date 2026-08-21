@@ -3,7 +3,7 @@ import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
 import { rateLimiter } from "../middleware/rateLimiter";
-import { sharedOrderRepo, sharedPaymentRepo } from "../repositories/shared";
+import { sharedGiftRepo, sharedOrderRepo, sharedPaymentRepo } from "../repositories/shared";
 import { PaymentService, type PaymentMethod } from "../services/payments";
 
 // ============================================
@@ -22,7 +22,7 @@ const CreateOrderSchema = z.object({
   method: PaymentMethodSchema.default("upi"),
 });
 
-const paymentService = new PaymentService(sharedPaymentRepo, sharedOrderRepo);
+const paymentService = new PaymentService(sharedPaymentRepo, sharedOrderRepo, sharedGiftRepo);
 
 export const paymentsRouter: Router = Router();
 
@@ -62,7 +62,13 @@ paymentsRouter.post(
       throw new AppError("MISSING_SIGNATURE", "X-Razorpay-Signature header is required", 401);
     }
 
-    const rawBody = JSON.stringify(req.body);
+    // HMAC must cover the exact bytes Razorpay sent — JSON.stringify(req.body)
+    // re-serializes and breaks the signature. req.rawBody is captured by the
+    // body-parser middleware in app.ts.
+    const rawBody =
+      typeof req.rawBody === "string"
+        ? req.rawBody
+        : req.rawBody?.toString("utf8") ?? JSON.stringify(req.body);
 
     const result = await paymentService.processWebhook(rawBody, signature);
 
@@ -70,6 +76,7 @@ paymentsRouter.post(
       processed: result.processed,
       idempotent: result.idempotent,
       order_status: result.orderStatus,
+      gift_status: result.giftStatus,
     });
   }),
 );

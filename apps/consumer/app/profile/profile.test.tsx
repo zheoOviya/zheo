@@ -51,6 +51,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
     updateSpiceTolerance: vi.fn(),
     applyReferral: vi.fn(),
     createSupportTicket: vi.fn(),
+    fetchMyGifts: vi.fn(),
+    cancelGift: vi.fn(),
+    retryGiftPayment: vi.fn(),
   };
 });
 

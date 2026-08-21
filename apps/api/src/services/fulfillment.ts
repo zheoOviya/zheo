@@ -3,6 +3,7 @@ import { createEventEnvelope, emit } from "../lib/eventBus";
 import { publishStatusUpdate } from "../lib/websocket";
 import { AppError } from "../middleware/envelope";
 import type { OrderDTO, OrderRepository } from "../repositories/orderRepository";
+import type { GiftRepository } from "../repositories/giftRepository";
 import type { OrderStatus } from "@snakzap/types";
 
 // ============================================
@@ -36,7 +37,10 @@ const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
 };
 
 export class FulfillmentService {
-  constructor(private readonly orderRepo: OrderRepository) {}
+  constructor(
+    private readonly orderRepo: OrderRepository,
+    private readonly giftRepo?: GiftRepository,
+  ) {}
 
   /**
    * Vendor cancellation. Allowed only before the order becomes ready for
@@ -67,6 +71,15 @@ export class FulfillmentService {
       restaurant_id: order.restaurant_id,
       status: "CANCELLED",
     });
+
+    if (this.giftRepo) {
+      const giftLines = order.items.filter((i) => i.gift_id);
+      for (const line of giftLines) {
+        // Unbind only when THIS order holds the gift (CAS); a gift already
+        // re-deployed into another order stays put.
+        if (line.gift_id) await this.giftRepo.releaseFromOrder(line.gift_id, order.id);
+      }
+    }
     return updated;
   }
 
@@ -222,6 +235,30 @@ export class FulfillmentService {
       }),
     );
 
+    await this.fulfillGifts(updated);
+
     return updated;
+  }
+
+  private async fulfillGifts(order: OrderDTO): Promise<void> {
+    if (!this.giftRepo) return;
+    const giftLines = order.items.filter((i) => i.gift_id);
+    for (const line of giftLines) {
+      const giftId = line.gift_id;
+      if (!giftId) continue;
+      // CAS fulfill: only from CLAIMED and only when THIS order is the one the
+      // gift is bound to. A gift bound to another order (or already fulfilled)
+      // returns null, so it is fulfilled and stamped exactly once.
+      const gift = await this.giftRepo.markFulfilled(giftId, order.id);
+      if (!gift) continue;
+      await emit(
+        createEventEnvelope("GiftFulfilled", giftId, {
+          gift_id: giftId,
+          sender_id: gift.sender_id,
+          restaurant_id: gift.restaurant_id,
+          order_id: order.id,
+        }),
+      );
+    }
   }
 }

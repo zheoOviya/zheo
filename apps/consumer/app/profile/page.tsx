@@ -8,16 +8,21 @@ import { AppHeader } from "@/components/AppHeader";
 import StampCardProgress from "@/components/StampCardProgress";
 import { useTheme } from "@/components/ThemeProvider";
 import { useAuthStore } from "@/lib/store";
+import { formatINR } from "@/lib/pricing";
 import {
   applyReferral,
+  cancelGift,
   createSupportTicket,
+  fetchMyGifts,
   fetchReferralProfile,
   fetchRestaurants,
   fetchStampCards,
   fetchStreak,
   fetchVipStatus,
   fetchWallet,
+  retryGiftPayment,
   updateSpiceTolerance,
+  type Gift,
   type ReferralProfile,
   type Restaurant,
   type StampCard,
@@ -581,6 +586,66 @@ function VipSupportCard({
   );
 }
 
+function GiftsSection({ gifts, onUpdated }: { gifts: Gift[]; onUpdated: () => void }) {
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  async function handleCancel(id: string) {
+    if (!accessToken) return;
+    setBusy(id);
+    try {
+      await cancelGift(accessToken, id);
+      onUpdated();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleRetry(id: string) {
+    if (!accessToken) return;
+    setBusy(id);
+    try {
+      await retryGiftPayment(accessToken, id);
+      onUpdated();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-primary-900/40 dark:shadow-primary-900/20">
+      <h2 className="mb-3 text-lg font-semibold text-neutral-700 dark:text-neutral-100">My Gifts</h2>
+      <ul className="space-y-3">
+        {gifts.map((gift) => (
+          <li key={gift.id} className="flex items-center justify-between gap-3 rounded-xl border border-neutral-100 p-3 dark:border-neutral-800">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold text-neutral-800 dark:text-neutral-100">
+                {gift.item_snapshot.name}
+              </p>
+              <p className="text-xs text-neutral-400">
+                {formatINR(gift.price_paid)} · {gift.status}
+                {gift.recipient_name ? ` · for ${gift.recipient_name}` : ""}
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              {gift.status === "PENDING" && (
+                <button type="button" onClick={() => void handleRetry(gift.id)} disabled={busy === gift.id} className="btn-outline rounded-full px-3 py-1 text-xs font-semibold">
+                  Retry payment
+                </button>
+              )}
+              {(gift.status === "ACTIVE" || gift.status === "PENDING") && (
+                <button type="button" onClick={() => void handleCancel(gift.id)} disabled={busy === gift.id} className="rounded-full border border-red-500/30 px-3 py-1 text-xs font-semibold text-red-600">
+                  Cancel
+                </button>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function ProfileContent() {
   const accessToken = useAuthStore((s) => s.accessToken);
   const { theme, toggleTheme } = useTheme();
@@ -591,7 +656,17 @@ function ProfileContent() {
   const [streak, setStreak] = useState<StreakData | null>(null);
   const [tolerance, setTolerance] = useState<number | null>(null);
   const [vip, setVip] = useState<VipStatus | null>(null);
+  const [gifts, setGifts] = useState<Gift[] | null>(null);
   const [loadError, setLoadError] = useState("");
+
+  const refreshGifts = useCallback(async () => {
+    if (!accessToken) return;
+    try {
+      setGifts(await fetchMyGifts(accessToken));
+    } catch {
+      // keep the current list until the next profile load
+    }
+  }, [accessToken]);
   const [loadingFlags, setLoadingFlags] = useState<{
     wallet: boolean;
     streak: boolean;
@@ -633,6 +708,7 @@ function ProfileContent() {
     void load("profile", () => fetchReferralProfile(accessToken), setProfile);
     void load("cards", () => fetchStampCards(accessToken), setCards);
     void load("restaurants", () => fetchRestaurants(), setRestaurants);
+    void load("gifts", () => fetchMyGifts(accessToken), setGifts);
 
     const timer = window.setTimeout(() => {
       if (cancelled) return;
@@ -683,6 +759,10 @@ function ProfileContent() {
       )}
 
       <div className="space-y-6">
+        {gifts && gifts.length > 0 && (
+          <GiftsSection gifts={gifts} onUpdated={() => void refreshGifts()} />
+        )}
+
         {loadingFlags.wallet || loadingFlags.streak ? (
           <section
             role="status"

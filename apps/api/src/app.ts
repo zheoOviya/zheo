@@ -21,6 +21,7 @@ import { etaRouter, loyaltyRouter } from "./routes/loyalty";
 import { usersRouter } from "./routes/users";
 import { cartRouter } from "./routes/cart";
 import { cateringRouter } from "./routes/catering";
+import { giftsRouter } from "./routes/gifts";
 import { chainsRouter } from "./routes/chains";
 import { wearRouter } from "./routes/wear";
 import { supportRouter } from "./routes/support";
@@ -174,6 +175,7 @@ export function createApp(): Express {
   app.use(`${API_PREFIX}/orders`, groupOrdersRouter);
   app.use(`${API_PREFIX}/orders`, ordersRouter);
   app.use(`${API_PREFIX}/orders`, cateringRouter);
+  app.use(`${API_PREFIX}/gifts`, giftsRouter);
   app.use(`${API_PREFIX}/wear`, wearRouter);
   app.use(`${API_PREFIX}/support`, supportRouter);
   app.use(API_PREFIX, cartRouter);

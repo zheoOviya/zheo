@@ -189,6 +189,7 @@ describe("Discovery routes", () => {
             customizations: [],
             customization_total: 0,
             item_subtotal: 1100,
+            gift_id: null,
           },
         ],
         total_amount: 1100,

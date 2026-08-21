@@ -68,6 +68,11 @@ async function main() {
   const { seedCatalogData } = await import("./seed/catalogSeed");
   await seedCatalogData();
 
+  // Daily gift expiry + refund sweep (social gifting). Unref'd timer so it
+  // never keeps the process alive.
+  const { startGiftExpirySweep } = await import("./services/giftExpirySweep");
+  startGiftExpirySweep();
+
   // WebSocket upgrade handling on the same HTTP server (EOS Layer 1, P05)
   initWebSocketServer(server);
 

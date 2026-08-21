@@ -35,6 +35,10 @@ export const EventNameSchema = z.enum([
   "TrendingQueried",
   "GroupOrderCreated",
   "GroupOrderItemAdded",
+  "GiftPaid",
+  "GiftFulfilled",
+  "GiftExpired",
+  "GiftRefunded",
   "UserArrivedAtRestaurant",
   "WalletCashbackCredited",
   "StreakBadgeUnlocked",
@@ -223,6 +227,37 @@ export const GroupOrderItemAddedEventSchema = z.object({
 export type GroupOrderItemAddedEvent = z.infer<typeof GroupOrderItemAddedEventSchema>;
 
 // ============================================
+// Social Gifting events
+// ============================================
+
+export const GiftPaidEventSchema = z.object({
+  gift_id: z.string().uuid(),
+  payment_id: z.string().uuid(),
+  amount: z.number().nonnegative(),
+});
+export type GiftPaidEvent = z.infer<typeof GiftPaidEventSchema>;
+
+export const GiftFulfilledEventSchema = z.object({
+  gift_id: z.string().uuid(),
+  sender_id: z.string().uuid(),
+  restaurant_id: z.string().uuid(),
+  order_id: z.string().uuid(),
+});
+export type GiftFulfilledEvent = z.infer<typeof GiftFulfilledEventSchema>;
+
+export const GiftExpiredEventSchema = z.object({
+  gift_id: z.string().uuid(),
+});
+export type GiftExpiredEvent = z.infer<typeof GiftExpiredEventSchema>;
+
+export const GiftRefundedEventSchema = z.object({
+  gift_id: z.string().uuid(),
+  sender_id: z.string().uuid(),
+  amount: z.number().nonnegative(),
+});
+export type GiftRefundedEvent = z.infer<typeof GiftRefundedEventSchema>;
+
+// ============================================
 // P02 User Arrived At Restaurant (fulfillment context)
 // Emitted when the user's location crosses the 100 m geo-fence while the
 // order is READY_FOR_PICKUP - auto check-in (P03) has just happened.
@@ -380,6 +415,10 @@ export type EventPayloadMap = {
   TrendingQueried: TrendingQueriedEvent;
   GroupOrderCreated: GroupOrderCreatedEvent;
   GroupOrderItemAdded: GroupOrderItemAddedEvent;
+  GiftPaid: GiftPaidEvent;
+  GiftFulfilled: GiftFulfilledEvent;
+  GiftExpired: GiftExpiredEvent;
+  GiftRefunded: GiftRefundedEvent;
   UserArrivedAtRestaurant: UserArrivedAtRestaurantEvent;
   WalletCashbackCredited: WalletCashbackCreditedEvent;
   StreakBadgeUnlocked: StreakBadgeUnlockedEvent;

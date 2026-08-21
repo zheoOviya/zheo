@@ -34,6 +34,7 @@ function seedOrder(id: string): OrderDTO {
     customizations: [],
     customization_total: 0,
     item_subtotal: 220,
+    gift_id: null,
   };
   return orderRepo._seed({
     id,
