@@ -265,6 +265,11 @@ describe("POST /api/v1/orders with a gift line", () => {
       .expect(409);
 
     expect(res.body.error.code).toBe("GIFT_ALREADY_REDEEMED");
+
+    // The DRAFT order created before the bind failure must be retired to
+    // CANCELLED, not left leaking in DRAFT forever.
+    const orders = await orderRepo.getAll();
+    expect(orders.filter((o) => o.status === "CANCELLED")).toHaveLength(1);
   });
 
   it("releases a gift back to ACTIVE when the redeeming order is cancelled", async () => {
