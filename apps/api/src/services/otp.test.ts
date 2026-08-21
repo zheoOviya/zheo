@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRedis, resetRedisForTests, setRedisForTests } from "../lib/redis";
 import { maskPhone, sendOtp, verifyOtp } from "./otp";
 
@@ -116,5 +116,34 @@ describe("OTP service", () => {
     // or a stale browser bundle.
     const result = await verifyOtp("+919876543210", "123456");
     expect(result.valid).toBe(true);
+  });
+
+  it("skips the real SMS dispatch when the dev auth bypass is active", async () => {
+    const prevNodeEnv = process.env.NODE_ENV;
+    const { config } = await import("../config");
+    const prevBypass = config.auth.allowDevAuthBypass;
+
+    // Flip to the preview/dev setup: NODE_ENV=development with the explicit
+    // auth bypass, so the ONLY reason sendSms short-circuits is the bypass.
+    process.env.NODE_ENV = "development";
+    (config.auth as { allowDevAuthBypass: boolean }).allowDevAuthBypass = true;
+    // Pin a memory client so flipping NODE_ENV does not construct a real ioredis.
+    setRedisForTests(new MemoryRedis());
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("ok", { status: 200 }));
+    try {
+      const result = await sendOtp("+919876543210");
+      // The on-screen OTP still works and NO real SMS is dispatched (no
+      // network dependency in preview/dev, so login cannot flake on the
+      // upstream gateway).
+      expect(result.sent).toBe(true);
+      expect(result.demoOtp).toMatch(/^[0-9]{6}$/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      process.env.NODE_ENV = prevNodeEnv;
+      (config.auth as { allowDevAuthBypass: boolean }).allowDevAuthBypass = prevBypass;
+    }
   });
 });
