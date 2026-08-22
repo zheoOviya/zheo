@@ -82,15 +82,47 @@ describe("Gift routes", () => {
         .send({
           restaurant_id: REST_ID,
           menu_item_id: MENU_ITEM_1,
-          customizations: [{ name: "Extra Cheese", price_delta: 30 }],
+          customizations: [{ name: "Spicy", price_delta: 999 }],
           message: "Enjoy!",
         })
         .expect(201);
 
       expect(res.body.success).toBe(true);
       expect(res.body.data.gift.status).toBe("PENDING");
-      expect(res.body.data.gift.price_paid).toBe(250);
+      // Forged client delta (999) is ignored; the catalog prices "Spicy" at 10.
+      expect(res.body.data.gift.price_paid).toBe(230);
+      // The created payment amount must be the corrected gift price.
+      expect(res.body.data.amount).toBe(230);
       expect(res.body.data.razorpay_order_id).toMatch(/^order_mock_/);
+    });
+
+    it("rejects a customization the item does not offer", async () => {
+      const res = await request(app)
+        .post("/api/v1/gifts")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          menu_item_id: MENU_ITEM_1,
+          customizations: [{ name: "Truffle Oil", price_delta: 50 }],
+        })
+        .expect(400);
+      expect(res.body.error.code).toBe("INVALID_CUSTOMIZATION");
+    });
+
+    it("rejects a customization requested twice", async () => {
+      const res = await request(app)
+        .post("/api/v1/gifts")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          menu_item_id: MENU_ITEM_1,
+          customizations: [
+            { name: "Spicy", price_delta: 10 },
+            { name: "Spicy", price_delta: 10 },
+          ],
+        })
+        .expect(400);
+      expect(res.body.error.code).toBe("INVALID_CUSTOMIZATION");
     });
 
     it("returns the same Razorpay order on pay retries (idempotent)", async () => {
