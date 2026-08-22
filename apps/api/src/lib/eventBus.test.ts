@@ -142,7 +142,7 @@ describe("eventBus", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it("bounded dedup: after 10_000 distinct emits an old event_id is no longer suppressed", async () => {
+  it("bounded FIFO dedup: evicts the oldest id while the capacity-crossing id stays protected", async () => {
     // The 10k emit loop writes one log line per event; silence the logger so
     // the test stays deterministic under the default 5s test timeout.
     vi.spyOn(logger, "info").mockImplementation((() => {}) as never);
@@ -150,18 +150,38 @@ describe("eventBus", () => {
     onEvent("OrderCreated", handler);
     await initEventSubscriber();
     const sub = getRedis().duplicate() as unknown as FakePubSub;
+
     const first = createEventEnvelope("OrderCreated", "order-first", {});
     await emit(first);
-    for (let i = 0; i < 10_000; i++) {
+
+    const crossing = createEventEnvelope(
+      "OrderCreated",
+      "threshold-crossing-event",
+      {},
+    );
+    // warmup ids #2..#10_000 (first was #1), then the crossing emit is the
+    // 10_001st id -> crosses the 10_000-capacity of the dedup set.
+    for (let i = 0; i < 9_999; i++) {
       await emit(createEventEnvelope("OrderCreated", `order-${i}`, {}));
     }
-    // first id was evicted by the prune at >10_000 entries, so a looped-back
-    // copy is treated as remote and dispatched again (memory stays bounded).
+    await emit(crossing);
+
     sub.simulateInbound("snakzap:events", JSON.stringify(first));
+    sub.simulateInbound("snakzap:events", JSON.stringify(crossing));
     await new Promise((r) => setTimeout(r, 10));
+
+    // The crossing event must NOT be double-dispatched on the originating
+    // instance: its id must survive the eviction that it triggered.
+    const crossingCalls = handler.mock.calls.filter(
+      (c) => c[0].aggregate_id === "threshold-crossing-event",
+    );
+    expect(crossingCalls).toHaveLength(1);
+
+    // The oldest id must eventually be evicted (memory stays bounded at
+    // ~10_000 entries), so its looped-back copy is dispatched again.
     const firstCalls = handler.mock.calls.filter(
       (c) => c[0].aggregate_id === "order-first",
     );
-    expect(firstCalls.length).toBe(2);
+    expect(firstCalls).toHaveLength(2);
   });
 });

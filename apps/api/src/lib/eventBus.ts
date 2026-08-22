@@ -21,8 +21,10 @@ export type EventHandler = (
 const handlers = new Map<EventName, EventHandler[]>();
 let subscriberInitialized = false;
 // Bounded set of event_ids this process has emitted, so broadcasts that loop
-// back to the originating instance are not dispatched a second time.
+// back to the originating instance are not dispatched a second time. Evicted
+// FIFO (oldest id) so the id that crosses the capacity stays protected.
 const recentlyEmitted = new Set<string>();
+const MAX_RECENTLY_EMITTED = 10_000;
 
 export function resetEventBusForTests(): void {
   handlers.clear();
@@ -63,8 +65,11 @@ export async function emit<K extends EventName>(
 ): Promise<void> {
   await dispatchToHandlers(event as TypedEventEnvelope<EventName>);
   recentlyEmitted.add(event.event_id);
-  if (recentlyEmitted.size > 10_000) {
-    recentlyEmitted.clear();
+  if (recentlyEmitted.size > MAX_RECENTLY_EMITTED) {
+    // FIFO eviction: drop only the oldest id so the id that just crossed the
+    // capacity remains protected against its own self-echo loop-back.
+    const oldest = recentlyEmitted.values().next().value;
+    if (oldest) recentlyEmitted.delete(oldest);
   }
 
   try {
