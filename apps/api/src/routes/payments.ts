@@ -45,8 +45,11 @@ paymentsRouter.post(
       throw new AppError("VALIDATION_ERROR", "Invalid request body", 400, body.error.flatten());
     }
 
+    const userId = res.locals.userId as string;
+
     const result = await paymentService.createPaymentOrder(
       body.data.order_id,
+      userId,
       body.data.method as PaymentMethod,
     );
 

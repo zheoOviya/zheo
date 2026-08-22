@@ -41,6 +41,7 @@ export class PaymentService {
 
   async createPaymentOrder(
     orderId: string,
+    userId: string,
     method: PaymentMethod = "upi",
   ): Promise<{
     payment_method: PaymentMethod;
@@ -51,6 +52,14 @@ export class PaymentService {
     const order = await this.orderRepo.getById(orderId);
     if (!order) {
       throw new AppError("ORDER_NOT_FOUND", "Order not found", 404);
+    }
+
+    // Ownership boundary: only the order's owner may initiate payment or
+    // confirm COD. Checked before ANY status/payment/gateway/event side
+    // effect AND before the DRAFT check so a foreign caller cannot probe
+    // another user's order state.
+    if (order.user_id !== userId) {
+      throw new AppError("FORBIDDEN", "Not your order", 403);
     }
 
     if (order.status !== "DRAFT") {

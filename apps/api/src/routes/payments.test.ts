@@ -1,8 +1,9 @@
 import type { Express } from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
+import { onEvent } from "../lib/eventBus";
 import { jwtService } from "../services/jwt";
 import { razorpayService } from "../services/razorpay";
 import { sharedOrderRepo } from "../repositories/shared";
@@ -10,11 +11,13 @@ import { sharedPaymentRepo } from "../repositories/shared";
 
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001";
+const OWNER_ID = "u00000000-0000-4000-8000-000000000001";
+const ATTACKER_ID = "u00000000-0000-4000-8000-000000000099";
 
 function authHeaders(userId?: string) {
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? "u00000000-0000-4000-8000-000000000001",
+      sub: userId ?? OWNER_ID,
       phone: "+919876543210",
       role: "CONSUMER",
       device_fingerprint: "fp_test_device_abc1234",
@@ -94,6 +97,67 @@ describe("Payments routes", () => {
         .expect(401);
 
       expect(res.body.error.code).toBe("UNAUTHORIZED");
+    });
+
+    it("returns 403 FORBIDDEN when another user initiates payment on your order", async () => {
+      const { orderId } = await createDraftOrder(app);
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders(ATTACKER_ID))
+        .send({ order_id: orderId })
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
+    });
+
+    it("leaves no side effects when a foreign caller initiates online payment", async () => {
+      const { orderId } = await createDraftOrder(app);
+      const createOrderSpy = vi.spyOn(razorpayService, "createOrder");
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders(ATTACKER_ID))
+        .send({ order_id: orderId })
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
+      expect(createOrderSpy).not.toHaveBeenCalled();
+      expect(await sharedPaymentRepo.getByOrderId(orderId)).toBeNull();
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("DRAFT");
+
+      createOrderSpy.mockRestore();
+    });
+
+    it("returns 403 FORBIDDEN when another user selects COD on your order", async () => {
+      const { orderId } = await createDraftOrder(app);
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders(ATTACKER_ID))
+        .send({ order_id: orderId, method: "cod" })
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
+    });
+
+    it("leaves no side effects when a foreign caller selects COD", async () => {
+      const { orderId } = await createDraftOrder(app);
+      const captured: string[] = [];
+      onEvent("CashOnPickupSelected", async (evt) => {
+        captured.push(evt.aggregate_id);
+      });
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders(ATTACKER_ID))
+        .send({ order_id: orderId, method: "cod" })
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
+      expect(await sharedPaymentRepo.getByOrderId(orderId)).toBeNull();
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("DRAFT");
+      expect(captured).toEqual([]);
     });
 
     it("supports Cash on Pickup (COD): confirms order without a gateway", async () => {
