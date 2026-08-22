@@ -185,18 +185,15 @@ describe("Gift routes", () => {
       });
       const active = await sharedGiftRepo.markPaid(gift.id);
       if (!active) throw new Error("failed to activate gift");
-      const payment = await sharedPaymentRepo.create({
+      const payment = await sharedPaymentRepo._seedFinalized({
         gift_id: gift.id,
         razorpay_order_id: "order_mock_refund",
-        amount: 220,
-      });
-      await sharedPaymentRepo.updateWebhookResult(payment.id, {
         razorpay_payment_id: "pay_mock_refund",
+        amount: 220,
         status: "CAPTURED",
         method: "upi",
-        webhook_event: "payment.captured",
-        webhook_raw: null,
       });
+      void payment;
 
       const res = await request(app)
         .post(`/api/v1/gifts/${gift.id}/cancel`)

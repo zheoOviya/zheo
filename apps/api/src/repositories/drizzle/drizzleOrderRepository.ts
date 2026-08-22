@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { orders, order_items } from "@snakzap/db";
 import type { OrderStatus } from "@snakzap/types";
 import type { DrizzleDb } from "../../lib/dbType";
@@ -15,6 +15,17 @@ import type { PriceBreakdown } from "../../services/pricing";
 // ============================================
 // Ordering context repository (Drizzle/Postgres)
 // ============================================
+
+/** Normalizes drizzle execute()/select() results into a plain row array. */
+function toRows(result: unknown): Record<string, unknown>[] {
+  if (Array.isArray(result)) return result as Record<string, unknown>[];
+  if (result && typeof result === "object") {
+    const r = result as { rows?: unknown; row?: unknown };
+    if (Array.isArray(r.rows)) return r.rows as Record<string, unknown>[];
+    if (r.row) return [r.row as Record<string, unknown>];
+  }
+  return [];
+}
 
 function mapOrderRow(
   row: Record<string, unknown>,
@@ -230,6 +241,25 @@ export class DrizzleOrderRepository implements OrderRepository {
       .update(orders)
       .set({ status, updated_at: new Date() })
       .where(eq(orders.id, orderId));
+    return this.getById(orderId);
+  }
+
+  async updateStatusIf(
+    orderId: string,
+    expectedStatus: OrderStatus,
+    status: OrderStatus,
+  ): Promise<OrderDTO | null> {
+    // CAS: only the caller that matched the WHERE clause sees a non-empty
+    // result. Null means the order is missing or already past `expectedStatus`.
+    const result = await this.db.execute(sql`
+      UPDATE orders
+         SET status = ${status}, updated_at = now()
+       WHERE id = ${orderId}
+         AND status = ${expectedStatus}
+       RETURNING id
+    `);
+    const rows = toRows(result);
+    if (rows.length === 0) return null;
     return this.getById(orderId);
   }
 

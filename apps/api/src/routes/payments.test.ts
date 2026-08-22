@@ -67,6 +67,29 @@ describe("Payments routes", () => {
       expect(order?.status).toBe("PAYMENT_PENDING");
     });
 
+    it("returns 202 IN_PROGRESS when another instance holds the initiation lease", async () => {
+      const { orderId } = await createDraftOrder(app);
+      // Another instance is mid-initiation: in-flight intent with an active lease.
+      await sharedPaymentRepo.createReservation({
+        order_id: orderId,
+        amount: 242.8,
+        receipt: "pay_seed_route_lease",
+        lease_owner: "instance-other",
+      });
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders())
+        .send({ order_id: orderId })
+        .expect(202);
+
+      expect(res.body.data.payment_state).toBe("IN_PROGRESS");
+      expect(res.body.data.retryable).toBe(true);
+      expect(res.body.data.razorpay_order_id).toBeUndefined();
+      // The order stays DRAFT while the intent is not finalized.
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("DRAFT");
+    });
+
     it("returns 404 for nonexistent order", async () => {
       const res = await request(app)
         .post("/api/v1/payments/create-order")

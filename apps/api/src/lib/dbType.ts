@@ -26,4 +26,6 @@ export type DrizzleDb = {
   };
   /** Postgres transaction scope for atomic multi-statement writes. */
   transaction: <T>(fn: (tx: DrizzleDb) => Promise<T>) => Promise<T>;
+  /** Raw SQL execution (used for CAS updates that need RETURNING + expressions). */
+  execute: (query: SQL<unknown>) => Promise<unknown>;
 };

@@ -608,7 +608,7 @@ describe("Fulfillment routes", () => {
         .expect(201);
       const orderId = orderRes.body.data.id;
       await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
-      await sharedPaymentRepo.create({
+      await sharedPaymentRepo._seedFinalized({
         order_id: orderId,
         razorpay_order_id: "order_mock_cod",
         amount: 242.8,

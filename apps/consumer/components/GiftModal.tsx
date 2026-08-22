@@ -53,6 +53,16 @@ export default function GiftModal({
           });
       setCreatedGift(result.gift);
 
+      // 202 IN_PROGRESS: no razorpay_order_id yet — the gateway checkout must
+      // not open. The same gift is reused on the next tap (retry), so no
+      // second gift and no duplicate order are created.
+      if (result.payment_state === "IN_PROGRESS" || !result.razorpay_order_id) {
+        setError("Payment is still being prepared. Tap Pay & Send again to retry.");
+        setPaying(false);
+        return;
+      }
+      const razorpayOrderId = result.razorpay_order_id;
+
       const loaded = await loadRazorpayScript();
       if (!loaded) {
         setError("Failed to load payment gateway");
@@ -66,12 +76,12 @@ export default function GiftModal({
         currency: "INR",
         name: "SnakZap",
         description: `Gift: ${item.name}`,
-        order_id: result.razorpay_order_id,
+        order_id: razorpayOrderId,
         prefill: { contact: user?.phone || "" },
         theme: { color: "#0D9488" },
         handler: async () => {
           try {
-            await simulatePaymentWebhook(result.razorpay_order_id, result.amount, true);
+            await simulatePaymentWebhook(razorpayOrderId, result.amount, true);
             setPaidGift(result.gift);
             onPaid(result.gift);
           } catch (err) {

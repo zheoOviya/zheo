@@ -53,6 +53,13 @@ paymentsRouter.post(
       body.data.method as PaymentMethod,
     );
 
+    // 202 Accepted: the intent is still being prepared (another process holds
+    // the initiation lease). The client should retry shortly; no
+    // razorpay_order_id is present yet, so the checkout must NOT open.
+    if (result.payment_state === "IN_PROGRESS") {
+      ok(res, result, 202);
+      return;
+    }
     ok(res, result, 200);
   }),
 );
