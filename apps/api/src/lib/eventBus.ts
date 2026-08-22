@@ -14,22 +14,29 @@ import type { EventName, TypedEventEnvelope } from "@snakzap/types";
 
 const EVENT_CHANNEL = "snakzap:events";
 
+// Uniquely identifies THIS process as the origin of the events it publishes.
+// The subscriber ignores broadcasts whose origin is this process, so a Redis
+// loop-back can never double-dispatch on the originating instance — no
+// count-bounded cache, FIFO, TTL or timing assumption is needed.
+const INSTANCE_ID = randomUUID();
+
+// Wire payload carried on EVENT_CHANNEL. Publishers always send the wrapped
+// form; the unwrap() fallback accepts legacy raw envelopes from older
+// instances during a rolling deploy.
+type WireEvent =
+  | { origin_instance_id: string; event: TypedEventEnvelope<EventName> }
+  | TypedEventEnvelope<EventName>;
+
 export type EventHandler = (
   event: TypedEventEnvelope<EventName>,
 ) => Promise<void>;
 
 const handlers = new Map<EventName, EventHandler[]>();
 let subscriberInitialized = false;
-// Bounded set of event_ids this process has emitted, so broadcasts that loop
-// back to the originating instance are not dispatched a second time. Evicted
-// FIFO (oldest id) so the id that crosses the capacity stays protected.
-const recentlyEmitted = new Set<string>();
-const MAX_RECENTLY_EMITTED = 10_000;
 
 export function resetEventBusForTests(): void {
   handlers.clear();
   subscriberInitialized = false;
-  recentlyEmitted.clear();
 }
 
 export function onEvent(name: EventName, handler: EventHandler): void {
@@ -60,21 +67,42 @@ async function dispatchToHandlers(event: TypedEventEnvelope<EventName>): Promise
   }
 }
 
+// Decode a payload received on EVENT_CHANNEL into an event to dispatch, or
+// null when it is this instance's own broadcast (skip) or is unparseable.
+function unwrapWire(raw: string): TypedEventEnvelope<EventName> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const maybe = parsed as Record<string, unknown>;
+  if (
+    typeof maybe.origin_instance_id === "string" &&
+    maybe.event !== null &&
+    typeof maybe.event === "object"
+  ) {
+    if (maybe.origin_instance_id === INSTANCE_ID) return null;
+    return maybe.event as TypedEventEnvelope<EventName>;
+  }
+  // Legacy raw envelope published by an older instance (this process always
+  // wraps, so a raw payload is necessarily remote) — dispatch it.
+  return parsed as TypedEventEnvelope<EventName>;
+}
+
 export async function emit<K extends EventName>(
   event: TypedEventEnvelope<K>,
 ): Promise<void> {
   await dispatchToHandlers(event as TypedEventEnvelope<EventName>);
-  recentlyEmitted.add(event.event_id);
-  if (recentlyEmitted.size > MAX_RECENTLY_EMITTED) {
-    // FIFO eviction: drop only the oldest id so the id that just crossed the
-    // capacity remains protected against its own self-echo loop-back.
-    const oldest = recentlyEmitted.values().next().value;
-    if (oldest) recentlyEmitted.delete(oldest);
-  }
 
   try {
     const redis = getRedis();
-    await redis.publish(EVENT_CHANNEL, JSON.stringify(event));
+    const wire: WireEvent = {
+      origin_instance_id: INSTANCE_ID,
+      event: event as TypedEventEnvelope<EventName>,
+    };
+    await redis.publish(EVENT_CHANNEL, JSON.stringify(wire));
   } catch (err) {
     logger.warn({
       message: "event_redis_publish_failed",
@@ -93,16 +121,9 @@ export async function initEventSubscriber(): Promise<void> {
     const sub = redis.duplicate();
     sub.on("message", (channel: unknown, message: unknown) => {
       if (channel !== EVENT_CHANNEL) return;
-      try {
-        const event = JSON.parse(message as string) as TypedEventEnvelope<EventName>;
-        if (recentlyEmitted.has(event.event_id)) return;
-        void dispatchToHandlers(event);
-      } catch (err) {
-        logger.error({
-          message: "event_subscriber_dispatch_error",
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+      const event = unwrapWire(message as string);
+      if (!event) return;
+      void dispatchToHandlers(event);
     });
     // Ensure the dedicated connection is up before issuing SUBSCRIBE; a
     // lazy client with enableOfflineQueue:false rejects the first command.

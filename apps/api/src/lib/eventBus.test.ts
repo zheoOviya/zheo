@@ -12,6 +12,7 @@ import { logger } from "./logger";
 class FakePubSub extends MemoryRedis {
   subscribed = false;
   messageHandlers: Array<(channel: string, message: string) => void> = [];
+  published: string[] = [];
   override async subscribe(channel: string): Promise<void> {
     this.subscribed = true;
     return Promise.resolve();
@@ -24,6 +25,10 @@ class FakePubSub extends MemoryRedis {
   }
   duplicate(): FakePubSub {
     return this;
+  }
+  override async publish(channel: string, message: string): Promise<number> {
+    this.published.push(message);
+    return 1;
   }
   simulateInbound(channel: string, message: string): void {
     for (const h of this.messageHandlers) h(channel, message);
@@ -51,30 +56,94 @@ describe("eventBus", () => {
     expect(sub.messageHandlers.length).toBeGreaterThan(0);
   });
 
-  it("does not re-dispatch an event this instance already emitted (self-origin filter)", async () => {
+  it("does not re-dispatch a self-origin loopback (origin-based filter)", async () => {
     const handler = vi.fn();
     onEvent("OrderCreated", handler);
     await initEventSubscriber();
-    const client = getRedis();
-    const sub = client.duplicate() as unknown as FakePubSub;
+    const sub = getRedis().duplicate() as unknown as FakePubSub;
     const envelope = createEventEnvelope("OrderCreated", "order-1", {});
     await emit(envelope);
-    // Simulate the same instance receiving its own broadcast back.
-    sub.simulateInbound("snakzap:events", JSON.stringify(envelope));
+    // Replay the exact wire payload this instance published (its own echo).
+    sub.simulateInbound("snakzap:events", sub.published.at(-1) as string);
+    await new Promise((r) => setTimeout(r, 10));
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it("delivers remote events received over the subscribed channel", async () => {
+  it("suppresses a self-origin loopback even after >10_000 intervening emits (no memory window)", async () => {
+    // The 10k emit loop writes one log line per event; silence the logger so
+    // the test stays deterministic under the default 5s test timeout.
+    vi.spyOn(logger, "info").mockImplementation((() => {}) as never);
     const handler = vi.fn();
     onEvent("OrderCreated", handler);
     await initEventSubscriber();
-    const client = getRedis();
-    const sub = client.duplicate() as unknown as FakePubSub;
+    const sub = getRedis().duplicate() as unknown as FakePubSub;
+
+    const a = createEventEnvelope("OrderCreated", "event-A", {});
+    await emit(a);
+    const aWire = sub.published.at(-1) as string; // the exact payload Redis carries
+
+    for (let i = 0; i < 10_001; i++) {
+      await emit(createEventEnvelope("OrderCreated", `inter-${i}`, {}));
+    }
+
+    // A's own loop-back arrives only now; origin filtering must suppress it
+    // regardless of how many other events were emitted in between.
+    sub.simulateInbound("snakzap:events", aWire);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const aCalls = handler.mock.calls.filter(
+      (c) => c[0].aggregate_id === "event-A",
+    );
+    expect(aCalls).toHaveLength(1);
+  });
+
+  it("delivers a remote-instance event exactly once", async () => {
+    const handler = vi.fn();
+    onEvent("OrderCreated", handler);
+    await initEventSubscriber();
+    const sub = getRedis().duplicate() as unknown as FakePubSub;
     const remote = createEventEnvelope("OrderCreated", "order-remote", {});
-    sub.simulateInbound("snakzap:events", JSON.stringify(remote));
+    sub.simulateInbound(
+      "snakzap:events",
+      JSON.stringify({ origin_instance_id: "instance-B", event: remote }),
+    );
     await new Promise((r) => setTimeout(r, 10));
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler.mock.calls[0]![0].aggregate_id).toBe("order-remote");
+  });
+
+  it("defines the same event_id from two different instances as two independent deliveries", async () => {
+    const handler = vi.fn();
+    onEvent("OrderCreated", handler);
+    await initEventSubscriber();
+    const sub = getRedis().duplicate() as unknown as FakePubSub;
+    const local = createEventEnvelope("OrderCreated", "dup-id", {});
+    await emit(local); // local dispatch #1
+    const selfWire = sub.published.at(-1) as string;
+    // A different instance publishes a copy carrying the SAME event_id.
+    const remoteWire = JSON.stringify({
+      origin_instance_id: "instance-B",
+      event: { ...local },
+    });
+    sub.simulateInbound("snakzap:events", selfWire); // self echo -> ignored
+    sub.simulateInbound("snakzap:events", remoteWire); // remote copy -> dispatched
+    await new Promise((r) => setTimeout(r, 10));
+    const calls = handler.mock.calls.filter((c) => c[0].aggregate_id === "dup-id");
+    // Explicit semantics: suppression is origin-scoped; the remote copy of the
+    // same event_id is an independent delivery.
+    expect(calls).toHaveLength(2);
+  });
+
+  it("accepts legacy raw envelopes from older publishers (backward compatibility)", async () => {
+    const handler = vi.fn();
+    onEvent("OrderCreated", handler);
+    await initEventSubscriber();
+    const sub = getRedis().duplicate() as unknown as FakePubSub;
+    const legacy = createEventEnvelope("OrderCreated", "order-legacy", {});
+    sub.simulateInbound("snakzap:events", JSON.stringify(legacy));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]![0].aggregate_id).toBe("order-legacy");
   });
 
   it("still dispatches locally on emit (in-process dispatch is unchanged)", async () => {
@@ -84,12 +153,11 @@ describe("eventBus", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it("does not mutate event metadata during self-origin filtering", async () => {
+  it("does not mutate event metadata during self-origin suppression", async () => {
     const handler = vi.fn();
     onEvent("OrderCreated", handler);
     await initEventSubscriber();
-    const client = getRedis();
-    const sub = client.duplicate() as unknown as FakePubSub;
+    const sub = getRedis().duplicate() as unknown as FakePubSub;
     const envelope = createEventEnvelope(
       "OrderCreated",
       "order-meta",
@@ -97,7 +165,7 @@ describe("eventBus", () => {
       { trace_id: "t-1" },
     );
     await emit(envelope);
-    sub.simulateInbound("snakzap:events", JSON.stringify(envelope));
+    sub.simulateInbound("snakzap:events", sub.published.at(-1) as string);
     await new Promise((r) => setTimeout(r, 10));
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler.mock.calls[0]![0].event_id).toBe(envelope.event_id);
@@ -140,48 +208,5 @@ describe("eventBus", () => {
       emit(createEventEnvelope("OrderCreated", "order-down", {})),
     ).resolves.toBeUndefined();
     expect(handler).toHaveBeenCalledTimes(1);
-  });
-
-  it("bounded FIFO dedup: evicts the oldest id while the capacity-crossing id stays protected", async () => {
-    // The 10k emit loop writes one log line per event; silence the logger so
-    // the test stays deterministic under the default 5s test timeout.
-    vi.spyOn(logger, "info").mockImplementation((() => {}) as never);
-    const handler = vi.fn();
-    onEvent("OrderCreated", handler);
-    await initEventSubscriber();
-    const sub = getRedis().duplicate() as unknown as FakePubSub;
-
-    const first = createEventEnvelope("OrderCreated", "order-first", {});
-    await emit(first);
-
-    const crossing = createEventEnvelope(
-      "OrderCreated",
-      "threshold-crossing-event",
-      {},
-    );
-    // warmup ids #2..#10_000 (first was #1), then the crossing emit is the
-    // 10_001st id -> crosses the 10_000-capacity of the dedup set.
-    for (let i = 0; i < 9_999; i++) {
-      await emit(createEventEnvelope("OrderCreated", `order-${i}`, {}));
-    }
-    await emit(crossing);
-
-    sub.simulateInbound("snakzap:events", JSON.stringify(first));
-    sub.simulateInbound("snakzap:events", JSON.stringify(crossing));
-    await new Promise((r) => setTimeout(r, 10));
-
-    // The crossing event must NOT be double-dispatched on the originating
-    // instance: its id must survive the eviction that it triggered.
-    const crossingCalls = handler.mock.calls.filter(
-      (c) => c[0].aggregate_id === "threshold-crossing-event",
-    );
-    expect(crossingCalls).toHaveLength(1);
-
-    // The oldest id must eventually be evicted (memory stays bounded at
-    // ~10_000 entries), so its looped-back copy is dispatched again.
-    const firstCalls = handler.mock.calls.filter(
-      (c) => c[0].aggregate_id === "order-first",
-    );
-    expect(firstCalls).toHaveLength(2);
   });
 });

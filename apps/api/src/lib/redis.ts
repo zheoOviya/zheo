@@ -126,7 +126,7 @@ export class MemoryRedis implements RedisLike {
     return copy;
   }
 
-  async publish(): Promise<number> {
+  async publish(_channel: string, _message: string): Promise<number> {
     return 0;
   }
 
