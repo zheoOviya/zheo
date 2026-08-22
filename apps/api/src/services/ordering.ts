@@ -9,7 +9,9 @@ import {
   type OrderDTO,
 } from "../repositories/orderRepository";
 import {
+  assertPositiveTotalAmount,
   calculatePriceBreakdown,
+  resolveCatalogCustomizations,
   type CustomizationDelta,
   type OrderItemInput,
 } from "./pricing";
@@ -98,7 +100,10 @@ export class OrderingService {
       }
 
       let basePrice = menuItem.price;
-      let customizations = item.customizations;
+      let customizations = resolveCatalogCustomizations(
+        menuItem.customizations ?? [],
+        item.customizations,
+      );
       let giftId: string | null = null;
 
       if (item.gift_id) {
@@ -149,6 +154,7 @@ export class OrderingService {
     }
 
     const breakdown = calculatePriceBreakdown(orderItems);
+    assertPositiveTotalAmount(breakdown);
 
     const input: CreateOrderInput = {
       user_id: request.user_id,

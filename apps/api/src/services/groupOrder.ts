@@ -10,7 +10,9 @@ import type {
 import { createEventEnvelope, emit } from "../lib/eventBus";
 import { AppError } from "../middleware/envelope";
 import {
+  assertPositiveTotalAmount,
   calculatePriceBreakdown,
+  resolveCatalogCustomizations,
   type CustomizationDelta,
   type OrderItemInput,
 } from "./pricing";
@@ -179,23 +181,58 @@ export class GroupOrderService {
           name: menuItem.name,
           base_price: menuItem.price,
           quantity: item.quantity,
-          customizations: item.customizations,
+          customizations: resolveCatalogCustomizations(
+            menuItem.customizations ?? [],
+            item.customizations,
+          ),
         });
       }
 
       // Merge existing order lines with the new items (single DRAFT order).
-      const mergedInputs: OrderItemInput[] = [
-        ...order.items.map((oi) => ({
+      // Existing lines' customization prices are re-resolved against the
+      // CURRENT catalog so a stale or pre-fix poisoned value can never keep
+      // flowing through pricing when the cart is touched again.
+      const reResolvedExisting: OrderItemInput[] = [];
+      for (const oi of order.items) {
+        if (oi.gift_id) {
+          // Gift lines are already zero-cost and carry no client money input.
+          reResolvedExisting.push({
+            menu_item_id: oi.menu_item_id,
+            name: oi.name,
+            base_price: oi.base_price,
+            quantity: oi.quantity,
+            customizations: oi.customizations,
+            gift_id: oi.gift_id,
+          });
+          continue;
+        }
+        const menuItem = await this.catalogRepo.getMenuItemById(oi.menu_item_id);
+        if (!menuItem) {
+          throw new AppError(
+            "ITEM_NOT_FOUND",
+            `Menu item ${oi.menu_item_id} is no longer available`,
+            400,
+          );
+        }
+        reResolvedExisting.push({
           menu_item_id: oi.menu_item_id,
           name: oi.name,
           base_price: oi.base_price,
           quantity: oi.quantity,
-          customizations: oi.customizations,
-        })),
+          customizations: resolveCatalogCustomizations(
+            menuItem.customizations ?? [],
+            oi.customizations,
+          ),
+        });
+      }
+
+      const mergedInputs: OrderItemInput[] = [
+        ...reResolvedExisting,
         ...validated,
       ];
 
       const breakdown = calculatePriceBreakdown(mergedInputs);
+      assertPositiveTotalAmount(breakdown);
 
       const dtoItems: Omit<OrderItemDTO, "id">[] = mergedInputs.map((oi) => ({
         menu_item_id: oi.menu_item_id,
