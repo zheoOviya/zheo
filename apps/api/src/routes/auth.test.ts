@@ -5,6 +5,7 @@ import { ApiEnvelopeSchema } from "@snakzap/types";
 import { createApp } from "../app";
 import { getRedis, resetRedisForTests } from "../lib/redis";
 import { sharedIdentityRepo } from "../repositories/shared";
+import { jwtService } from "../services/jwt";
 import { generateTotpCode } from "../services/totp";
 
 const PHONE = "+919876543210";
@@ -548,5 +549,208 @@ describe("Admin email login (email -> mobile OTP)", () => {
     expect(res.body.data.totp_ticket).toBeTruthy();
     expect(res.body.data.phone).toBe(TOTP_PHONE);
     expect(res.body.data.access_token).toBeUndefined();
+  });
+});
+
+// ============================================
+// Task 5: refresh sessions from CURRENT identity state
+// A new pair must never be minted from a stale JWT role or bypass a
+// suspension/deletion. Both access AND refresh tokens are decoded.
+// ============================================
+
+describe("Refresh identity-state (Task 5)", () => {
+  const REFRESH_PHONE = "+919876000080";
+  const REFRESH_USER_ID = "u-refresh-000000000000001";
+  const SUSP_OTP_PHONE = "+919876000081";
+  const SUSP_OTP_USER_ID = "u-susp-otp-000000000001";
+  const TOTP_PHONE = "+919876000082";
+  const TOTP_USER_ID = "u-totp-task5-0000000001";
+
+  let app: Express;
+
+  beforeEach(() => {
+    resetRedisForTests();
+    sharedIdentityRepo._reset();
+    app = createApp();
+  });
+
+  function extractRefreshToken(setCookie: string[] | undefined): string {
+    expect(setCookie).toBeDefined();
+    const cookie = setCookie!.find((c) => c.startsWith("snakzap_refresh="));
+    expect(cookie).toBeDefined();
+    return cookie!.split(";")[0]!.split("=").slice(1).join("=");
+  }
+
+  it("refresh mints a new pair from CURRENT identity role (stale SUPER_ADMIN claim ignored)", async () => {
+    const user = {
+      id: REFRESH_USER_ID,
+      phone: REFRESH_PHONE,
+      role: "CONSUMER",
+      is_suspended: false,
+      totp_enabled: false,
+      created_at: new Date().toISOString(),
+    };
+    sharedIdentityRepo._seed(user);
+    // Old refresh token was issued when the account was SUPER_ADMIN.
+    const stale = jwtService.issuePair({
+      sub: user.id,
+      phone: user.phone,
+      role: "SUPER_ADMIN",
+      device_fingerprint: FP_A,
+    });
+
+    const res = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Cookie", `snakzap_refresh=${stale.refreshToken}`)
+      .send({ device_fingerprint: FP_A })
+      .expect(200);
+
+    expect(jwtService.verifyAccessToken(res.body.data.access_token).role).toBe("CONSUMER");
+    const newRefresh = extractRefreshToken(res.headers["set-cookie"] as string[] | undefined);
+    expect(jwtService.verifyRefreshToken(newRefresh).role).toBe("CONSUMER");
+  });
+
+  it("refresh rejects a suspended account with 403 and issues no new pair", async () => {
+    const user = {
+      id: REFRESH_USER_ID,
+      phone: REFRESH_PHONE,
+      role: "CONSUMER",
+      is_suspended: false,
+      totp_enabled: false,
+      created_at: new Date().toISOString(),
+    };
+    sharedIdentityRepo._seed(user);
+    const pair = jwtService.issuePair({
+      sub: user.id,
+      phone: user.phone,
+      role: "CONSUMER",
+      device_fingerprint: FP_A,
+    });
+    await sharedIdentityRepo.suspend(user.id);
+
+    const res = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Cookie", `snakzap_refresh=${pair.refreshToken}`)
+      .send({ device_fingerprint: FP_A })
+      .expect(403);
+    expect(res.body.error.code).toBe("ACCOUNT_SUSPENDED");
+    expect(res.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it("refresh rejects a deleted account with 401 and issues no new pair", async () => {
+    const pair = jwtService.issuePair({
+      sub: "u-deleted-00000000000001",
+      phone: REFRESH_PHONE,
+      role: "CONSUMER",
+      device_fingerprint: FP_A,
+    });
+
+    const res = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Cookie", `snakzap_refresh=${pair.refreshToken}`)
+      .send({ device_fingerprint: FP_A })
+      .expect(401);
+    expect(res.body.error.code).toBe("ACCOUNT_NOT_FOUND");
+    expect(res.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it("generic /verify-otp rejects a suspended identity (no pair)", async () => {
+    sharedIdentityRepo._seed({
+      id: SUSP_OTP_USER_ID,
+      phone: SUSP_OTP_PHONE,
+      role: "CONSUMER",
+      is_suspended: true,
+      totp_enabled: false,
+      created_at: new Date().toISOString(),
+    });
+    await request(app)
+      .post("/api/v1/auth/send-otp")
+      .send({ phone: SUSP_OTP_PHONE })
+      .expect(200);
+    const stored = await getRedis().get(`otp:${SUSP_OTP_PHONE}`);
+    expect(stored).toMatch(/^[0-9]{6}$/);
+
+    const res = await request(app)
+      .post("/api/v1/auth/verify-otp")
+      .send({ phone: SUSP_OTP_PHONE, otp: stored, device_fingerprint: FP_A })
+      .expect(403);
+    expect(res.body.error.code).toBe("ACCOUNT_SUSPENDED");
+    expect(res.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it("totp/verify rejects suspension that occurred after ticket issuance", async () => {
+    sharedIdentityRepo._seed({
+      id: TOTP_USER_ID,
+      phone: TOTP_PHONE,
+      role: "ADMIN",
+      is_suspended: false,
+      totp_secret: RFC_SECRET_BASE32,
+      totp_enabled: true,
+      totp_confirmed_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    });
+    const otp = await request(app)
+      .post("/api/v1/auth/send-otp")
+      .send({ phone: TOTP_PHONE })
+      .expect(200);
+    const ticketRes = await request(app)
+      .post("/api/v1/auth/verify-otp")
+      .send({ phone: TOTP_PHONE, otp: otp.body.data.demoOtp, device_fingerprint: FP_A })
+      .expect(202);
+    const ticket = ticketRes.body.data.totp_ticket as string;
+
+    // Account is suspended AFTER the ticket was issued.
+    await sharedIdentityRepo.suspend(TOTP_USER_ID);
+
+    const res = await request(app)
+      .post("/api/v1/auth/totp/verify")
+      .send({
+        totp_ticket: ticket,
+        code: generateTotpCode(RFC_SECRET_BASE32),
+        device_fingerprint: FP_A,
+        phone: TOTP_PHONE,
+      })
+      .expect(403);
+    expect(res.body.error.code).toBe("ACCOUNT_SUSPENDED");
+    expect(res.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it("totp/verify mints tokens from CURRENT role after a role change", async () => {
+    sharedIdentityRepo._seed({
+      id: TOTP_USER_ID,
+      phone: TOTP_PHONE,
+      role: "ADMIN",
+      is_suspended: false,
+      totp_secret: RFC_SECRET_BASE32,
+      totp_enabled: true,
+      totp_confirmed_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    });
+    const otp = await request(app)
+      .post("/api/v1/auth/send-otp")
+      .send({ phone: TOTP_PHONE })
+      .expect(200);
+    const ticketRes = await request(app)
+      .post("/api/v1/auth/verify-otp")
+      .send({ phone: TOTP_PHONE, otp: otp.body.data.demoOtp, device_fingerprint: FP_A })
+      .expect(202);
+    const ticket = ticketRes.body.data.totp_ticket as string;
+
+    // Role changed between ticket issuance and completion.
+    await sharedIdentityRepo.updateRole(TOTP_USER_ID, "CONSUMER");
+
+    const res = await request(app)
+      .post("/api/v1/auth/totp/verify")
+      .send({
+        totp_ticket: ticket,
+        code: generateTotpCode(RFC_SECRET_BASE32),
+        device_fingerprint: FP_A,
+        phone: TOTP_PHONE,
+      })
+      .expect(200);
+    expect(res.body.data.user.role).toBe("CONSUMER");
+    expect(jwtService.verifyAccessToken(res.body.data.access_token).role).toBe("CONSUMER");
+    const newRefresh = extractRefreshToken(res.headers["set-cookie"] as string[] | undefined);
+    expect(jwtService.verifyRefreshToken(newRefresh).role).toBe("CONSUMER");
   });
 });
