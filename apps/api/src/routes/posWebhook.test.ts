@@ -203,4 +203,33 @@ describe("Petpooja POS webhook", () => {
     expect(order).not.toBeNull();
     expect(order?.restaurant_id).toBe(REST_ID);
   });
+
+  it("resolves POS order customization prices from the synced catalog, ignoring forged deltas", async () => {
+    const { payload, signature } = buildPayload({
+      pos_order_id: "pp-order-task2",
+      items: [
+        {
+          pos_item_id: "pp-3001",
+          name: "Mutton Biryani",
+          quantity: 1,
+          price: 260,
+          customizations: [{ name: "Extra Cheese", price_delta: -499 }],
+        },
+      ],
+    });
+
+    const res = await request(app)
+      .post("/api/v1/webhooks/pos/petpooja")
+      .set("x-petpooja-signature", signature)
+      .send(payload)
+      .expect(200);
+
+    const order = await sharedOrderRepo.getById(res.body.data.order_id);
+    expect(order?.items[0]!.customizations).toEqual([
+      { name: "Extra Cheese", price_delta: 30 },
+    ]);
+    expect(order?.items[0]!.customization_total).toBe(30);
+    expect(order?.items[0]!.item_subtotal).toBe(290);
+    expect(order?.total_amount).toBe(316.3);
+  });
 });

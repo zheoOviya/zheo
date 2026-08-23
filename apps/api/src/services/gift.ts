@@ -5,6 +5,7 @@ import type { CatalogRepository } from "../repositories/catalogRepository";
 import type { GiftRepository, GiftDTO } from "../repositories/giftRepository";
 import type { PaymentRepository } from "../repositories/paymentRepository";
 import type { CustomizationDelta } from "./pricing";
+import { resolveCatalogCustomizations } from "./pricing";
 import { isRazorpayMockMode, razorpayService } from "./razorpay";
 
 export const GIFT_TTL_DAYS = 90;
@@ -45,7 +46,11 @@ export class GiftService {
     return gift;
   }
 
-  /** Price is always server-computed: base price + the sender's customization deltas. */
+  /**
+   * Price is always server-computed from the catalog: base price + the
+   * customization prices resolved from the menu item's own catalog entry.
+   * The sender-supplied `price_delta` is never a monetary input.
+   */
   async create(input: CreateGiftInput): Promise<GiftDTO> {
     const restaurant = await this.catalogRepo.getRestaurantById(input.restaurant_id);
     if (!restaurant || !restaurant.is_active) {
@@ -63,7 +68,11 @@ export class GiftService {
       );
     }
 
-    const customizationTotal = input.customizations.reduce((s, c) => s + c.price_delta, 0);
+    const resolvedCustomizations = resolveCatalogCustomizations(
+      menuItem.customizations ?? [],
+      input.customizations,
+    );
+    const customizationTotal = resolvedCustomizations.reduce((s, c) => s + c.price_delta, 0);
     const pricePaid = menuItem.price + customizationTotal;
     if (pricePaid <= 0) {
       throw new AppError("INVALID_PRICE", "Gift price must be positive", 400);
@@ -82,7 +91,10 @@ export class GiftService {
         image_url: menuItem.image_url ?? null,
         dietary_tags: menuItem.dietary_tags ?? {},
         spice_level: menuItem.spice_level ?? 3,
-        customizations: input.customizations.map((c) => ({ name: c.name, price_delta: c.price_delta })),
+        customizations: resolvedCustomizations.map((c) => ({
+          name: c.name,
+          price_delta: c.price_delta,
+        })),
       },
       price_paid: pricePaid,
       message: input.message ?? null,

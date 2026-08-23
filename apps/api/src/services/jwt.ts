@@ -21,6 +21,16 @@ export interface AuthClaims {
   jti?: string;
 }
 
+/**
+ * Authoritative identity snapshot consulted at token-issuance time. Refresh
+ * rotation must mint from THIS state, never from stale JWT claims.
+ */
+export interface RefreshIdentity {
+  phone: string;
+  role: string;
+  is_suspended: boolean;
+}
+
 const REFRESH_BLACKLIST_PREFIX = "jwt:blacklist:";
 const TOTP_TICKET_TTL_SECONDS = 300;
 
@@ -189,15 +199,22 @@ export class JwtService {
   }
 
   /**
-   * Refresh rotation:
+   * Refresh rotation (Task 5):
    * 1. verify old refresh token
    * 2. reject if already blacklisted (reuse detection)
    * 3. enforce device binding - mismatched device requires step-up auth
-   * 4. blacklist old jti, issue new pair
+   * 4. load the CURRENT authoritative identity by claims.sub
+   *    - missing account   -> ACCOUNT_NOT_FOUND (401), no new pair
+   *    - suspended account -> ACCOUNT_SUSPENDED (403), no new pair
+   * 5. blacklist old jti
+   * 6. issue access + refresh from the CURRENT user's role + phone.
+   * A stale JWT role/phone can never mint a new privileged pair, and a
+   * deleted/suspended account never receives a new session.
    */
   async rotateRefreshToken(
     oldToken: string,
     device_fingerprint: string,
+    loadCurrentUser: (userId: string) => Promise<RefreshIdentity | null>,
   ): Promise<{ accessToken: string; refreshToken: string; refreshJti: string }> {
     const claims = this.verifyRefreshToken(oldToken);
 
@@ -217,12 +234,24 @@ export class JwtService {
       );
     }
 
+    const current = await loadCurrentUser(claims.sub);
+    if (!current) {
+      throw new AppError(
+        "ACCOUNT_NOT_FOUND",
+        "This account no longer exists. Please sign in again.",
+        401,
+      );
+    }
+    if (current.is_suspended) {
+      throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended", 403);
+    }
+
     await this.blacklistRefreshToken(claims.jti!);
 
     return this.issuePair({
       sub: claims.sub,
-      phone: claims.phone,
-      role: claims.role,
+      phone: current.phone,
+      role: current.role,
       device_fingerprint,
     });
   }

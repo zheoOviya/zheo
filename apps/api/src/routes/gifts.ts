@@ -56,8 +56,9 @@ giftsRouter.post(
     }
     const userId = res.locals.userId as string;
     const gift = await giftService.create({ sender_id: userId, ...body.data });
-    const payment = await paymentService.createGiftPayment(gift.id);
-    ok(res, { gift, ...payment }, 201);
+    const payment = await paymentService.createGiftPayment(gift.id, userId);
+    // 202 Accepted: another process is still preparing the intent.
+    ok(res, { gift, ...payment }, payment.payment_state === "IN_PROGRESS" ? 202 : 201);
   }),
 );
 
@@ -75,8 +76,8 @@ giftsRouter.post(
     if (gift.status !== "PENDING") {
       throw new AppError("GIFT_NOT_PAYABLE", `Gift is ${gift.status}, not payable`, 400);
     }
-    const payment = await paymentService.createGiftPayment(gift.id);
-    ok(res, { gift, ...payment });
+    const payment = await paymentService.createGiftPayment(gift.id, userId);
+    ok(res, { gift, ...payment }, payment.payment_state === "IN_PROGRESS" ? 202 : 200);
   }),
 );
 

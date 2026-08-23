@@ -376,6 +376,16 @@ function CheckoutContent() {
 
       const payment = await createPaymentOrder(createdOrderId, accessToken, paymentMethod);
 
+      // 202 IN_PROGRESS: the intent is still being prepared by another
+      // process (COD included — a COD request can also land on the 202 path).
+      // There is no razorpay_order_id yet, so neither the gateway checkout nor
+      // a fake success screen may appear — surface a retry hint instead.
+      if (payment.payment_state === "IN_PROGRESS") {
+        setError("Payment is still being prepared. Please try again in a moment.");
+        setStep("cart");
+        return;
+      }
+
       if (payment.payment_method === "cod") {
         setAmount(payment.amount);
         clear();
@@ -383,7 +393,13 @@ function CheckoutContent() {
         return;
       }
 
-      setRpOrderId(payment.razorpay_order_id ?? null);
+      if (!payment.razorpay_order_id) {
+        setError("Payment is still being prepared. Please try again in a moment.");
+        setStep("cart");
+        return;
+      }
+
+      setRpOrderId(payment.razorpay_order_id);
       setAmount(payment.amount);
       setStep("payment");
     } catch (err) {

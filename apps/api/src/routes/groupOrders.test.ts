@@ -307,6 +307,141 @@ describe("Group Order routes (O02)", () => {
     });
   });
 
+  describe("Task 2: server-authoritative customization pricing", () => {
+    it("resolves customization prices from the catalog, ignoring forged client deltas", async () => {
+      const cart = await createGroupCart(app);
+
+      const res = await request(app)
+        .post("/api/v1/orders/group/add")
+        .set(auth(CONTRIBUTOR_A, "2"))
+        .send({
+          group_cart_token: cart.group_cart_token,
+          items: [
+            {
+              menu_item_id: CHICKEN_BIRYANI,
+              quantity: 1,
+              customizations: [{ name: "Spicy", price_delta: -499 }],
+            },
+          ],
+        })
+        .expect(200);
+
+      expect(res.body.data.cart.total_amount).toBe(253.3);
+
+      const saved = await sharedOrderRepo.getById(cart.order_id);
+      expect(saved?.items[0]!.customizations).toEqual([
+        { name: "Spicy", price_delta: 10 },
+      ]);
+      expect(saved?.items[0]!.customization_total).toBe(10);
+      expect(saved?.items[0]!.item_subtotal).toBe(230);
+      expect(saved?.total_amount).toBe(253.3);
+    });
+
+    it("rejects a customization name not offered in the catalog", async () => {
+      const cart = await createGroupCart(app);
+
+      const res = await request(app)
+        .post("/api/v1/orders/group/add")
+        .set(auth(CONTRIBUTOR_A, "2"))
+        .send({
+          group_cart_token: cart.group_cart_token,
+          items: [
+            {
+              menu_item_id: CHICKEN_BIRYANI,
+              quantity: 1,
+              customizations: [{ name: "Not On Menu", price_delta: 5 }],
+            },
+          ],
+        })
+        .expect(400);
+      expect(res.body.error.code).toBe("INVALID_CUSTOMIZATION");
+    });
+
+    it("rejects a customization name requested more than once", async () => {
+      const cart = await createGroupCart(app);
+
+      const res = await request(app)
+        .post("/api/v1/orders/group/add")
+        .set(auth(CONTRIBUTOR_A, "2"))
+        .send({
+          group_cart_token: cart.group_cart_token,
+          items: [
+            {
+              menu_item_id: CHICKEN_BIRYANI,
+              quantity: 1,
+              customizations: [
+                { name: "Spicy", price_delta: 10 },
+                { name: "Spicy", price_delta: 10 },
+              ],
+            },
+          ],
+        })
+        .expect(400);
+      expect(res.body.error.code).toBe("INVALID_CUSTOMIZATION");
+    });
+
+    it("re-resolves previously stored group-cart customizations against the current catalog", async () => {
+      const now = new Date().toISOString();
+      sharedGroupCartRepo.create({
+        token: "gc_task2_reresolve",
+        order_id: "gorder-task2-1",
+        restaurant_id: BIRYANI_HOUSE,
+        created_by: HOST,
+      });
+      sharedOrderRepo._seed({
+        id: "gorder-task2-1",
+        user_id: HOST,
+        restaurant_id: BIRYANI_HOUSE,
+        items: [
+          {
+            id: "oi-task2-1",
+            menu_item_id: CHICKEN_BIRYANI,
+            name: "Chicken Biryani",
+            base_price: 220,
+            quantity: 1,
+            customizations: [{ name: "Spicy", price_delta: -499 }],
+            customization_total: -499,
+            item_subtotal: -279,
+            gift_id: null,
+          },
+        ],
+        total_amount: -281.15,
+        status: "DRAFT",
+        commission_rate: 0,
+        commission_amount: 0,
+        pickup_otp: null,
+        qr_token: null,
+        checked_in: false,
+        scheduled_pickup_time: null,
+        created_at: now,
+        updated_at: now,
+      });
+
+      const res = await request(app)
+        .post("/api/v1/orders/group/add")
+        .set(auth(CONTRIBUTOR_A, "2"))
+        .send({
+          group_cart_token: "gc_task2_reresolve",
+          items: [
+            {
+              menu_item_id: VEG_BIRYANI,
+              quantity: 1,
+              customizations: [],
+            },
+          ],
+        })
+        .expect(200);
+
+      const saved = await sharedOrderRepo.getById("gorder-task2-1");
+      expect(saved?.items[0]!.customizations).toEqual([
+        { name: "Spicy", price_delta: 10 },
+      ]);
+      expect(saved?.items[0]!.customization_total).toBe(10);
+      expect(saved?.items[0]!.item_subtotal).toBe(230);
+      expect(saved?.total_amount).toBe(454.1);
+    });
+  });
+
   describe("GET /api/v1/orders/group/cart", () => {
     it("returns a live public snapshot for the share token", async () => {
       const cart = await createGroupCart(app);

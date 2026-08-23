@@ -750,7 +750,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
       sharedOrderRepo._seed(orderSeed(settledOrderId, "SETTLED", 1200, 120, new Date().toISOString()));
       sharedOrderRepo._seed(orderSeed("c360-order-0000000000000002", "CANCELLED", 500, 0, new Date().toISOString()));
       sharedOrderRepo._seed(orderSeed("c360-order-0000000000000003", "PREPARING", 300, 30, new Date().toISOString()));
-      await sharedPaymentRepo.create({
+      await sharedPaymentRepo._seedFinalized({
         order_id: settledOrderId,
         razorpay_order_id: "rp_c360",
         amount: 1200,
@@ -867,7 +867,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
       sharedOrderRepo._seed(orderSeed("rev-order-000000000000002", "PICKED_UP", 500, 50, 0));
       sharedOrderRepo._seed(orderSeed("rev-order-000000000000003", "SETTLED", 800, 80, 3));
       sharedOrderRepo._seed(orderSeed("rev-order-000000000000004", "CANCELLED", 9000, 0, 0));
-      await sharedPaymentRepo.create({
+      await sharedPaymentRepo._seedFinalized({
         order_id: todaySettled,
         razorpay_order_id: "rp_rev_1",
         amount: 1000,
@@ -1037,7 +1037,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
         created_at: created,
         updated_at: created,
       });
-      await sharedPaymentRepo.create({
+      await sharedPaymentRepo._seedFinalized({
         order_id: ORDER_ID,
         razorpay_order_id: "rp_od",
         amount: 200,

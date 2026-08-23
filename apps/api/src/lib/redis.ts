@@ -9,6 +9,7 @@ import { logger } from "./logger";
 // ============================================
 
 export interface RedisLike {
+  connect(): Promise<void>;
   ping(): Promise<string>;
   get(key: string): Promise<string | null>;
   set(
@@ -26,7 +27,7 @@ export interface RedisLike {
   on(event: string, listener: (...args: unknown[]) => void): unknown;
   duplicate(): RedisLike;
   publish(channel: string, message: string): Promise<number>;
-  subscribe(channel: string, onMessage: (channel: string, message: string) => void): Promise<void>;
+  subscribe(channel: string, onMessage?: (channel: string, message: string) => void): Promise<void>;
   status: string;
 }
 
@@ -35,6 +36,10 @@ export class MemoryRedis implements RedisLike {
   private zsets = new Map<string, Map<string, number>>();
 
   status = "ready";
+
+  async connect(): Promise<void> {
+    return Promise.resolve();
+  }
 
   async ping(): Promise<string> {
     return "PONG";
@@ -110,15 +115,18 @@ export class MemoryRedis implements RedisLike {
     return "OK";
   }
 
-  on(): unknown {
+  on(_event: string, _listener: (...args: unknown[]) => void): unknown {
     return this;
   }
 
   duplicate(): RedisLike {
-    return this;
+    const copy = new MemoryRedis();
+    copy.store = this.store;
+    copy.zsets = this.zsets;
+    return copy;
   }
 
-  async publish(): Promise<number> {
+  async publish(_channel: string, _message: string): Promise<number> {
     return 0;
   }
 
@@ -131,9 +139,17 @@ let client: RedisLike | null = null;
 
 export function getRedis(): RedisLike {
   if (client) return client;
-  if (process.env.NODE_ENV === "test" || !config.redis.url) {
+  const realInfra = process.env.TEST_REAL_INFRA === "true";
+  if (!realInfra && (process.env.NODE_ENV === "test" || !config.redis.url)) {
     client = new MemoryRedis();
     return client;
+  }
+  if (realInfra && !process.env.REDIS_URL?.trim()) {
+    // Real infra explicitly demanded but not configured: fail loud instead
+    // of silently degrading to the in-memory backend. The REDIS_URL config
+    // default must NOT satisfy this requirement, so the env var is checked
+    // directly.
+    throw new Error("TEST_REAL_INFRA requires REDIS_URL to be set");
   }
   const redis = new Redis(config.redis.url, {
     // Fail fast instead of queueing + throwing MaxRetriesPerRequestError,
@@ -155,6 +171,10 @@ export function getRedis(): RedisLike {
   client = redis as unknown as RedisLike;
   return client as RedisLike;
 }
+export function getRedisIfExists(): RedisLike | null {
+  return client;
+}
+
 export function resetRedisForTests(): void {
   client = null;
 }

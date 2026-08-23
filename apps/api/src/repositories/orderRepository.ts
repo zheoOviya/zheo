@@ -72,6 +72,18 @@ export interface OrderRepository {
     toIso: string,
   ): Promise<OrderDTO[]>;
   updateStatus(orderId: string, status: OrderStatus): Promise<OrderDTO | null>;
+  /**
+   * CAS status transition: only applies when the order is currently in
+   * `expectedStatus`. Returns the updated order, or null when the order is
+   * missing or already moved past `expectedStatus`. Used to make order
+   * confirmations (DRAFT -> CONFIRMED / PAYMENT_PENDING) exactly-once under
+   * concurrent payment creation.
+   */
+  updateStatusIf(
+    orderId: string,
+    expectedStatus: OrderStatus,
+    status: OrderStatus,
+  ): Promise<OrderDTO | null>;
   setPickupOtp(orderId: string, otp: string, qrToken: string): Promise<OrderDTO | null>;
   setCheckedIn(orderId: string): Promise<OrderDTO | null>;
   findByQrToken(qrToken: string): Promise<OrderDTO | null>;
@@ -166,6 +178,22 @@ export class MemoryOrderRepository implements OrderRepository {
   ): Promise<OrderDTO | null> {
     const order = this.orders.get(orderId);
     if (!order) return null;
+    const updated: OrderDTO = {
+      ...order,
+      status,
+      updated_at: new Date().toISOString(),
+    };
+    this.orders.set(orderId, updated);
+    return updated;
+  }
+
+  async updateStatusIf(
+    orderId: string,
+    expectedStatus: OrderStatus,
+    status: OrderStatus,
+  ): Promise<OrderDTO | null> {
+    const order = this.orders.get(orderId);
+    if (!order || order.status !== expectedStatus) return null;
     const updated: OrderDTO = {
       ...order,
       status,

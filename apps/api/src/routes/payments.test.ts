@@ -1,8 +1,9 @@
 import type { Express } from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
+import { onEvent } from "../lib/eventBus";
 import { jwtService } from "../services/jwt";
 import { razorpayService } from "../services/razorpay";
 import { sharedOrderRepo } from "../repositories/shared";
@@ -10,11 +11,13 @@ import { sharedPaymentRepo } from "../repositories/shared";
 
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001";
+const OWNER_ID = "u00000000-0000-4000-8000-000000000001";
+const ATTACKER_ID = "u00000000-0000-4000-8000-000000000099";
 
 function authHeaders(userId?: string) {
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? "u00000000-0000-4000-8000-000000000001",
+      sub: userId ?? OWNER_ID,
       phone: "+919876543210",
       role: "CONSUMER",
       device_fingerprint: "fp_test_device_abc1234",
@@ -64,6 +67,29 @@ describe("Payments routes", () => {
       expect(order?.status).toBe("PAYMENT_PENDING");
     });
 
+    it("returns 202 IN_PROGRESS when another instance holds the initiation lease", async () => {
+      const { orderId } = await createDraftOrder(app);
+      // Another instance is mid-initiation: in-flight intent with an active lease.
+      await sharedPaymentRepo.createReservation({
+        order_id: orderId,
+        amount: 242.8,
+        receipt: "pay_seed_route_lease",
+        lease_owner: "instance-other",
+      });
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders())
+        .send({ order_id: orderId })
+        .expect(202);
+
+      expect(res.body.data.payment_state).toBe("IN_PROGRESS");
+      expect(res.body.data.retryable).toBe(true);
+      expect(res.body.data.razorpay_order_id).toBeUndefined();
+      // The order stays DRAFT while the intent is not finalized.
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("DRAFT");
+    });
+
     it("returns 404 for nonexistent order", async () => {
       const res = await request(app)
         .post("/api/v1/payments/create-order")
@@ -94,6 +120,67 @@ describe("Payments routes", () => {
         .expect(401);
 
       expect(res.body.error.code).toBe("UNAUTHORIZED");
+    });
+
+    it("returns 403 FORBIDDEN when another user initiates payment on your order", async () => {
+      const { orderId } = await createDraftOrder(app);
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders(ATTACKER_ID))
+        .send({ order_id: orderId })
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
+    });
+
+    it("leaves no side effects when a foreign caller initiates online payment", async () => {
+      const { orderId } = await createDraftOrder(app);
+      const createOrderSpy = vi.spyOn(razorpayService, "createOrder");
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders(ATTACKER_ID))
+        .send({ order_id: orderId })
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
+      expect(createOrderSpy).not.toHaveBeenCalled();
+      expect(await sharedPaymentRepo.getByOrderId(orderId)).toBeNull();
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("DRAFT");
+
+      createOrderSpy.mockRestore();
+    });
+
+    it("returns 403 FORBIDDEN when another user selects COD on your order", async () => {
+      const { orderId } = await createDraftOrder(app);
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders(ATTACKER_ID))
+        .send({ order_id: orderId, method: "cod" })
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
+    });
+
+    it("leaves no side effects when a foreign caller selects COD", async () => {
+      const { orderId } = await createDraftOrder(app);
+      const captured: string[] = [];
+      onEvent("CashOnPickupSelected", async (evt) => {
+        captured.push(evt.aggregate_id);
+      });
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders(ATTACKER_ID))
+        .send({ order_id: orderId, method: "cod" })
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
+      expect(await sharedPaymentRepo.getByOrderId(orderId)).toBeNull();
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("DRAFT");
+      expect(captured).toEqual([]);
     });
 
     it("supports Cash on Pickup (COD): confirms order without a gateway", async () => {

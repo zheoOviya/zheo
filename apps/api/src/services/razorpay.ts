@@ -58,9 +58,26 @@ function razorpayPaymentId(): string {
 }
 
 export class RazorpayService {
+  // Offline-mock order registry. Mirrors Razorpay's uniqueness guarantee on
+  // `receipt`: the same receipt can never mint a second order, and orders can
+  // be reconciled by exact receipt. Test-only state, reset via
+  // `_resetTestState`.
+  private ordersByReceipt = new Map<string, RazorpayOrder>();
+  private orderCreationCount = 0;
+  private injectedCreateError: Error | null = null;
+
   async createOrder(amountInPaise: number, receipt: string): Promise<RazorpayOrder> {
     if (MOCK_MODE) {
-      return {
+      if (this.injectedCreateError) {
+        const err = this.injectedCreateError;
+        throw err;
+      }
+      if (this.ordersByReceipt.has(receipt)) {
+        // Razorpay enforces unique receipts: a second order with the same
+        // receipt is rejected. This is the second idempotency layer.
+        throw new Error(`Razorpay order creation failed: 400 receipt ${receipt} already exists`);
+      }
+      const order: RazorpayOrder = {
         id: razorpayOrderId(),
         amount: amountInPaise,
         amount_paid: 0,
@@ -69,6 +86,9 @@ export class RazorpayService {
         status: "created",
         created_at: Math.floor(Date.now() / 1000),
       };
+      this.ordersByReceipt.set(receipt, order);
+      this.orderCreationCount += 1;
+      return order;
     }
 
     const auth = Buffer.from(`${config.razorpay.keyId}:${config.razorpay.keySecret}`).toString(
@@ -94,6 +114,64 @@ export class RazorpayService {
     }
 
     return res.json();
+  }
+
+  /**
+   * Reconciles a provider order by its exact receipt. In mock mode this
+   * consults the in-process order registry; in production it queries the
+   * Razorpay orders-list API filtered by receipt (Razorpay supports unique
+   * receipts). Used to resolve ambiguous initiations (crash between provider
+   * create and DB finalize) WITHOUT minting a duplicate order. Returns null
+   * when the gateway has no record for the receipt, so the caller may create.
+   */
+  async fetchOrdersByReceipt(receipt: string): Promise<RazorpayOrder | null> {
+    if (MOCK_MODE) {
+      return this.ordersByReceipt.get(receipt) ?? null;
+    }
+    const auth = Buffer.from(`${config.razorpay.keyId}:${config.razorpay.keySecret}`).toString(
+      "base64",
+    );
+    const url = `https://api.razorpay.com/v1/orders?receipt=${encodeURIComponent(receipt)}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Basic ${auth}` },
+    });
+    if (!res.ok) {
+      // 400 for an unknown/invalid receipt simply means "no such order".
+      return null;
+    }
+    const body = (await res.json()) as {
+      items?: { id: string; amount: number; currency: string; receipt: string; status: string }[];
+    };
+    const match = (body.items ?? []).find(
+      (o) => o.receipt === receipt && o.currency === "INR",
+    );
+    if (!match) return null;
+    return {
+      id: match.id,
+      amount: match.amount,
+      amount_paid: 0,
+      currency: match.currency,
+      receipt: match.receipt,
+      status: match.status,
+      created_at: Math.floor(Date.now() / 1000),
+    };
+  }
+
+  /** Total provider orders minted (mock). Monotonic; reset via `_resetTestState`. */
+  get createOrderCount(): number {
+    return this.orderCreationCount;
+  }
+
+  /** Injects a failure for the next createOrder call (mock only). */
+  _simulateCreateOrderError(error: Error | null): void {
+    this.injectedCreateError = error;
+  }
+
+  /** Resets the mock registry and counters between tests. */
+  _resetTestState(): void {
+    this.ordersByReceipt.clear();
+    this.orderCreationCount = 0;
+    this.injectedCreateError = null;
   }
 
   verifyWebhookSignature(rawBody: string, signature: string): boolean {
@@ -159,10 +237,16 @@ export class RazorpayService {
   buildMockWebhook(
     razorpayOrderId: string,
     amount: number,
-    event: "payment.captured" | "payment.failed",
+    event: "payment.captured" | "payment.failed" | "payment.authorized" | "payment.pending",
     reason?: string,
   ): { payload: RazorpayWebhookPayload; rawBody: string; signature: string } {
     const paymentId = razorpayPaymentId();
+    const statusMap: Record<string, string> = {
+      "payment.captured": "captured",
+      "payment.failed": "failed",
+      "payment.authorized": "authorized",
+      "payment.pending": "pending",
+    };
     const payload: RazorpayWebhookPayload = {
       event,
       payload: {
@@ -171,7 +255,7 @@ export class RazorpayService {
             id: paymentId,
             order_id: razorpayOrderId,
             amount,
-            status: event === "payment.captured" ? "captured" : "failed",
+            status: statusMap[event] ?? "pending",
             captured: event === "payment.captured",
             method: "upi",
             description: reason,

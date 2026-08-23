@@ -346,9 +346,14 @@ export type PaymentMethod = "upi" | "card" | "netbanking" | "wallet" | "cod";
 export interface CreateOrderResponse {
   /** "cod" orders are paid at the counter and skip the Razorpay checkout. */
   payment_method: PaymentMethod;
+  /** Present once the intent is finalized. Undefined while IN_PROGRESS — the checkout MUST NOT open. */
   razorpay_order_id?: string;
   amount: number;
   currency: string;
+  /** 202: another process is still preparing the intent; retry shortly. */
+  payment_state?: "READY" | "IN_PROGRESS";
+  payment_id?: string;
+  retryable?: boolean;
 }
 
 export async function createPaymentOrder(
@@ -611,9 +616,13 @@ export interface GiftLanding {
 
 export interface CreateGiftResult {
   gift: Gift;
-  razorpay_order_id: string;
+  /** Present once the intent is finalized. Undefined while IN_PROGRESS — the checkout MUST NOT open. */
+  razorpay_order_id?: string;
   amount: number;
   currency: string;
+  payment_id?: string;
+  payment_state?: "READY" | "IN_PROGRESS";
+  retryable?: boolean;
 }
 
 export function createGift(

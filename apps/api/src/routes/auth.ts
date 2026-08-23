@@ -203,6 +203,14 @@ authRouter.post(
       throw new AppError("VALIDATION_ERROR", "Invalid request body", 400, body.error.flatten());
     }
 
+    // Legacy generic path: reject a suspended identity at issuance time (same
+    // guard the consumer/vendor/admin flows enforce) WITHOUT eagerly creating
+    // a user for a brand-new phone on a failed OTP.
+    const existingIdentity = await sharedIdentityRepo.getByPhone(body.data.phone);
+    if (existingIdentity?.is_suspended) {
+      throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended", 403);
+    }
+
     await verifyOtp(body.data.phone, body.data.otp);
 
     const user = await resolveUser(body.data.phone);
@@ -270,6 +278,7 @@ authRouter.post(
     const pair = await jwtService.rotateRefreshToken(
       oldRefresh,
       body.data.device_fingerprint,
+      (userId) => sharedIdentityRepo.getById(userId),
     );
 
     setAuthCookies(res, pair);
@@ -639,6 +648,11 @@ authRouter.post(
     const user = await sharedIdentityRepo.getById(ticket.sub);
     if (!user) {
       throw new AppError("UNAUTHORIZED", "User no longer exists", 401);
+    }
+    // The account may have been suspended after the ticket was issued; token
+    // issuance must still refuse it.
+    if (user.is_suspended) {
+      throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended", 403);
     }
     if (!user.totp_enabled || !user.totp_secret) {
       throw new AppError("CONFLICT", "2FA is not enabled for this account", 409);

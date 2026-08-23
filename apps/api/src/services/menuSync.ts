@@ -46,15 +46,22 @@ interface MockPosItem {
   name: string;
   price: number;
   tags: string[];
+  customizations: { name: string; price_delta: number }[];
 }
 
 // Canned Petpooja catalog used offline / in tests. These are the items
 // the "Send Test Order" button on the vendor POS page orders from.
 const MOCK_POS_MENU: MockPosItem[] = [
-  { pos_item_id: "pp-3001", name: "Mutton Biryani", price: 260, tags: ["NON_VEG"] },
-  { pos_item_id: "pp-3002", name: "Egg Biryani", price: 200, tags: ["NON_VEG"] },
-  { pos_item_id: "pp-3003", name: "Chicken 65", price: 240, tags: ["NON_VEG"] },
-  { pos_item_id: "pp-4001", name: "Gobi Manchurian", price: 150, tags: ["VEG", "JAIN"] },
+  {
+    pos_item_id: "pp-3001",
+    name: "Mutton Biryani",
+    price: 260,
+    tags: ["NON_VEG"],
+    customizations: [{ name: "Extra Cheese", price_delta: 30 }],
+  },
+  { pos_item_id: "pp-3002", name: "Egg Biryani", price: 200, tags: ["NON_VEG"], customizations: [] },
+  { pos_item_id: "pp-3003", name: "Chicken 65", price: 240, tags: ["NON_VEG"], customizations: [] },
+  { pos_item_id: "pp-4001", name: "Gobi Manchurian", price: 150, tags: ["VEG", "JAIN"], customizations: [] },
 ];
 
 export class MockPosMenuClient implements PosMenuClient {
@@ -65,7 +72,7 @@ export class MockPosMenuClient implements PosMenuClient {
       name: item.name,
       price: item.price,
       dietary_tags: mapPosDietaryTags(item.tags),
-      customizations: [],
+      customizations: item.customizations,
       is_available: true,
     }));
   }

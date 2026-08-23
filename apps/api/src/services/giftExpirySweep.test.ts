@@ -42,20 +42,15 @@ describe("runGiftExpirySweep", () => {
 
   it("refunds an expired captured gift to REFUNDED in mock mode", async () => {
     const gift = await seedGift(giftRepo, -1, "ACTIVE");
-    const payment = await paymentRepo.create({
+    const payment = await paymentRepo._seedFinalized({
       gift_id: gift.id,
       razorpay_order_id: "order_mock_paid",
-      amount: 30,
-    });
-    // A captured payment carries a razorpay_payment_id; the sweep only refunds
-    // payments that were actually captured (matches production semantics).
-    await paymentRepo.updateWebhookResult(payment.id, {
       razorpay_payment_id: "pay_mock_paid",
+      amount: 30,
       status: "CAPTURED",
       method: "upi",
-      webhook_event: "payment.captured",
-      webhook_raw: null,
     });
+    void payment;
     const result = await runGiftExpirySweep(giftRepo, paymentRepo, new Date());
     expect(result.refunded).toBe(1);
     const after = await giftRepo.getById(gift.id);
@@ -68,17 +63,13 @@ describe("runGiftExpirySweep", () => {
 
   it("never refunds the same gift twice across sweeps", async () => {
     const gift = await seedGift(giftRepo, -1, "ACTIVE");
-    const payment = await paymentRepo.create({
+    await paymentRepo._seedFinalized({
       gift_id: gift.id,
       razorpay_order_id: "order_mock_paid",
-      amount: 30,
-    });
-    await paymentRepo.updateWebhookResult(payment.id, {
       razorpay_payment_id: "pay_mock_paid",
+      amount: 30,
       status: "CAPTURED",
       method: "upi",
-      webhook_event: "payment.captured",
-      webhook_raw: null,
     });
 
     const first = await runGiftExpirySweep(giftRepo, paymentRepo, new Date());
@@ -92,17 +83,13 @@ describe("runGiftExpirySweep", () => {
 
   it("skips a gift whose refund was already submitted (refund_requested_at set)", async () => {
     const gift = await seedGift(giftRepo, -1, "ACTIVE");
-    const payment = await paymentRepo.create({
+    await paymentRepo._seedFinalized({
       gift_id: gift.id,
       razorpay_order_id: "order_mock_paid",
-      amount: 30,
-    });
-    await paymentRepo.updateWebhookResult(payment.id, {
       razorpay_payment_id: "pay_mock_paid",
+      amount: 30,
       status: "CAPTURED",
       method: "upi",
-      webhook_event: "payment.captured",
-      webhook_raw: null,
     });
 
     // Simulate a submission that is in-flight awaiting the (mock-less)
@@ -116,7 +103,7 @@ describe("runGiftExpirySweep", () => {
 
   it("does not refund an expired gift whose payment was never captured", async () => {
     const gift = await seedGift(giftRepo, -1, "ACTIVE");
-    await paymentRepo.create({
+    await paymentRepo._seedFinalized({
       gift_id: gift.id,
       razorpay_order_id: "order_mock_unpaid",
       amount: 30,
@@ -130,19 +117,13 @@ describe("runGiftExpirySweep", () => {
 
   it("never refunds an expired gift whose payment FAILED (never charged)", async () => {
     const gift = await seedGift(giftRepo, -1, "ACTIVE");
-    const payment = await paymentRepo.create({
+    await paymentRepo._seedFinalized({
       gift_id: gift.id,
       razorpay_order_id: "order_mock_failed",
-      amount: 30,
-    });
-    // A FAILED payment still carries a razorpay_payment_id but no money ever
-    // moved; refunding it would invent a refund.
-    await paymentRepo.updateWebhookResult(payment.id, {
       razorpay_payment_id: "pay_mock_failed",
+      amount: 30,
       status: "FAILED",
       method: "upi",
-      webhook_event: "payment.failed",
-      webhook_raw: null,
     });
     const result = await runGiftExpirySweep(giftRepo, paymentRepo, new Date());
     expect(result.expired).toBe(1);
@@ -152,17 +133,13 @@ describe("runGiftExpirySweep", () => {
 
   it("never expires or refunds a gift that is already bound to an order", async () => {
     const gift = await seedGift(giftRepo, -1, "ACTIVE");
-    const payment = await paymentRepo.create({
+    await paymentRepo._seedFinalized({
       gift_id: gift.id,
       razorpay_order_id: "order_mock_bound",
-      amount: 30,
-    });
-    await paymentRepo.updateWebhookResult(payment.id, {
       razorpay_payment_id: "pay_mock_bound",
+      amount: 30,
       status: "CAPTURED",
       method: "upi",
-      webhook_event: "payment.captured",
-      webhook_raw: null,
     });
     await giftRepo.markClaimed(gift.id, "user-recipient");
     await giftRepo.bindToOrder(gift.id, "order-in-flight");
