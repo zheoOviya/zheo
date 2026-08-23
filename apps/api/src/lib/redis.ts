@@ -139,9 +139,17 @@ let client: RedisLike | null = null;
 
 export function getRedis(): RedisLike {
   if (client) return client;
-  if (process.env.NODE_ENV === "test" || !config.redis.url) {
+  const realInfra = process.env.TEST_REAL_INFRA === "true";
+  if (!realInfra && (process.env.NODE_ENV === "test" || !config.redis.url)) {
     client = new MemoryRedis();
     return client;
+  }
+  if (realInfra && !process.env.REDIS_URL?.trim()) {
+    // Real infra explicitly demanded but not configured: fail loud instead
+    // of silently degrading to the in-memory backend. The REDIS_URL config
+    // default must NOT satisfy this requirement, so the env var is checked
+    // directly.
+    throw new Error("TEST_REAL_INFRA requires REDIS_URL to be set");
   }
   const redis = new Redis(config.redis.url, {
     // Fail fast instead of queueing + throwing MaxRetriesPerRequestError,

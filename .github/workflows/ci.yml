@@ -11,6 +11,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +59,15 @@ jobs:
 
       - name: Test (API + packages) with coverage gate
         run: pnpm exec vitest run --coverage
+
+      - name: "Test (real infra: Postgres + Redis, mandatory)"
+        run: pnpm exec vitest run apps/api/src/services/redis.realInfra.test.ts apps/api/src/services/payments.pgintegration.test.ts
+        env:
+          TEST_REAL_INFRA: "true"
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+          REDIS_URL: redis://127.0.0.1:6379
+          TEST_PG_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+          TEST_REDIS_URL: redis://127.0.0.1:6379
 
       - name: Test (frontend suites)
         run: |

@@ -60,6 +60,9 @@ function isDbAvailable(): boolean {
 }
 
 function isMemoryMode(): boolean {
+  // TEST_REAL_INFRA explicitly demands real Postgres + Redis. It is
+  // authoritative: never fall back to memory in this mode.
+  if (process.env.TEST_REAL_INFRA === "true") return false;
   return (
     process.env.NODE_ENV === "test" ||
     process.env.USE_MEMORY_REPOS === "true" ||
@@ -160,7 +163,11 @@ function getRepos(): RepoSet {
         sharedUserRoleRepo: new DrizzleUserRoleRepository(db) as unknown as RepoSet["sharedUserRoleRepo"],
         sharedGiftRepo: new DrizzleGiftRepository(db) as unknown as RepoSet["sharedGiftRepo"],
       };
-    } catch {
+    } catch (err) {
+      if (process.env.TEST_REAL_INFRA === "true") {
+        // Fail loud: real infra was demanded, never degrade to memory.
+        throw err;
+      }
       _repos = {
         sharedOrderRepo: new MemoryOrderRepository(),
         sharedPaymentRepo: new MemoryPaymentRepository(),

@@ -13,8 +13,16 @@ let db: DrizzleDb | null = null;
 let pool: Pool | null = null;
 
 export function createDb(): DrizzleDb {
-  if (process.env.NODE_ENV === "test") {
+  const realInfra = process.env.TEST_REAL_INFRA === "true";
+  if (process.env.NODE_ENV === "test" && !realInfra) {
     throw new Error("DB not available in test mode - use Memory repositories");
+  }
+  if (realInfra && !process.env.DATABASE_URL?.trim()) {
+    // Real infra explicitly demanded but not configured: fail loud instead
+    // of silently degrading to the in-memory repositories. The DATABASE_URL
+    // config default must NOT satisfy this requirement, so the env var is
+    // checked directly.
+    throw new Error("TEST_REAL_INFRA requires DATABASE_URL to be set");
   }
   pool = new Pool({ connectionString: config.database.url });
   return drizzle(pool) as unknown as DrizzleDb;

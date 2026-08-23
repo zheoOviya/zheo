@@ -17,16 +17,32 @@ import { onEvent } from "../lib/eventBus";
 import type { EventName } from "@snakzap/types";
 
 // ============================================
-// Task 4 real-PostgreSQL multi-instance proof.
+// Task 4 + 6C.2 real-PostgreSQL multi-instance proof.
 //
 // Two fully independent service stacks (separate pools, repos, PaymentService
 // instances — separate instanceIds) contend on the SAME Postgres database and
 // the SAME mock Razorpay gateway. Each test resets gateway state, so counts
-// are deterministic per test. This suite skips cleanly when Postgres is down
-// (unit suites still run in CI without PG).
+// are deterministic per test.
+//
+// Availability: without TEST_REAL_INFRA the suite skips cleanly when Postgres
+// is down (unit suites still run in CI without PG). With TEST_REAL_INFRA=true
+// a live Postgres is MANDATORY: an unreachable server fails the run loudly
+// instead of silently skipping (Task 6C.2 acceptance condition).
 // ============================================
 
-const ADMIN_URL = "postgresql://snakzap:snakzap_test_pw@127.0.0.1:5432/snakzap_test";
+const realInfra = process.env.TEST_REAL_INFRA === "true";
+const ADMIN_URL =
+  process.env.TEST_PG_ADMIN_URL ??
+  "postgresql://snakzap:snakzap_test_pw@127.0.0.1:5432/snakzap_test";
+
+// Derive the per-run database connection from the admin URL (same host, port
+// and credentials; only the database name changes), so TEST_PG_ADMIN_URL
+// drives BOTH the probe/admin connection and the test database connection.
+function withDatabase(adminUrl: string, database: string): string {
+  const u = new URL(adminUrl);
+  u.pathname = `/${encodeURIComponent(database)}`;
+  return u.toString();
+}
 
 function findDrizzleDir(): string {
   const candidates = [
@@ -202,12 +218,22 @@ async function probePostgres(): Promise<boolean> {
 
 const pgAvailable = await probePostgres();
 
+if (realInfra && !pgAvailable) {
+  // TEST_REAL_INFRA=true demands a live Postgres: fail loud instead of the
+  // default silent skip, so an opted-in real-PG run can never pass green
+  // without Postgres. Without TEST_REAL_INFRA the suite still skips when
+  // Postgres is down, keeping default/CI unit runs green.
+  throw new Error(
+    `TEST_REAL_INFRA requires Postgres, but it is unreachable at ${ADMIN_URL}`,
+  );
+}
+
 describe.skipIf(!pgAvailable)("payments real-Postgres multi-instance integration", () => {
   beforeAll(async () => {
     adminPool = new Pool({ connectionString: ADMIN_URL, max: 2 });
     dbName = `snakzap_it_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     await adminPool.query(`CREATE DATABASE "${dbName}"`);
-    const dbUrl = `postgresql://snakzap:snakzap_test_pw@127.0.0.1:5432/${dbName}`;
+    const dbUrl = withDatabase(ADMIN_URL, dbName);
     await applyMigrations(dbUrl);
     stackA = makeStack(dbUrl);
     stackB = makeStack(dbUrl);
@@ -235,6 +261,47 @@ describe.skipIf(!pgAvailable)("payments real-Postgres multi-instance integration
   beforeEach(() => {
     razorpayService._resetTestState();
     emitted.length = 0;
+  });
+
+  it("0a) real Postgres answers SELECT 1 and reports its version (SELECT version())", async () => {
+    const one = await stackA!.pool.query("SELECT 1 AS one");
+    expect(one.rows[0]!.one).toBe(1);
+    const version = await stackA!.pool.query("SELECT version()");
+    expect(String(version.rows[0]!.version)).toMatch(/PostgreSQL \d+\.\d+/);
+  });
+
+  it("0b) drizzle migrations are actually applied to the fresh database", async () => {
+    const tables = await stackA!.pool.query(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+    );
+    const names = new Set(tables.rows.map((r) => String(r.table_name)));
+    for (const expected of [
+      "users",
+      "restaurants",
+      "menu_items",
+      "orders",
+      "payments",
+      "gifts",
+    ]) {
+      expect(names.has(expected)).toBe(true);
+    }
+    // The partial unique indexes that back the payment first-create race
+    // (migration 0014_payment_concurrency) exist.
+    const indexes = await stackA!.pool.query(
+      `SELECT indexname FROM pg_indexes WHERE tablename = 'payments' AND indexname IN ('payments_order_unique', 'payments_gift_unique')`,
+    );
+    expect(indexes.rows.map((r) => String(r.indexname)).sort()).toEqual([
+      "payments_gift_unique",
+      "payments_order_unique",
+    ]);
+  });
+
+  it("0c) the two service stacks are independent (separate pools/repos/services on one DB)", () => {
+    expect(stackA!.pool).not.toBe(stackB!.pool);
+    expect(stackA!.db).not.toBe(stackB!.db);
+    expect(stackA!.paymentRepo).not.toBe(stackB!.paymentRepo);
+    expect(stackA!.orderRepo).not.toBe(stackB!.orderRepo);
+    expect(stackA!.service).not.toBe(stackB!.service);
   });
 
   it("a) first-create race mints at most one provider order (single intent row)", async () => {
