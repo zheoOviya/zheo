@@ -171,6 +171,10 @@ export function getRedis(): RedisLike {
   client = redis as unknown as RedisLike;
   return client as RedisLike;
 }
+export function getRedisIfExists(): RedisLike | null {
+  return client;
+}
+
 export function resetRedisForTests(): void {
   client = null;
 }
