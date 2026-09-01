@@ -23,6 +23,7 @@ export default defineConfig({
       // Frontends run under their own configs; packages/ui and qa scripts are
       // not covered here.
       include: ["apps/api/**", "packages/db/**", "packages/types/**"],
+      exclude: ["**/node_modules/**", "**/dist/**", "apps/api/integration/**"],
       thresholds: {
         lines: 70,
         branches: 70,
