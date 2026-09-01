@@ -7,10 +7,19 @@ import type { SQL } from "drizzle-orm";
 // bounded-context repo uses the same facade.
 // ============================================
 
+/**
+ * Select chain result: awaitable row list that may optionally be extended
+ * with a Postgres row-lock (`.for("update")`) for Dine-In transactions
+ * (frozen D2.4H2 locking primitives).
+ */
+export type SelectQuery = Promise<unknown[]> & {
+  for: (lock: "update") => SelectQuery;
+};
+
 export type DrizzleDb = {
   select: () => {
     from: (table: unknown) => {
-      where: (cond: SQL<unknown> | undefined) => Promise<unknown[]>;
+      where: (cond: SQL<unknown> | undefined) => SelectQuery;
     };
   };
   update: (table: unknown) => {

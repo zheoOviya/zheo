@@ -44,6 +44,11 @@ playwright-report/
 blob-report/
 .playwright/
 
+# Dine-In disposable artifacts
+e2e-archive/
+apps/api/src/services/dineInOrder.production-intact-D7-recovery.ts.frozen
+apps/api/src/services/dineInOrder.test.corrupted-D7-recovery.ts.frozen
+
 # Temp
 tmp/
 temp/

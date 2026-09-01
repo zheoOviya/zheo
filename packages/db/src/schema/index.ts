@@ -10,3 +10,4 @@ export * from "./supporttickets";
 export * from "./vendorApplications";
 export * from "./notifications";
 export * from "./userRoles";
+export * from "./dinein";

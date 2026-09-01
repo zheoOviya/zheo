@@ -68,6 +68,15 @@ async function main() {
   const { seedCatalogData } = await import("./seed/catalogSeed");
   await seedCatalogData();
 
+  // Deterministic Dine-In E2E fixture (UI8-A-R2): memory-only, fail-closed
+  // bootstrap that seeds exactly one resolvable table when explicitly enabled
+  // (DINE_IN_E2E_FIXTURE=true, non-production, memory storage mode). The
+  // fixture function owns the guards; this hook only gates invocation.
+  if (process.env.DINE_IN_E2E_FIXTURE === "true") {
+    const { seedDineInE2eFixture } = await import("./seed/dineInE2eFixture");
+    await seedDineInE2eFixture();
+  }
+
   // Daily gift expiry + refund sweep (social gifting). Unref'd timer so it
   // never keeps the process alive.
   const { startGiftExpirySweep } = await import("./services/giftExpirySweep");

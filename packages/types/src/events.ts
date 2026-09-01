@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { OrderSchema, OrderStatusSchema } from "./domain";
+import {
+  OrderSchema,
+  OrderStatusSchema,
+  ServiceRequestStatusSchema,
+  ServiceRequestTypeSchema,
+} from "./domain";
 
 // ============================================
 // Event Envelope (EOS Layer 1.2)
@@ -49,6 +54,12 @@ export const EventNameSchema = z.enum([
   "VipTicketCreated",
   "VendorApplicationApproved",
   "VendorApplicationRejected",
+  "SessionOpened",
+  "BillRequested",
+  "ServiceRequestCreated",
+  "ServiceRequestAcknowledged",
+  "ServiceRequestCompleted",
+  "ServiceRequestCancelled",
 ]);
 export type EventName = z.infer<typeof EventNameSchema>;
 
@@ -393,6 +404,73 @@ export const VendorApplicationRejectedEventSchema = z.object({
 export type VendorApplicationRejectedEvent = z.infer<typeof VendorApplicationRejectedEventSchema>;
 
 // ============================================
+// Dine-In events (D2.5C9.1)
+//
+// Emitted from committed Dine-In session mutations. Payloads carry ONLY the
+// frozen facts required by consumers: aggregate identity, restaurant/table
+// scoping, and the transition-specific values. No table_token, PII, payment
+// data, actor profile, full DTO snapshots, UI text, or audit timestamps.
+// No domain transition timestamps in payloads (envelope timestamp is
+// post-commit observation time, owned by the envelope constructor).
+// ============================================
+
+export const SessionOpenedEventSchema = z.object({
+  restaurant_id: z.string().uuid(),
+  table_id: z.string().uuid(),
+  customer_user_id: z.string().uuid(),
+});
+export type SessionOpenedEvent = z.infer<typeof SessionOpenedEventSchema>;
+
+export const BillRequestedEventSchema = z.object({
+  restaurant_id: z.string().uuid(),
+  table_id: z.string().uuid(),
+  session_bill_id: z.string().uuid(),
+  total_amount: z.number().nonnegative(),
+});
+export type BillRequestedEvent = z.infer<typeof BillRequestedEventSchema>;
+
+export const ServiceRequestCreatedEventSchema = z.object({
+  restaurant_id: z.string().uuid(),
+  session_id: z.string().uuid(),
+  request_type: ServiceRequestTypeSchema,
+  request_status: ServiceRequestStatusSchema,
+  // Optional note only where the request type actually carries one.
+  // BRING_BILL (the only current type) is system-generated without a note.
+  note: z.string().nullable().optional(),
+});
+export type ServiceRequestCreatedEvent = z.infer<typeof ServiceRequestCreatedEventSchema>;
+
+export const ServiceRequestAcknowledgedEventSchema = z.object({
+  restaurant_id: z.string().uuid(),
+  session_id: z.string().uuid(),
+  request_type: ServiceRequestTypeSchema,
+  request_status: ServiceRequestStatusSchema,
+});
+export type ServiceRequestAcknowledgedEvent = z.infer<
+  typeof ServiceRequestAcknowledgedEventSchema
+>;
+
+export const ServiceRequestCompletedEventSchema = z.object({
+  restaurant_id: z.string().uuid(),
+  session_id: z.string().uuid(),
+  request_type: ServiceRequestTypeSchema,
+  request_status: ServiceRequestStatusSchema,
+});
+export type ServiceRequestCompletedEvent = z.infer<
+  typeof ServiceRequestCompletedEventSchema
+>;
+
+export const ServiceRequestCancelledEventSchema = z.object({
+  restaurant_id: z.string().uuid(),
+  session_id: z.string().uuid(),
+  request_type: ServiceRequestTypeSchema,
+  request_status: ServiceRequestStatusSchema,
+});
+export type ServiceRequestCancelledEvent = z.infer<
+  typeof ServiceRequestCancelledEventSchema
+>;
+
+// ============================================
 // Event Catalog - typed envelope factory
 // ============================================
 
@@ -429,6 +507,12 @@ export type EventPayloadMap = {
   VipTicketCreated: VipTicketCreatedEvent;
   VendorApplicationApproved: VendorApplicationApprovedEvent;
   VendorApplicationRejected: VendorApplicationRejectedEvent;
+  SessionOpened: SessionOpenedEvent;
+  BillRequested: BillRequestedEvent;
+  ServiceRequestCreated: ServiceRequestCreatedEvent;
+  ServiceRequestAcknowledged: ServiceRequestAcknowledgedEvent;
+  ServiceRequestCompleted: ServiceRequestCompletedEvent;
+  ServiceRequestCancelled: ServiceRequestCancelledEvent;
 };
 
 export type TypedEventEnvelope<K extends EventName = EventName> = Omit<

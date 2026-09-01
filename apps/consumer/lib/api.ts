@@ -701,3 +701,286 @@ export function createSupportTicket(
     body: JSON.stringify({ subject, description }),
   });
 }
+
+// ============================================
+// Dine-In (UI1-B1): public QR table resolution.
+//
+// Public read-only GET - no Authorization required. The opaque token travels
+// in the query string only; it is never part of the response. Errors surface
+// the HTTP status + envelope code so the screen can map 400/404/500 safely.
+// ============================================
+
+export interface TableResolveResult {
+  restaurant: { id: string; name: string };
+  table: { id: string; label: string };
+  can_start_session: boolean;
+}
+
+export async function resolveDineInTable(token: string): Promise<TableResolveResult> {
+  const res = await fetch(
+    `${API_BASE}/api/v1/dine-in/tables/resolve?token=${encodeURIComponent(token)}`,
+    { cache: "no-store" },
+  );
+  const body: {
+    success: boolean;
+    data: TableResolveResult | null;
+    error: { code: string; message: string } | null;
+  } = await res.json();
+  if (!body.success || body.data === null) {
+    const err = new Error(body.error?.message ?? "Request failed") as Error & {
+      status?: number;
+      code?: string;
+    };
+    err.status = res.status;
+    err.code = body.error?.code;
+    throw err;
+  }
+  return body.data;
+}
+
+// ============================================
+// Dine-In (UI1-B2): authenticated session open / resume.
+//
+// POST /sessions with the SAME opaque table token, Bearer access token. The
+// route returns the exact DiningSessionDTO for both CREATED and RESUMED
+// outcomes. The client never generates or depends on restaurant/table ids.
+// ============================================
+
+export interface DiningSessionDTO {
+  id: string;
+  restaurant_id: string;
+  table_id: string;
+  owner_user_id: string;
+  status: string;
+  bill_requested_at: string | null;
+  payment_pending_at: string | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function openDineInSession(
+  tableToken: string,
+  accessToken: string,
+): Promise<{ session: DiningSessionDTO }> {
+  const res = await fetch(`${API_BASE}/api/v1/dine-in/sessions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ table_token: tableToken }),
+    cache: "no-store",
+  });
+  const body: {
+    success: boolean;
+    data: { session: DiningSessionDTO } | null;
+    error: { code: string; message: string } | null;
+  } = await res.json();
+  if (!body.success || body.data === null) {
+    const err = new Error(body.error?.message ?? "Request failed") as Error & {
+      status?: number;
+      code?: string;
+    };
+    err.status = res.status;
+    err.code = body.error?.code;
+    throw err;
+  }
+  return body.data;
+}
+
+// ============================================
+// Dine-In (UI4-A): authenticated place order.
+//
+// POST /orders with ONLY session_id + menu_item_id + quantity lines. No price,
+// GST, total, restaurant_id, table_id, customizations or token is ever sent —
+// the server is the sole pricing authority and rejects non-session items. The
+// response carries the authoritative DineInOrder DTO.
+// ============================================
+
+export interface DineInOrderDTO {
+  id: string;
+  session_id: string;
+  restaurant_id: string;
+  placed_by: string;
+  status: string;
+  total_amount: number;
+  notes: string | null;
+  served_at: string | null;
+  cancelled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlaceDineInOrderItemInput {
+  menu_item_id: string;
+  quantity: number;
+}
+
+export async function placeDineInOrder(
+  sessionId: string,
+  items: PlaceDineInOrderItemInput[],
+  accessToken: string,
+): Promise<{ order: DineInOrderDTO }> {
+  const res = await fetch(`${API_BASE}/api/v1/dine-in/orders`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ session_id: sessionId, items }),
+    cache: "no-store",
+  });
+  const body: {
+    success: boolean;
+    data: { order: DineInOrderDTO } | null;
+    error: { code: string; message: string } | null;
+  } = await res.json();
+  if (!body.success || body.data === null) {
+    const err = new Error(body.error?.message ?? "Request failed") as Error & {
+      status?: number;
+      code?: string;
+    };
+    err.status = res.status;
+    err.code = body.error?.code;
+    throw err;
+  }
+  return body.data;
+}
+
+// ============================================
+// Dine-In (UI5-B): authenticated service request create.
+//
+// POST /service-requests with ONLY session_id + request_type (+ an optional
+// note that is sent EXCLUSIVELY for OTHER). No restaurant_id, table_id, token,
+// status, caller id or timestamps is ever sent — the server owns the session
+// and returns the authoritative ServiceRequestDTO (status PENDING).
+// ============================================
+
+export type DineInServiceRequestCreateType =
+  | "WATER"
+  | "EXTRA_PLATE"
+  | "CUTLERY"
+  | "TISSUE"
+  | "CLEAN_TABLE"
+  | "CALL_STAFF"
+  | "OTHER";
+
+export interface DineInServiceRequestDTO {
+  id: string;
+  session_id: string;
+  restaurant_id: string;
+  requested_by: string;
+  request_type: string;
+  status: string;
+  note: string | null;
+  acknowledged_by: string | null;
+  acknowledged_at: string | null;
+  completed_by: string | null;
+  completed_at: string | null;
+  cancelled_by: string | null;
+  cancelled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function createDineInServiceRequest(
+  sessionId: string,
+  requestType: DineInServiceRequestCreateType,
+  note: string | undefined,
+  accessToken: string,
+): Promise<{ request: DineInServiceRequestDTO }> {
+  const body: Record<string, string> = {
+    session_id: sessionId,
+    request_type: requestType,
+  };
+  // The note is a contract of the OTHER type only — never sent for any other
+  // request type, even if a caller supplies one.
+  if (requestType === "OTHER" && note !== undefined) {
+    body.note = note;
+  }
+  const res = await fetch(`${API_BASE}/api/v1/dine-in/service-requests`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  const response: {
+    success: boolean;
+    data: { request: DineInServiceRequestDTO } | null;
+    error: { code: string; message: string } | null;
+  } = await res.json();
+  if (!response.success || response.data === null) {
+    const err = new Error(
+      response.error?.message ?? "Request failed",
+    ) as Error & { status?: number; code?: string };
+    err.status = res.status;
+    err.code = response.error?.code;
+    throw err;
+  }
+  return response.data;
+}
+
+// ============================================
+// Dine-In (UI6-B): authenticated request bill.
+//
+// POST /sessions/:sessionId/bill — the route reads NO body (the bill is
+// computed entirely from persisted order snapshots). The client never sends
+// session_id in the body, restaurant/table ids, prices, GST, token, request
+// type or payment fields. requestBill is server-idempotent: repeats return the
+// existing frozen bill. The response carries the authoritative session (status
+// BILL_REQUESTED for a first freeze, or PAYMENT_PENDING as an idempotent read),
+// the frozen SessionBill DTO, and the internal BRING_BILL service request.
+// ============================================
+
+export interface DineInBillDTO {
+  id: string;
+  session_id: string;
+  restaurant_id: string;
+  food_subtotal: number;
+  packaging_fee: number;
+  gst_food: number;
+  gst_packaging: number;
+  total_amount: number;
+  frozen_at: string;
+  created_at: string;
+}
+
+export interface RequestDineInBillResult {
+  session: DiningSessionDTO;
+  bill: DineInBillDTO;
+  bringBillRequest: DineInServiceRequestDTO | null;
+}
+
+export async function requestDineInBill(
+  sessionId: string,
+  accessToken: string,
+): Promise<RequestDineInBillResult> {
+  const res = await fetch(
+    `${API_BASE}/api/v1/dine-in/sessions/${encodeURIComponent(sessionId)}/bill`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      cache: "no-store",
+    },
+  );
+  const response: {
+    success: boolean;
+    data: RequestDineInBillResult | null;
+    error: { code: string; message: string } | null;
+  } = await res.json();
+  if (!response.success || response.data === null) {
+    const err = new Error(
+      response.error?.message ?? "Request failed",
+    ) as Error & { status?: number; code?: string };
+    err.status = res.status;
+    err.code = response.error?.code;
+    throw err;
+  }
+  return response.data;
+}

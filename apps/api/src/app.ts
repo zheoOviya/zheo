@@ -10,6 +10,7 @@ import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { rateLimiter } from "./middleware/rateLimiter";
 import { authRouter } from "./routes/auth";
 import { catalogRouter } from "./routes/catalog";
+import { dineInRouter } from "./routes/dineIn";
 import { discoveryRouter } from "./routes/discovery";
 import { ordersRouter } from "./routes/orders";
 import { groupOrdersRouter } from "./routes/groupOrders";
@@ -171,6 +172,7 @@ export function createApp(): Express {
   app.use(API_PREFIX, apiLimiter);
   app.use(`${API_PREFIX}/auth`, authRouter);
   app.use(API_PREFIX, catalogRouter);
+  app.use(`${API_PREFIX}/dine-in`, dineInRouter);
   app.use(`${API_PREFIX}/discovery`, discoveryRouter);
   app.use(`${API_PREFIX}/orders`, groupOrdersRouter);
   app.use(`${API_PREFIX}/orders`, ordersRouter);

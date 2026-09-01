@@ -13,7 +13,15 @@ import { PwaProvider } from "@/components/PwaProvider";
 import { FeatureFlagProvider } from "@/components/FeatureFlagProvider";
 import { OnboardingGate } from "@/components/OnboardingGate";
 
-const FULL_SCREEN_PAGES = ["/login", "/signup", "/onboarding"];
+// Full-screen, focused flows without the global pickup-cart bottom nav. The
+// dine-in menu is one of them: it hosts the sticky "Place order" CTA which
+// must stay reachable above the viewport edge.
+const FULL_SCREEN_PAGES = [
+  "/login",
+  "/signup",
+  "/onboarding",
+  "/dine-in/menu",
+];
 
 const navItems: BottomNavItem[] = [
   {

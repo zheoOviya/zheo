@@ -11,3 +11,18 @@ export { support_tickets } from "./src/schema/supporttickets";
 export { vendorApplicationStatusEnum, vendorApplicationTypeEnum, vendor_applications } from "./src/schema/vendorApplications";
 export { notificationStatusEnum, notifications } from "./src/schema/notifications";
 export { userRoleScopeEnum, user_roles } from "./src/schema/userRoles";
+export {
+  diningSessionStatusEnum,
+  dining_sessions,
+  dineInOrderStatusEnum,
+  dine_in_orders,
+  dine_in_order_items,
+  dine_zones,
+  restaurant_tables,
+  serviceRequestStatusEnum,
+  serviceRequestTypeEnum,
+  service_requests,
+  session_bills,
+  staffAssignmentStatusEnum,
+  staff_assignments,
+} from "./src/schema/dinein";

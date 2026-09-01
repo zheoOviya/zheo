@@ -62,8 +62,11 @@ export default defineConfig({
     {
       // The admin e2e suite signs in repeatedly inside one OTP window, so the
       // per-minute cap is raised for the e2e environment (default is 3/min).
+      // DINE_IN_E2E_FIXTURE enables the fail-closed memory-only dine-in table
+      // fixture (UI8-A-R2): it seeds exactly one resolvable table and is inert
+      // for the other role suites.
       command:
-        "RATE_LIMIT_OTP_PER_MINUTE=50 ALLOW_DEV_AUTH_BYPASS=true pnpm --filter @snakzap/api dev",
+        "RATE_LIMIT_OTP_PER_MINUTE=50 ALLOW_DEV_AUTH_BYPASS=true DINE_IN_E2E_FIXTURE=true pnpm --filter @snakzap/api dev",
       url: `http://localhost:${PORT.api}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 180_000,

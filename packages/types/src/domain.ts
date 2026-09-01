@@ -163,3 +163,51 @@ export const OrderStatusHistorySchema = z.object({
   note: z.string().nullable(),
 });
 export type OrderStatusHistory = z.infer<typeof OrderStatusHistorySchema>;
+
+// ============================================
+// Bounded Context: dine-in
+// ============================================
+
+export const DiningSessionStatusSchema = z.enum([
+  "OPEN",
+  "ACTIVE",
+  "BILL_REQUESTED",
+  "PAYMENT_PENDING",
+  "CLOSED",
+]);
+export type DiningSessionStatus = z.infer<typeof DiningSessionStatusSchema>;
+
+export const DineInOrderStatusSchema = z.enum([
+  "PLACED",
+  "PREPARING",
+  "READY_TO_SERVE",
+  "SERVED",
+  "CANCELLED",
+]);
+export type DineInOrderStatus = z.infer<typeof DineInOrderStatusSchema>;
+
+export const StaffAssignmentStatusSchema = z.enum([
+  "ACTIVE",
+  "ENDED",
+]);
+export type StaffAssignmentStatus = z.infer<typeof StaffAssignmentStatusSchema>;
+
+export const ServiceRequestTypeSchema = z.enum([
+  "WATER",
+  "EXTRA_PLATE",
+  "CUTLERY",
+  "TISSUE",
+  "CLEAN_TABLE",
+  "CALL_STAFF",
+  "BRING_BILL",
+  "OTHER",
+]);
+export type ServiceRequestType = z.infer<typeof ServiceRequestTypeSchema>;
+
+export const ServiceRequestStatusSchema = z.enum([
+  "PENDING",
+  "ACKNOWLEDGED",
+  "COMPLETED",
+  "CANCELLED",
+]);
+export type ServiceRequestStatus = z.infer<typeof ServiceRequestStatusSchema>;
