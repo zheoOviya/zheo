@@ -5,8 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { correlationIdMiddleware } from "../lib/correlation";
 import { logger } from "../lib/logger";
 import { errorHandler, notFoundHandler } from "../middleware/errorHandler";
-import { jwtService } from "../services/jwt";
-import type { DineInTransactionRepos } from "../repositories/dineInContracts";
+import { jwtService } from "../services/jwt";import type { DineInTransactionRepos } from "../repositories/dineInContracts";
 import * as dineInComposition from "../repositories/dineInComposition";
 import {
   getDineInE2eSeedRepos,
@@ -22,6 +21,7 @@ import {
   DINE_IN_FIXTURE_TABLE_ID,
   DINE_IN_FIXTURE_TABLE_LABEL,
   DINE_IN_FIXTURE_TABLE_TOKEN,
+  DINE_IN_FIXTURE_TABLES,
   seedDineInE2eFixture,
 } from "./dineInE2eFixture";
 
@@ -165,7 +165,7 @@ describe("UI8-A-R2 memory seed", () => {
     });
   });
 
-  it("7. double invocation -> exactly one table, no duplicates", async () => {
+  it("7. double invocation -> exactly 15 tables, no duplicates", async () => {
     vi.stubEnv("DINE_IN_E2E_FIXTURE", "true");
 
     await seedDineInE2eFixture();
@@ -174,8 +174,10 @@ describe("UI8-A-R2 memory seed", () => {
     const tables = await sharedRepos().restaurantTables.getByRestaurant(
       DINE_IN_FIXTURE_RESTAURANT_ID,
     );
-    expect(tables).toHaveLength(1);
+    expect(tables).toHaveLength(DINE_IN_FIXTURE_TABLES.length);
     expect(tables[0]!.table_token).toBe(DINE_IN_FIXTURE_TABLE_TOKEN);
+    const tokens = tables.map((t) => t.table_token);
+    expect(new Set(tokens).size).toBe(DINE_IN_FIXTURE_TABLES.length);
   });
 
   it("8. fixture seeds no session/order/request/bill state", async () => {
@@ -218,7 +220,7 @@ describe("UI8-A-R2 memory seed", () => {
     );
   });
 
-  it("10. opaque token never appears in log output", async () => {
+  it("10. opaque tokens never appear in log output", async () => {
     const warnSpy = vi
       .spyOn(logger, "warn")
       .mockReturnValue(undefined as unknown as ReturnType<typeof logger.warn>);
@@ -233,7 +235,109 @@ describe("UI8-A-R2 memory seed", () => {
       ...warnSpy.mock.calls,
       ...infoSpy.mock.calls,
     ]);
-    expect(serialized).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+    for (const t of DINE_IN_FIXTURE_TABLES) {
+      expect(serialized).not.toContain(t.token);
+    }
+  });
+});
+
+describe("UI8-A-R2 multi-table isolation", () => {
+  it("11. exactly 15 distinct active tables seed and all tokens resolve independently", async () => {
+    vi.stubEnv("DINE_IN_E2E_FIXTURE", "true");
+    await seedDineInE2eFixture();
+
+    expect(DINE_IN_FIXTURE_TABLES).toHaveLength(15);
+    const ids = new Set(DINE_IN_FIXTURE_TABLES.map((t) => t.id));
+    const labels = new Set(DINE_IN_FIXTURE_TABLES.map((t) => t.label));
+    const tokens = new Set(DINE_IN_FIXTURE_TABLES.map((t) => t.token));
+    expect(ids.size).toBe(15);
+    expect(labels.size).toBe(15);
+    expect(tokens.size).toBe(15);
+
+    const tables = await sharedRepos().restaurantTables.getByRestaurant(
+      DINE_IN_FIXTURE_RESTAURANT_ID,
+    );
+    expect(tables).toHaveLength(15);
+    expect(tables.every((t) => t.is_active)).toBe(true);
+
+    for (const t of DINE_IN_FIXTURE_TABLES) {
+      const dto = await getDineInTableResolveRepository().resolveByToken(
+        t.token,
+      );
+      expect(dto).toEqual({
+        restaurant: {
+          id: DINE_IN_FIXTURE_RESTAURANT_ID,
+          name: DINE_IN_FIXTURE_RESTAURANT_NAME,
+        },
+        table: { id: t.id, label: t.label },
+        can_start_session: true,
+      });
+    }
+  });
+
+  it("12. a live session on Table 01 does not block Table 02-15", async () => {
+    vi.stubEnv("DINE_IN_E2E_FIXTURE", "true");
+    await seedDineInE2eFixture();
+
+    const app = buildApp();
+
+    const open = await request(app)
+      .post("/api/v1/dine-in/sessions")
+      .set(authHeaders())
+      .send({ table_token: DINE_IN_FIXTURE_TABLE_TOKEN });
+    expect(open.status).toBe(200);
+    expect(open.body.data.session).toMatchObject({
+      restaurant_id: DINE_IN_FIXTURE_RESTAURANT_ID,
+      table_id: DINE_IN_FIXTURE_TABLE_ID,
+      status: "OPEN",
+    });
+
+    for (const t of DINE_IN_FIXTURE_TABLES) {
+      if (t.id === DINE_IN_FIXTURE_TABLE_ID) continue;
+      const resolve = await request(app)
+        .get("/api/v1/dine-in/tables/resolve")
+        .query({ token: t.token });
+      expect(resolve.status).toBe(200);
+      expect(resolve.body.data.can_start_session).toBe(true);
+      expect(resolve.body.data.table.label).toBe(t.label);
+
+      const other = await request(app)
+        .post("/api/v1/dine-in/sessions")
+        .set(authHeaders())
+        .send({ table_token: t.token });
+      expect(other.status).toBe(200);
+      expect(other.body.data.session).toMatchObject({
+        table_id: t.id,
+        status: "OPEN",
+      });
+    }
+  });
+
+  it("13. one-live-session-per-table stays intact on the occupied table", async () => {
+    vi.stubEnv("DINE_IN_E2E_FIXTURE", "true");
+    await seedDineInE2eFixture();
+
+    const app = buildApp();
+
+    const first = await request(app)
+      .post("/api/v1/dine-in/sessions")
+      .set(authHeaders())
+      .send({ table_token: DINE_IN_FIXTURE_TABLE_TOKEN });
+    expect(first.status).toBe(200);
+
+    const secondOwner = jwtService.signAccessToken({
+      sub: "u00000000-0000-4000-8000-000000000099",
+      phone: "+919876543299",
+      role: "CONSUMER",
+      device_fingerprint: "fp_test_device_abc1234",
+    });
+
+    const second = await request(app)
+      .post("/api/v1/dine-in/sessions")
+      .set({ Authorization: `Bearer ${secondOwner}` })
+      .send({ table_token: DINE_IN_FIXTURE_TABLE_TOKEN });
+    expect(second.status).toBe(409);
+    expect(second.body.error.code).toBe("TABLE_OCCUPIED");
   });
 });
 

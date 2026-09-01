@@ -3,9 +3,8 @@ import { uniquePhone } from "../helpers/constants";
 import {
   DINE_IN_FIXTURE_RESTAURANT_ID,
   DINE_IN_FIXTURE_RESTAURANT_NAME,
-  DINE_IN_FIXTURE_TABLE_ID,
-  DINE_IN_FIXTURE_TABLE_LABEL,
-  DINE_IN_FIXTURE_TABLE_TOKEN,
+  DINE_IN_FIXTURE_TABLES,
+  type DineInFixtureTable,
 } from "./dine-in-fixture.constants";
 
 // ============================================
@@ -40,7 +39,38 @@ import {
 //   npx playwright test e2e/consumer/dine-in.spec.ts --project=consumer --grep "skeleton -> loaded"
 // ============================================
 
-const ENTRY = `/dine-in?table=${DINE_IN_FIXTURE_TABLE_TOKEN}`;
+// Per-track fixture assignment (UI8-B1..B8.2). Each track owns one table from
+// DINE_IN_FIXTURE_TABLES so a single full-file CI run against one shared API
+// process never contends for the one live-session slot. The mapping is static,
+// deterministic, and visible: Track A keeps Table 01, and the rest map in
+// declaration order. Assertions that pinned "Table 01" are parameterized to
+// the track's own fixture below.
+const TRACK_FIXTURES: Record<string, DineInFixtureTable> = {
+  A: DINE_IN_FIXTURE_TABLES[0],
+  B: DINE_IN_FIXTURE_TABLES[1],
+  C: DINE_IN_FIXTURE_TABLES[2],
+  D: DINE_IN_FIXTURE_TABLES[3],
+  E1: DINE_IN_FIXTURE_TABLES[4],
+  E2: DINE_IN_FIXTURE_TABLES[5],
+  E3: DINE_IN_FIXTURE_TABLES[6],
+  F1: DINE_IN_FIXTURE_TABLES[7],
+  F2: DINE_IN_FIXTURE_TABLES[8],
+  F3: DINE_IN_FIXTURE_TABLES[9],
+  G1: DINE_IN_FIXTURE_TABLES[10],
+  G2: DINE_IN_FIXTURE_TABLES[11],
+  H: DINE_IN_FIXTURE_TABLES[12],
+  H1: DINE_IN_FIXTURE_TABLES[13],
+  H2: DINE_IN_FIXTURE_TABLES[14],
+} as const;
+
+// The fixture the current test is exercising. Track A reads the entry helper
+// directly; every later track sets it before opening so the shared beforeEach
+// network capture compares against the right table id.
+let activeFixture: DineInFixtureTable = TRACK_FIXTURES.A;
+
+function entryFor(fixture: DineInFixtureTable): string {
+  return `/dine-in?table=${fixture.token}`;
+}
 
 test.use({ viewport: { width: 375, height: 667 } });
 
@@ -280,7 +310,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
               sessionResp.push({
                 status: s.status,
                 restaurantMatches: s.restaurant_id === DINE_IN_FIXTURE_RESTAURANT_ID,
-                tableMatches: s.table_id === DINE_IN_FIXTURE_TABLE_ID,
+                tableMatches: s.table_id === activeFixture.id,
               });
             }
           })
@@ -366,9 +396,11 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
   }
 
   // Shared Track-A entry prerequisite: QR entry -> public resolve -> explicit
-  // authenticated session open -> SESSION_READY. Reused verbatim by Track B.
-  async function openSessionReady(page: Page): Promise<void> {
-    await page.goto(ENTRY);
+  // authenticated session open -> SESSION_READY. Reused verbatim by every other
+  // track, each on its own assigned fixture table.
+  async function openSessionReady(page: Page, fixture: DineInFixtureTable): Promise<void> {
+    activeFixture = fixture;
+    await page.goto(entryFor(fixture));
     await expect(page.getByText("Checking your table...")).toBeVisible();
     await expect(page.getByText("Ready to order")).toBeVisible({ timeout: 15_000 });
 
@@ -394,8 +426,10 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
   test("Track A: QR entry -> resolve -> authenticated session open -> token-free handoff", async ({
     page,
   }) => {
+    activeFixture = TRACK_FIXTURES.A;
+    const fxA = TRACK_FIXTURES.A;
     // ---------- INTERACTION + NETWORK: QR entry, no auth yet ----------
-    await page.goto(ENTRY);
+    await page.goto(entryFor(fxA));
 
     // ---------- DOM MUTATION: resolving -> resolved ----------
     await expect(page.getByText("Checking your table...")).toBeVisible();
@@ -404,7 +438,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
 
     // ---------- RESOLVED DOM ----------
     await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-    await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+    await expect(page.getByText(activeFixture.label).first()).toBeVisible();
     await expect(page.getByText("Ready to order")).toBeVisible();
 
     // Token never rendered. NOTE: document.body.textContent also includes the
@@ -412,7 +446,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
     // so the user-visibility guarantee is asserted on rendered text (innerText)
     // — scripts produce no rendered text.
     const bodyResolved = await page.evaluate(() => document.body.innerText);
-    expect(bodyResolved).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+    expect(bodyResolved).not.toContain(activeFixture.token);
 
     // ---------- NETWORK: resolve GET 200, public (no Authorization) ----------
     await expect.poll(() => resolveCalls.length).toBe(1);
@@ -482,11 +516,11 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
     // ---------- DOM MUTATION: SESSION_READY state ----------
     await expect(page.getByText("View Menu")).toBeVisible();
     await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-    await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+    await expect(page.getByText(activeFixture.label).first()).toBeVisible();
 
     // Token still absent from rendered text.
     const bodyReady = await page.evaluate(() => document.body.innerText);
-    expect(bodyReady).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+    expect(bodyReady).not.toContain(activeFixture.token);
 
     // No menu/order network before the View Menu handoff (Track B not started).
     expect(menuCalls.length).toBe(0);
@@ -519,11 +553,11 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
     // here proves the SPA context store survived the navigation.
     await expect(page.getByText("Dine-In Menu")).toBeVisible();
     await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-    await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+    await expect(page.getByText(activeFixture.label).first()).toBeVisible();
 
     // Token never rendered on the handoff shell either.
     const bodyMenu = await page.evaluate(() => document.body.innerText);
-    expect(bodyMenu).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+    expect(bodyMenu).not.toContain(activeFixture.token);
 
     // Menu fetch was attempted exactly once on mount and aborted (Track B
     // remains unexecuted). No order/service/bill calls anywhere.
@@ -559,7 +593,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
 
   test("Track B: View Menu -> skeleton -> loaded menu (UI8-B2)", async ({ page }) => {
     // ---------- PREREQUISITE: accepted Track-A entry to SESSION_READY ----------
-    await openSessionReady(page);
+    await openSessionReady(page, TRACK_FIXTURES.B);
 
     // No catalog request yet — Track B interaction not started.
     expect(menuCalls.length).toBe(0);
@@ -585,7 +619,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
     await expect(page.locator(".animate-skeleton-teal")).toHaveCount(20);
     await expect(page.getByText("Dine-In Menu")).toBeVisible();
     await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-    await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+    await expect(page.getByText(activeFixture.label).first()).toBeVisible();
     await expect(page.getByText("Chicken Biryani")).not.toBeVisible();
     await assertNoHorizontalOverflow(page);
 
@@ -610,7 +644,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
 
     // ---------- LOADED MENU DOM: context + items + prices + Add (untouched) ----------
     await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-    await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+    await expect(page.getByText(activeFixture.label).first()).toBeVisible();
     await expect(page.getByText("₹220.00")).toBeVisible();
     await expect(page.getByText("₹180.00")).toBeVisible();
     await expect(page.getByRole("button", { name: "Add Chicken Biryani" })).toBeVisible();
@@ -650,9 +684,9 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
     // ---------- STATE PERSISTENCE PROOF: context survived SPA navigation ----------
     expect(new URL(page.url()).pathname).toBe("/dine-in/menu");
     const bodyB2 = await page.evaluate(() => document.body.innerText);
-    expect(bodyB2).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+    expect(bodyB2).not.toContain(activeFixture.token);
     await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-    await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+    await expect(page.getByText(activeFixture.label).first()).toBeVisible();
 
     // ---------- VISUAL SNAPSHOT B2: loaded menu state ----------
     await page.screenshot({
@@ -687,7 +721,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
     page,
   }) => {
     // ---------- PREREQUISITE: accepted Track A+B setup -> real loaded menu ----------
-    await openSessionReady(page);
+    await openSessionReady(page, TRACK_FIXTURES.C);
     await page.getByRole("button", { name: /View Menu/ }).click();
     await page.waitForURL((url) => url.pathname === "/dine-in/menu");
     await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -789,9 +823,9 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
     expect(new URL(page.url()).pathname).toBe("/dine-in/menu");
     expect(new URL(page.url()).search).toBe("");
     const bodyC = await page.evaluate(() => document.body.innerText);
-    expect(bodyC).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+    expect(bodyC).not.toContain(activeFixture.token);
     await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-    await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+    await expect(page.getByText(activeFixture.label).first()).toBeVisible();
 
     // ---------- VISUAL C2: qty 2 + selected-count + Estimated total ----------
     await page.screenshot({
@@ -865,11 +899,11 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
         page,
       }) => {
       // ---------- PREREQUISITE: accepted A/B/C setup -> real loaded menu ----------
-      await openSessionReady(page);
+      await openSessionReady(page, TRACK_FIXTURES.D);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
-  
+
       // Deterministic selection: Chicken Biryani qty 2.
       await page.getByRole("button", { name: "Add Chicken Biryani" }).click();
       await expect(page.getByLabel("Chicken Biryani quantity")).toHaveText("1");
@@ -952,7 +986,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
         "restaurant_id",
         "table_id",
         "customization",
-        DINE_IN_FIXTURE_TABLE_TOKEN.toLowerCase(),
+        activeFixture.token.toLowerCase(),
       ]) {
         expect(rawStr).not.toContain(forbidden);
       }
@@ -972,9 +1006,9 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       expect(new URL(page.url()).pathname).toBe("/dine-in/menu");
       expect(new URL(page.url()).search).toBe("");
       await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-      await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+      await expect(page.getByText(activeFixture.label).first()).toBeVisible();
       const bodyD = await page.evaluate(() => document.body.innerText);
-      expect(bodyD).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+      expect(bodyD).not.toContain(activeFixture.token);
   
       // ---------- VISUAL D3: success state, selection cleared ----------
       await page.screenshot({
@@ -1002,7 +1036,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       await expect(page.getByLabel("Chicken Biryani quantity")).toHaveCount(0);
       await expect(page.getByLabel("Veg Biryani quantity")).toHaveCount(0);
       await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-      await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+      await expect(page.getByText(activeFixture.label).first()).toBeVisible();
   
       // ---------- TRACK SCOPE BOUNDARY ----------
       expect(sessionPosts.length).toBe(1); // Track-A session open (prerequisite)
@@ -1047,7 +1081,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- PREREQUISITE: accepted A/B/C setup -> real loaded menu ----------
-      await openSessionReady(page);
+      await openSessionReady(page, TRACK_FIXTURES.E1);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1107,9 +1141,9 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       expect(new URL(page.url()).pathname).toBe("/dine-in/menu");
       expect(new URL(page.url()).search).toBe("");
       await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-      await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+      await expect(page.getByText(activeFixture.label).first()).toBeVisible();
       const bodyE1 = await page.evaluate(() => document.body.innerText);
-      expect(bodyE1).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+      expect(bodyE1).not.toContain(activeFixture.token);
 
       // ---------- NETWORK BOUNDARY: zero API delta while the panel is open ----------
       expect(apiCalls.length).toBe(apiCallCountBaseline);
@@ -1146,7 +1180,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- PREREQUISITE: accepted A/B/C setup + E-1 panel surface ----------
-      await openSessionReady(page);
+      await openSessionReady(page, TRACK_FIXTURES.E2);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1229,7 +1263,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
         "restaurant_id",
         "table_id",
         "status",
-        DINE_IN_FIXTURE_TABLE_TOKEN.toLowerCase(),
+        activeFixture.token.toLowerCase(),
       ]) {
         expect(rawE2).not.toContain(forbidden);
       }
@@ -1246,7 +1280,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       expect(new URL(page.url()).pathname).toBe("/dine-in/menu");
       expect(new URL(page.url()).search).toBe("");
       const bodyE2 = await page.evaluate(() => document.body.innerText);
-      expect(bodyE2).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+      expect(bodyE2).not.toContain(activeFixture.token);
 
       // ---------- SANITIZED EVIDENCE SUMMARY ----------
       console.log(
@@ -1285,7 +1319,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- PREREQUISITE: accepted B5.2 flow start ----------
-      await openSessionReady(page);
+      await openSessionReady(page, TRACK_FIXTURES.E3);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1355,9 +1389,9 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       expect(new URL(page.url()).pathname).toBe("/dine-in/menu");
       expect(new URL(page.url()).search).toBe("");
       await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-      await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+      await expect(page.getByText(activeFixture.label).first()).toBeVisible();
       const bodyE3 = await page.evaluate(() => document.body.innerText);
-      expect(bodyE3).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+      expect(bodyE3).not.toContain(activeFixture.token);
 
       // ---------- SANITIZED EVIDENCE SUMMARY ----------
       console.log(
@@ -1394,7 +1428,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- PREREQUISITE: accepted A/B/C setup -> real loaded menu ----------
-      await openSessionReady(page);
+      await openSessionReady(page, TRACK_FIXTURES.F1);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1462,9 +1496,9 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       expect(new URL(page.url()).pathname).toBe("/dine-in/menu");
       expect(new URL(page.url()).search).toBe("");
       await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-      await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+      await expect(page.getByText(activeFixture.label).first()).toBeVisible();
       const bodyF1 = await page.evaluate(() => document.body.innerText);
-      expect(bodyF1).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+      expect(bodyF1).not.toContain(activeFixture.token);
 
       // ---------- SANITIZED EVIDENCE SUMMARY ----------
       console.log(
@@ -1500,7 +1534,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       // snapshots (requestBill: OPEN -> 400 SESSION_NOT_BILLABLE). Placing a
       // Track-D order (Chicken qty2) performs the first-order OPEN -> ACTIVE
       // activation, so the confirm emits a REAL 200 bill POST.
-      await openSessionReady(page);
+      await openSessionReady(page, TRACK_FIXTURES.F2);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1581,7 +1615,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       expect(new URL(page.url()).pathname).toBe("/dine-in/menu");
       expect(new URL(page.url()).search).toBe("");
       const bodyF2 = await page.evaluate(() => document.body.innerText);
-      expect(bodyF2).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+      expect(bodyF2).not.toContain(activeFixture.token);
 
       // ---------- SANITIZED EVIDENCE SUMMARY ----------
       console.log(
@@ -1624,7 +1658,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
         }).format(n);
 
       // ---------- PREREQUISITE: accepted F2 flow (order -> ACTIVE, billable) ----------
-      await openSessionReady(page);
+      await openSessionReady(page, TRACK_FIXTURES.F3);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1725,9 +1759,9 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       expect(new URL(page.url()).pathname).toBe("/dine-in/menu");
       expect(new URL(page.url()).search).toBe("");
       await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-      await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+      await expect(page.getByText(activeFixture.label).first()).toBeVisible();
       const bodyF3 = await page.evaluate(() => document.body.innerText);
-      expect(bodyF3).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+      expect(bodyF3).not.toContain(activeFixture.token);
 
       // ---------- SANITIZED EVIDENCE SUMMARY ----------
       console.log(
@@ -1772,7 +1806,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- SETUP: accepted authenticated loaded menu on narrow mobile ----------
-      await openSessionReady(page);
+      await openSessionReady(page, TRACK_FIXTURES.G1);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1870,7 +1904,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- SETUP: accepted authenticated loaded menu ----------
-      await openSessionReady(page);
+      await openSessionReady(page, TRACK_FIXTURES.G2);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1998,7 +2032,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- SETUP: accepted authenticated loaded menu ----------
-      await openSessionReady(page);
+      await openSessionReady(page, TRACK_FIXTURES.H);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -2108,9 +2142,9 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       // Rendered text must not leak the fixture token or internal ids.
       const bodyText = await page.evaluate(() => document.body.innerText);
       for (const secret of [
-        DINE_IN_FIXTURE_TABLE_TOKEN,
+        activeFixture.token,
         DINE_IN_FIXTURE_RESTAURANT_ID,
-        DINE_IN_FIXTURE_TABLE_ID,
+        activeFixture.id,
       ]) {
         expect(bodyText.includes(secret)).toBe(false);
       }
@@ -2143,12 +2177,12 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- PRE-RELOAD STATE: accepted authenticated loaded menu ----------
-      await openSessionReady(page);
+      await openSessionReady(page, TRACK_FIXTURES.H1);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Dine-In Menu")).toBeVisible();
       await expect(page.getByText(DINE_IN_FIXTURE_RESTAURANT_NAME).first()).toBeVisible();
-      await expect(page.getByText(DINE_IN_FIXTURE_TABLE_LABEL).first()).toBeVisible();
+      await expect(page.getByText(activeFixture.label).first()).toBeVisible();
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
       await expect(page.getByRole("button", { name: "Need something?" })).toBeVisible();
       await expect(page.getByRole("button", { name: "Request bill" })).toBeVisible();
@@ -2202,13 +2236,13 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       expect(cartCalls.length).toBe(cartCallsBefore);
 
       // ---------- TOKEN / DATA BOUNDARY ----------
-      expect(page.url()).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+      expect(page.url()).not.toContain(activeFixture.token);
       expect(page.url()).not.toContain("table=");
       const bodyText = await page.evaluate(() => document.body.innerText);
       for (const secret of [
-        DINE_IN_FIXTURE_TABLE_TOKEN,
+        activeFixture.token,
         DINE_IN_FIXTURE_RESTAURANT_ID,
-        DINE_IN_FIXTURE_TABLE_ID,
+        activeFixture.id,
       ]) {
         expect(bodyText.includes(secret)).toBe(false);
       }
@@ -2263,7 +2297,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- SETUP: reach the accepted H1 safe-fail state ----------
-      await openSessionReady(page);
+      await openSessionReady(page, TRACK_FIXTURES.H2);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -2322,13 +2356,13 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       expect(cartCalls.length).toBe(cartCallsBefore);
 
       // ---------- TOKEN / DATA BOUNDARY ----------
-      expect(page.url()).not.toContain(DINE_IN_FIXTURE_TABLE_TOKEN);
+      expect(page.url()).not.toContain(activeFixture.token);
       expect(page.url()).not.toContain("table=");
       let bodyText = await page.evaluate(() => document.body.innerText);
       for (const secret of [
-        DINE_IN_FIXTURE_TABLE_TOKEN,
+        activeFixture.token,
         DINE_IN_FIXTURE_RESTAURANT_ID,
-        DINE_IN_FIXTURE_TABLE_ID,
+        activeFixture.id,
       ]) {
         expect(bodyText.includes(secret)).toBe(false);
       }
@@ -2368,9 +2402,9 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       expect(page.url()).not.toContain("table=");
       bodyText = await page.evaluate(() => document.body.innerText);
       for (const secret of [
-        DINE_IN_FIXTURE_TABLE_TOKEN,
+        activeFixture.token,
         DINE_IN_FIXTURE_RESTAURANT_ID,
-        DINE_IN_FIXTURE_TABLE_ID,
+        activeFixture.id,
       ]) {
         expect(bodyText.includes(secret)).toBe(false);
       }
