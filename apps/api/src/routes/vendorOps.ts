@@ -5,7 +5,14 @@ import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { assertRestaurantAccess } from "../middleware/vendorAccess";
 import { getCatalogRepository } from "./catalog";
-import { getDineInOrderReadRepository } from "../repositories/dineInComposition";
+import {
+  getDineInOrderReadRepository,
+  getDineInTransactionPort,
+} from "../repositories/dineInComposition";
+import {
+  DINE_IN_ADVANCE_TARGETS,
+  DineInOrderService,
+} from "../services/dineInOrder";
 import {
   sharedAuditRepo,
   sharedChainRepo,
@@ -149,6 +156,15 @@ const petpoojaPosService = new PetpoojaPosService(
   getCatalogRepository(),
   sharedIdentityRepo,
   sharedPosOrderRepo,
+);
+
+// Shared Dine-In order service (DINE-OPS1.3). Same frozen instance semantics
+// as the consumer dine-in router: ONE transaction port + ONE catalog repo, so
+// both surfaces observe the same repository universe. The service owns ALL
+// transition logic; this file adds only the vendor authorization wrapper.
+const dineInOrderService = new DineInOrderService(
+  getDineInTransactionPort(),
+  getCatalogRepository(),
 );
 
 // ---- Multi-vendor: list restaurants the caller can operate -----------------
@@ -599,5 +615,118 @@ vendorOpsRouter.get(
       restaurant_id,
     );
     ok(res, orders);
+  }),
+);
+
+// ---- DINE-OPS1.3: Vendor Dine-In order write wrappers ----------------------
+//
+// Vendor/staff surfaces for the FROZEN Dine-In order transitions:
+//   POST /dine-in/orders/:orderId/advance   (PLACED->PREPARING->READY_TO_SERVE->SERVED)
+//   POST /dine-in/orders/:orderId/cancel    (PLACED/PREPARING -> CANCELLED)
+//
+// This is a PRODUCT-FUNCTIONAL wrapper only. The service owns every transition
+// decision (legal edges, same-target idempotency, invalid jumps 409, cancel
+// precedence / bill freeze / audit timestamps). Nothing here adds or changes
+// state-machine logic.
+//
+// Authorization:
+//   1. orderId is transport-validated (UUID).
+//   2. The persisted order is loaded READ-ONLY (discovery only — never
+//      authoritative for transition state; the service re-locks the session
+//      and order inside its own transaction).
+//   3. restaurant_id is DERIVED from that persisted order — never accepted
+//      from body/query — then the existing assertRestaurantAccess gate runs.
+//   4. Only after access is proven is the existing service method invoked, so
+//      an unauthorized restaurant can never reach the mutation.
+// Caller identity (caller_user_id) comes from the vendor mount locals
+// (res.locals.userId), never from the client.
+
+const DineInOrderIdSchema = z.string().uuid("orderId must be a valid uuid");
+
+// Advance target limited to the frozen forward-target set (same contract as
+// the consumer /api/v1/dine-in advance route). No new transition semantics.
+const VendorDineInAdvanceSchema = z.object({
+  target_status: z.enum(DINE_IN_ADVANCE_TARGETS),
+});
+
+async function assertVendorOrderAccess(
+  res: { locals: Record<string, unknown> },
+  orderId: string,
+): Promise<void> {
+  const order = await getDineInOrderReadRepository().getById(orderId);
+  if (order === null) {
+    throw new AppError("ORDER_NOT_FOUND", "Dine-in order not found", 404);
+  }
+  await assertRestaurantAccess(res, order.restaurant_id);
+}
+
+vendorOpsRouter.post(
+  "/dine-in/orders/:orderId/advance",
+  asyncHandler(async (req, res) => {
+    const orderId = DineInOrderIdSchema.safeParse(req.params.orderId);
+    if (!orderId.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid order id",
+        400,
+        orderId.error.flatten(),
+      );
+    }
+    const body = VendorDineInAdvanceSchema.safeParse(req.body);
+    if (!body.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid advance request",
+        400,
+        body.error.flatten(),
+      );
+    }
+    const userId = res.locals.userId as string;
+    if (!userId) {
+      throw new AppError("UNAUTHORIZED", "User identity missing from token", 401);
+    }
+
+    // Authorization-before-mutation: derive restaurant from the persisted
+    // order, gate access, and only then call the frozen service transition.
+    await assertVendorOrderAccess(res, orderId.data);
+    const outcome = await dineInOrderService.advanceOrder({
+      order_id: orderId.data,
+      caller_user_id: userId,
+      correlation_id: res.locals.correlationId,
+      target_status: body.data.target_status,
+    });
+
+    ok(res, { order: outcome.value.order });
+  }),
+);
+
+vendorOpsRouter.post(
+  "/dine-in/orders/:orderId/cancel",
+  asyncHandler(async (req, res) => {
+    const orderId = DineInOrderIdSchema.safeParse(req.params.orderId);
+    if (!orderId.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid order id",
+        400,
+        orderId.error.flatten(),
+      );
+    }
+    const userId = res.locals.userId as string;
+    if (!userId) {
+      throw new AppError("UNAUTHORIZED", "User identity missing from token", 401);
+    }
+
+    // Authorization-before-mutation: derive restaurant from the persisted
+    // order, gate access, then call the frozen service cancellation. No body
+    // is read: cancelled_by/cancelled_at are server-authoritative.
+    await assertVendorOrderAccess(res, orderId.data);
+    const outcome = await dineInOrderService.cancelOrder({
+      order_id: orderId.data,
+      caller_user_id: userId,
+      correlation_id: res.locals.correlationId,
+    });
+
+    ok(res, { order: outcome.value.order });
   }),
 );
