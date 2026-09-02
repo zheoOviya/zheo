@@ -5,6 +5,7 @@ import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { assertRestaurantAccess } from "../middleware/vendorAccess";
 import { getCatalogRepository } from "./catalog";
+import { getDineInOrderReadRepository } from "../repositories/dineInComposition";
 import {
   sharedAuditRepo,
   sharedChainRepo,
@@ -568,5 +569,35 @@ vendorOpsRouter.get(
       `attachment; filename="gstr1-${month}.csv"`,
     );
     res.send(csv);
+  }),
+);
+
+// ---- DINE-OPS1.2: Incoming Dine-In Orders (kitchen queue) ------------------
+
+// Read-only vendor Dine-In orders surface. Only the restaurant is client
+// input; the table/session association is derived by the repository
+// (dining_sessions.table_id -> restaurant_tables), never client-supplied.
+const VendorDineInOrdersQuerySchema = z.object({
+  restaurant_id: z.string().uuid("restaurant_id must be a valid uuid"),
+});
+
+vendorOpsRouter.get(
+  "/dine-in/orders",
+  asyncHandler(async (req, res) => {
+    const parsed = VendorDineInOrdersQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid query parameters",
+        400,
+        parsed.error.flatten(),
+      );
+    }
+    const { restaurant_id } = parsed.data;
+    await assertRestaurantAccess(res, restaurant_id);
+    const orders = await getDineInOrderReadRepository().getKitchenQueueByRestaurant(
+      restaurant_id,
+    );
+    ok(res, orders);
   }),
 );

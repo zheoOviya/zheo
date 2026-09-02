@@ -122,6 +122,38 @@ export interface DineInOrderWithItemsDTO extends DineInOrderDTO {
   items: DineInOrderItemDTO[];
 }
 
+// Kitchen queue item read model (DINE-OPS1.2). Only kitchen-useful server
+// data: historical name snapshot, menu item id, quantity, and item subtotal.
+// The name is a persisted snapshot on dine_in_order_items — no catalog join.
+export interface DineInKitchenOrderItemDTO {
+  menu_item_id: string;
+  name: string;
+  quantity: number;
+  item_subtotal: number;
+}
+
+// Kitchen queue order read model (DINE-OPS1.2). Table identity is DERIVED
+// from the repository (dining_sessions.table_id -> restaurant_tables), never
+// client-supplied. Statuses are restricted to the actionable kitchen set
+// (PLACED / PREPARING / READY_TO_SERVE); SERVED / CANCELLED are excluded.
+export interface DineInKitchenOrderDTO {
+  id: string;
+  session_id: string;
+  status: DineInOrderStatus;
+  total_amount: number;
+  created_at: string;
+  table: { id: string; label: string };
+  items: DineInKitchenOrderItemDTO[];
+}
+
+// Default kitchen queue statuses (DINE-OPS1.2): orders that still need
+// kitchen action. SERVED and CANCELLED are terminal and excluded.
+export const KITCHEN_ORDER_STATUSES: DineInOrderStatus[] = [
+  "PLACED",
+  "PREPARING",
+  "READY_TO_SERVE",
+];
+
 // Deliberately no table_id: table identity is DERIVED via dining_sessions.
 export interface ServiceRequestDTO {
   id: string;
@@ -311,6 +343,9 @@ export interface DineInOrderRepository {
     },
   ): Promise<TransitionResult<DineInOrderDTO, DineInOrderStatus>>;
   listForBill(sessionId: string): Promise<DineInOrderWithItemsDTO[]>;
+  /** Kitchen execution queue (DINE-OPS1.2): actionable statuses only, oldest
+   *  first, table/session derived by the repository. */
+  getKitchenQueueByRestaurant(restaurantId: string): Promise<DineInKitchenOrderDTO[]>;
 }
 
 export interface ServiceRequestRepository {

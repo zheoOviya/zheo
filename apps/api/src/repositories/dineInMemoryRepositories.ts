@@ -5,7 +5,7 @@ import type {
   ServiceRequestStatus,
   StaffAssignmentStatus,
 } from "@snakzap/types";
-import { makeTxBoundSessionBill } from "./dineInContracts";
+import { makeTxBoundSessionBill, KITCHEN_ORDER_STATUSES } from "./dineInContracts";
 import type {
   ArtifactLookup,
   CreateDineInOrderInput,
@@ -15,6 +15,7 @@ import type {
   CreateServiceRequestInput,
   CreateStaffAssignmentInput,
   DineInOrderDTO,
+  DineInKitchenOrderDTO,
   DineInOrderItemDTO,
   DineInOrderWithItemsDTO,
   DineInTransactionPort,
@@ -384,6 +385,15 @@ export class MemoryDineInOrderRepository
 {
   private orders = new Map<string, DineInOrderWithItemsDTO>();
 
+  // DINE-OPS1.2 kitchen queue: the order repo derives table/session from the
+  // same shared memory universe, so the vendor read model needs no client
+  // input. Both are optional for unit isolation; buildMemoryDineInRepos wires
+  // them to the shared instances.
+  constructor(
+    private readonly sessions?: MemoryDiningSessionRepository,
+    private readonly tables?: MemoryRestaurantTableRepository,
+  ) {}
+
   async getById(orderId: string): Promise<DineInOrderDTO | null> {
     return this.orders.get(orderId) ?? null;
   }
@@ -465,6 +475,44 @@ export class MemoryDineInOrderRepository
     return Array.from(this.orders.values()).filter(
       (o) => o.session_id === sessionId && o.status !== "CANCELLED",
     );
+  }
+
+  async getKitchenQueueByRestaurant(
+    restaurantId: string,
+  ): Promise<DineInKitchenOrderDTO[]> {
+    const orders = Array.from(this.orders.values())
+      .filter(
+        (o) =>
+          o.restaurant_id === restaurantId &&
+          KITCHEN_ORDER_STATUSES.includes(o.status),
+      )
+      .sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      );
+    const result: DineInKitchenOrderDTO[] = [];
+    for (const order of orders) {
+      const session = this.sessions
+        ? await this.sessions.getById(order.session_id)
+        : null;
+      const table = session && this.tables
+        ? await this.tables.getById(session.table_id)
+        : null;
+      result.push({
+        id: order.id,
+        session_id: order.session_id,
+        status: order.status,
+        total_amount: order.total_amount,
+        created_at: order.created_at,
+        table: { id: table?.id ?? "", label: table?.label ?? "" },
+        items: order.items.map((i) => ({
+          menu_item_id: i.menu_item_id,
+          name: i.name,
+          quantity: i.quantity,
+          item_subtotal: i.item_subtotal,
+        })),
+      });
+    }
+    return result;
   }
 
   async lockById(orderId: string): Promise<DineInOrderDTO | null> {
@@ -709,11 +757,13 @@ export class MemoryDineInTransactionPort implements DineInTransactionPort {
 }
 
 export function buildMemoryDineInRepos(): DineInTransactionRepos {
+  const restaurantTables = new MemoryRestaurantTableRepository();
+  const diningSessions = new MemoryDiningSessionRepository();
   return {
-    restaurantTables: new MemoryRestaurantTableRepository(),
-    diningSessions: new MemoryDiningSessionRepository(),
+    restaurantTables,
+    diningSessions,
     staffAssignments: new MemoryStaffAssignmentRepository(),
-    dineInOrders: new MemoryDineInOrderRepository(),
+    dineInOrders: new MemoryDineInOrderRepository(diningSessions, restaurantTables),
     serviceRequests: new MemoryServiceRequestRepository(),
     sessionBills: makeTxBoundSessionBill(new MemorySessionBillRepository()),
     restaurantEligibility: new MemoryRestaurantEligibilityReader(),

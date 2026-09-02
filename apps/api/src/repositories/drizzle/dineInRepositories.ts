@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, ne } from "drizzle-orm";
+import { KITCHEN_ORDER_STATUSES } from "../dineInContracts";
 import {
   dine_in_order_items,
   dine_in_orders,
@@ -29,6 +30,7 @@ import type {
   CreateStaffAssignmentInput,
   DiningSessionDTO,
   DineInOrderDTO,
+  DineInKitchenOrderDTO,
   DineInOrderItemDTO,
   DineInOrderWithItemsDTO,
   DineZoneDTO,
@@ -818,6 +820,69 @@ export class DrizzleDineInOrderRepository
     for (const row of rows) {
       const items = await this.loadItems(row.id as string);
       results.push({ ...mapOrderRow(row, items), items });
+    }
+    return results;
+  }
+
+  async getKitchenQueueByRestaurant(
+    restaurantId: string,
+  ): Promise<DineInKitchenOrderDTO[]> {
+    const rows = (await this.db
+      .select()
+      .from(dine_in_orders)
+      .where(
+        and(
+          eq(dine_in_orders.restaurant_id, restaurantId),
+          inArray(dine_in_orders.status, KITCHEN_ORDER_STATUSES),
+        ),
+      )) as Record<string, unknown>[];
+    rows.sort(
+      (a, b) =>
+        new Date(a.created_at as Date).getTime() -
+        new Date(b.created_at as Date).getTime(),
+    );
+    const results: DineInKitchenOrderDTO[] = [];
+    for (const row of rows) {
+      const orderId = row.id as string;
+      const items = await this.loadItems(orderId);
+      const sessionRows = (await this.db
+        .select()
+        .from(dining_sessions)
+        .where(eq(dining_sessions.id, row.session_id as string))) as Record<
+        string,
+        unknown
+      >[];
+      const session = sessionRows[0];
+      let table: { id: string; label: string } = { id: "", label: "" };
+      if (session) {
+        const tableRows = (await this.db
+          .select()
+          .from(restaurant_tables)
+          .where(eq(restaurant_tables.id, session.table_id as string))) as Record<
+          string,
+          unknown
+        >[];
+        if (tableRows[0]) {
+          table = {
+            id: tableRows[0].id as string,
+            label: tableRows[0].label as string,
+          };
+        }
+      }
+      results.push({
+        id: orderId,
+        session_id: row.session_id as string,
+        status: row.status as DineInOrderStatus,
+        total_amount: Number(row.total_amount),
+        created_at: (row.created_at as Date).toISOString(),
+        table,
+        items: items.map((i) => ({
+          menu_item_id: i.menu_item_id,
+          name: i.name,
+          quantity: i.quantity,
+          item_subtotal: i.item_subtotal,
+        })),
+      });
     }
     return results;
   }

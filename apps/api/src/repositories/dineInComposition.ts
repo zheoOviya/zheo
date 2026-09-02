@@ -5,9 +5,13 @@ import type {
   DineInTransactionPort,
   DineInTransactionRepos,
   TableResolveRepository,
+  DineInOrderRepository,
 } from "./dineInContracts";
 import { DrizzleDineInTransactionPort } from "./drizzle/dineInTransactionPort";
-import { DrizzleRestaurantTableRepository } from "./drizzle/dineInRepositories";
+import {
+  DrizzleRestaurantTableRepository,
+  DrizzleDineInOrderRepository,
+} from "./drizzle/dineInRepositories";
 import {
   buildMemoryDineInRepos,
   MemoryDineInTransactionPort,
@@ -117,4 +121,26 @@ export function getDineInE2eSeedRepos(): {
     restaurantEligibility:
       _memoryRepos!.restaurantEligibility as unknown as MemoryRestaurantEligibilityReader,
   };
+}
+
+// Read-only vendor Dine-In order surface (DINE-OPS1.2). Postgres mode -> the
+// Drizzle order repository over the shared db handle (same logical rows as the
+// tx port). Memory mode -> the SAME MemoryDineInOrderRepository held by the
+// shared memory repo set, so route tests seed one universe. The vendor
+// kitchen-queue route wires this directly; the returned repository exposes
+// only read methods (no writes).
+let _vendorOrderReadRepo: DineInOrderRepository | null = null;
+
+export function getDineInOrderReadRepository(): DineInOrderRepository {
+  if (!_vendorOrderReadRepo) {
+    const mode = getStorageMode();
+    if (mode === "postgres") {
+      _vendorOrderReadRepo = new DrizzleDineInOrderRepository(getDb());
+    } else {
+      getDineInTransactionPort();
+      _vendorOrderReadRepo =
+        _memoryRepos!.dineInOrders as unknown as DineInOrderRepository;
+    }
+  }
+  return _vendorOrderReadRepo;
 }
