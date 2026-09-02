@@ -158,6 +158,21 @@ const PickupSlotsQuerySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
 });
 
+/**
+ * Pickup slot window for a date (DINE checkout contract).
+ *
+ * A single clock snapshot prevents separate clock reads from straddling a time
+ * boundary: `toISOString()` yields the UTC date while `getHours()` yields the
+ * process-local hour, and those existing semantics are intentionally left
+ * unchanged by this maintenance patch.
+ *
+ * - Same-day requests only ever offer FUTURE slots: the window starts at the
+ *   next full hour after now (never earlier) and ends at the last slot of the
+ *   day (22:45). When the day's pickup window has closed (startHour >=
+ *   endHour, i.e. local hour >= 22) the same-day list is LEGITIMATELY EMPTY —
+ *   the kitchen takes no more scheduled pickups today.
+ * - Future dates always return the full 08:00-22:45 window.
+ */
 function generatePickupSlots(forDate: string) {
   const slots: Array<{
     time: string;
@@ -166,8 +181,9 @@ function generatePickupSlots(forDate: string) {
     current_orders: number;
     max_capacity: number;
   }> = [];
-  const today = new Date().toISOString().slice(0, 10);
-  const startHour = forDate === today ? Math.max(new Date().getHours() + 1, 8) : 8;
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const startHour = forDate === today ? Math.max(now.getHours() + 1, 8) : 8;
   const endHour = 23;
 
   for (let hour = startHour; hour < endHour; hour++) {
