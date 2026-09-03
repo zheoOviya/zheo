@@ -106,6 +106,7 @@ describe("Vendor AppShell entry points", () => {
       expect(screen.getByRole("button", { name: "Sign out" })).toBeDefined();
     });
     expect(screen.getByText("Overview")).toBeDefined();
+    expect(screen.getByText("Dine-In")).toBeDefined();
     expect(screen.queryByRole("link", { name: "Sign in" })).toBeNull();
   });
 

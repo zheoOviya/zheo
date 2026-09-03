@@ -57,7 +57,11 @@ async function read<T>(res: Response): Promise<T> {
     const body = (await res.json().catch(() => null)) as {
       error?: { message?: string; code?: string };
     } | null;
-    throw new Error(body?.error?.message ?? `Request failed (${res.status})`);
+    throw new ApiError(
+      body?.error?.message ?? `Request failed (${res.status})`,
+      body?.error?.code,
+      res.status,
+    );
   }
   const body = (await res.json()) as { data: T; error: null };
   return body.data;
@@ -105,6 +109,30 @@ export interface VendorOrder {
   customer_phone: string | null;
   is_catering: boolean;
   headcount: number | null;
+}
+
+export type DineInOrderStatus =
+  | "PLACED"
+  | "PREPARING"
+  | "READY_TO_SERVE"
+  | "SERVED"
+  | "CANCELLED";
+
+export type DineInAdvanceTarget = "PREPARING" | "READY_TO_SERVE" | "SERVED";
+
+export interface VendorDineInOrder {
+  id: string;
+  session_id: string;
+  status: DineInOrderStatus;
+  total_amount: number;
+  created_at: string;
+  table: { id: string; label: string };
+  items: {
+    menu_item_id: string;
+    name: string;
+    quantity: number;
+    item_subtotal: number;
+  }[];
 }
 
 export interface VendorMenuItem {
@@ -255,6 +283,41 @@ export async function cancelOrder(
   orderId: string,
 ): Promise<{ order_id: string; status: OrderStatus }> {
   return read(await authedFetch(`/api/vendor/orders/${orderId}/cancel`, { method: "PUT" }));
+}
+
+// ============================================
+// Dine-in orders
+// ============================================
+
+export interface DineInMutationResult {
+  order: { id: string; status: DineInOrderStatus };
+}
+
+export async function fetchDineInOrders(restaurantId: string): Promise<VendorDineInOrder[]> {
+  const params = new URLSearchParams({ restaurant_id: restaurantId });
+  return read<VendorDineInOrder[]>(
+    await authedFetch(`/api/vendor/dine-in/orders?${params.toString()}`),
+  );
+}
+
+export async function advanceDineInOrder(
+  orderId: string,
+  targetStatus: DineInAdvanceTarget,
+): Promise<DineInMutationResult> {
+  return read<DineInMutationResult>(
+    await authedFetch(`/api/vendor/dine-in/orders/${orderId}/advance`, {
+      method: "POST",
+      body: JSON.stringify({ target_status: targetStatus }),
+    }),
+  );
+}
+
+export async function cancelDineInOrder(orderId: string): Promise<DineInMutationResult> {
+  return read<DineInMutationResult>(
+    await authedFetch(`/api/vendor/dine-in/orders/${orderId}/cancel`, {
+      method: "POST",
+    }),
+  );
 }
 
 // ============================================
