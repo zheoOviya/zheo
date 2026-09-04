@@ -24,6 +24,7 @@ import type {
   RestaurantEligibilityDTO,
   RestaurantTableDTO,
   ServiceRequestDTO,
+  ServiceRequestOperationsDTO,
   SessionBillDTO,
   SessionBillRepository,
   StaffAssignmentDTO,
@@ -538,6 +539,15 @@ export class MemoryServiceRequestRepository
 {
   private requests = new Map<string, ServiceRequestDTO>();
 
+  // DINE-OPS2 operations queue: the request repo derives the vendor read-model
+  // table from the same shared memory universe (service_requests.session_id ->
+  // dining_sessions.table_id -> restaurant_tables). Both are optional for unit
+  // isolation; buildMemoryDineInRepos wires them to the shared instances.
+  constructor(
+    private readonly sessions?: MemoryDiningSessionRepository,
+    private readonly tables?: MemoryRestaurantTableRepository,
+  ) {}
+
   async getById(requestId: string): Promise<ServiceRequestDTO | null> {
     return this.requests.get(requestId) ?? null;
   }
@@ -558,6 +568,55 @@ export class MemoryServiceRequestRepository
       .sort(
         (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
       );
+  }
+
+  // DINE-OPS2 vendor operations queue: PENDING + ACKNOWLEDGED, BRING_BILL
+  // excluded, table identity derived server-side from the shared session/table
+  // universe (no client input). Ordering mirrors the Drizzle implementation
+  // exactly: (created_at ASC, id ASC) — deterministic across equal timestamps.
+  // A request whose session/table cannot be resolved is OMITTED (inner-join
+  // semantics); an empty fake table identity is never emitted.
+  async getOperationsQueueByRestaurant(
+    restaurantId: string,
+  ): Promise<ServiceRequestOperationsDTO[]> {
+    const requests = Array.from(this.requests.values())
+      .filter(
+        (r) =>
+          r.restaurant_id === restaurantId &&
+          PENDING_REQUEST_STATUSES.includes(r.status) &&
+          r.request_type !== "BRING_BILL",
+      )
+      .sort(
+        (a, b) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime() ||
+          a.id.localeCompare(b.id),
+      );
+    const results: ServiceRequestOperationsDTO[] = [];
+    for (const request of requests) {
+      const session = this.sessions
+        ? await this.sessions.getById(request.session_id)
+        : null;
+      const table = session && this.tables
+        ? await this.tables.getById(session.table_id)
+        : null;
+      if (!session || !table) {
+        // Mirrors the Drizzle inner-join semantics (see drizzle queue impl):
+        // no resolvable server-derived table identity -> row is not part of
+        // the actionable queue.
+        continue;
+      }
+      results.push({
+        id: request.id,
+        session_id: request.session_id,
+        restaurant_id: request.restaurant_id,
+        request_type: request.request_type,
+        status: request.status,
+        note: request.note,
+        created_at: request.created_at,
+        table: { id: table.id, label: table.label },
+      });
+    }
+    return results;
   }
 
   async create(input: CreateServiceRequestInput): Promise<ServiceRequestDTO> {
@@ -764,7 +823,7 @@ export function buildMemoryDineInRepos(): DineInTransactionRepos {
     diningSessions,
     staffAssignments: new MemoryStaffAssignmentRepository(),
     dineInOrders: new MemoryDineInOrderRepository(diningSessions, restaurantTables),
-    serviceRequests: new MemoryServiceRequestRepository(),
+    serviceRequests: new MemoryServiceRequestRepository(diningSessions, restaurantTables),
     sessionBills: makeTxBoundSessionBill(new MemorySessionBillRepository()),
     restaurantEligibility: new MemoryRestaurantEligibilityReader(),
   };

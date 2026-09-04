@@ -7,12 +7,14 @@ import { assertRestaurantAccess } from "../middleware/vendorAccess";
 import { getCatalogRepository } from "./catalog";
 import {
   getDineInOrderReadRepository,
+  getDineInServiceRequestReadRepository,
   getDineInTransactionPort,
 } from "../repositories/dineInComposition";
 import {
   DINE_IN_ADVANCE_TARGETS,
   DineInOrderService,
 } from "../services/dineInOrder";
+import { DiningSessionService } from "../services/dineInSession";
 import {
   sharedAuditRepo,
   sharedChainRepo,
@@ -48,6 +50,7 @@ import {
   MenuBulkUpdateError,
   type RestaurantDTO,
 } from "../repositories/catalogRepository";
+import type { ServiceRequestDTO } from "../repositories/dineInContracts";
 import { logger } from "../lib/logger";
 
 // ============================================
@@ -165,6 +168,16 @@ const petpoojaPosService = new PetpoojaPosService(
 const dineInOrderService = new DineInOrderService(
   getDineInTransactionPort(),
   getCatalogRepository(),
+);
+
+// Shared Dine-In session/service-request service (DINE-OPS2). Same frozen
+// instance semantics: ONE transaction port so the vendor surface observes the
+// SAME repository universe as the consumer dine-in router and the kitchen
+// queue. The service owns ALL transition logic; this file adds only the vendor
+// authorization wrapper. BRING_BILL is never reachable through these routes
+// (the billing flow owns it); no vendor cancel endpoint is exposed.
+const dineInSessionService = new DiningSessionService(
+  getDineInTransactionPort(),
 );
 
 // ---- Multi-vendor: list restaurants the caller can operate -----------------
@@ -728,5 +741,150 @@ vendorOpsRouter.post(
     });
 
     ok(res, { order: outcome.value.order });
+  }),
+);
+
+// ---- DINE-OPS2: Vendor Dine-In Service Request Operations ------------------
+//
+// Read surface:
+//   GET  /dine-in/service-requests?restaurant_id=<uuid>
+//
+// Mutation wrappers (acknowledge / complete ONLY — no vendor cancel):
+//   POST /dine-in/service-requests/:requestId/acknowledge
+//   POST /dine-in/service-requests/:requestId/complete
+//
+// This is a PRODUCT-FUNCTIONAL wrapper only. The frozen DiningSessionService
+// owns every transition decision (source/target legality, idempotent retries,
+// terminal 409s, BRING_BILL protection, audit timestamps). Nothing here adds
+// or changes state-machine logic.
+//
+// Authorization:
+//   1. requestId is transport-validated (UUID).
+//   2. The persisted request is loaded READ-ONLY (discovery only — never
+//      authoritative for transition state; the service re-locks the session
+//      and request inside its own transaction).
+//   3. restaurant_id is DERIVED from that persisted request — never accepted
+//      from body/query — then the existing assertRestaurantAccess gate runs.
+//   4. Only after access is proven is the existing service method invoked, so
+//      an unauthorized restaurant can never reach the mutation.
+// Caller identity (caller_user_id) comes from the vendor mount locals
+// (res.locals.userId), never from the client. req.body is never parsed for
+// mutation semantics: acknowledge_by/at and completed_by/at are
+// server-authoritative.
+
+const DineInServiceRequestIdSchema = z.string().uuid(
+  "requestId must be a valid uuid",
+);
+
+const VendorDineInServiceRequestsQuerySchema = z.object({
+  restaurant_id: z.string().uuid("restaurant_id must be a valid uuid"),
+});
+
+async function loadVendorServiceRequestForMutation(
+  res: { locals: Record<string, unknown> },
+  requestId: string,
+): Promise<ServiceRequestDTO> {
+  const request = await getDineInServiceRequestReadRepository().getById(requestId);
+  if (request === null) {
+    throw new AppError("SERVICE_REQUEST_NOT_FOUND", "Service request not found", 404);
+  }
+  // AUTHORIZATION BEFORE DOMAIN DECISION: the restaurant gate runs first so an
+  // unauthorized caller receives a plain FORBIDDEN and can never distinguish a
+  // foreign request's existence or request_type via a later 409. Only after
+  // access is proven do we apply the BRING_BILL boundary (owned by the billing
+  // flow; same error code/message the service uses for its own create/cancel
+  // guard — no new taxonomy).
+  await assertRestaurantAccess(res, request.restaurant_id);
+  if (request.request_type === "BRING_BILL") {
+    throw new AppError(
+      "BRING_BILL_MANAGED_BY_BILL_FLOW",
+      "Bringing the bill is managed by the billing flow",
+      409,
+    );
+  }
+  return request;
+}
+
+vendorOpsRouter.get(
+  "/dine-in/service-requests",
+  asyncHandler(async (req, res) => {
+    const parsed = VendorDineInServiceRequestsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid query parameters",
+        400,
+        parsed.error.flatten(),
+      );
+    }
+    const { restaurant_id } = parsed.data;
+    await assertRestaurantAccess(res, restaurant_id);
+    const queue =
+      await getDineInServiceRequestReadRepository().getOperationsQueueByRestaurant(
+        restaurant_id,
+      );
+    ok(res, queue);
+  }),
+);
+
+vendorOpsRouter.post(
+  "/dine-in/service-requests/:requestId/acknowledge",
+  asyncHandler(async (req, res) => {
+    const requestId = DineInServiceRequestIdSchema.safeParse(req.params.requestId);
+    if (!requestId.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid request id",
+        400,
+        requestId.error.flatten(),
+      );
+    }
+    const userId = res.locals.userId as string;
+    if (!userId) {
+      throw new AppError("UNAUTHORIZED", "User identity missing from token", 401);
+    }
+
+    // Authorization-before-mutation: derive restaurant from the persisted
+    // request, gate access, then call the frozen service acknowledge. No body
+    // is read: acknowledged_by/acknowledged_at are server-authoritative.
+    await loadVendorServiceRequestForMutation(res, requestId.data);
+    const outcome = await dineInSessionService.acknowledgeServiceRequest({
+      request_id: requestId.data,
+      caller_user_id: userId,
+      correlation_id: res.locals.correlationId,
+    });
+
+    ok(res, { request: outcome.value.request });
+  }),
+);
+
+vendorOpsRouter.post(
+  "/dine-in/service-requests/:requestId/complete",
+  asyncHandler(async (req, res) => {
+    const requestId = DineInServiceRequestIdSchema.safeParse(req.params.requestId);
+    if (!requestId.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid request id",
+        400,
+        requestId.error.flatten(),
+      );
+    }
+    const userId = res.locals.userId as string;
+    if (!userId) {
+      throw new AppError("UNAUTHORIZED", "User identity missing from token", 401);
+    }
+
+    // Authorization-before-mutation: derive restaurant from the persisted
+    // request, gate access, then call the frozen service complete. No body is
+    // read: completed_by/completed_at are server-authoritative.
+    await loadVendorServiceRequestForMutation(res, requestId.data);
+    const outcome = await dineInSessionService.completeServiceRequest({
+      request_id: requestId.data,
+      caller_user_id: userId,
+      correlation_id: res.locals.correlationId,
+    });
+
+    ok(res, { request: outcome.value.request });
   }),
 );

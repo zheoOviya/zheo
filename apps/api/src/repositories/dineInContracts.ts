@@ -173,6 +173,23 @@ export interface ServiceRequestDTO {
   updated_at: string;
 }
 
+// Vendor service-request operations queue item (DINE-OPS2). Only the
+// actionable board fields are exposed; BRING_BILL is excluded by the query
+// (the billing flow owns that artifact). Table identity is DERIVED by the
+// repository (service_requests.session_id -> dining_sessions.table_id ->
+// restaurant_tables), never client-supplied. Statuses are restricted to the
+// actionable set (PENDING / ACKNOWLEDGED); COMPLETED / CANCELLED are excluded.
+export interface ServiceRequestOperationsDTO {
+  id: string;
+  session_id: string;
+  restaurant_id: string;
+  request_type: ServiceRequestType;
+  status: ServiceRequestStatus;
+  note: string | null;
+  created_at: string;
+  table: { id: string; label: string };
+}
+
 // Deliberately no updated_at and no payment fields: a frozen bill is
 // immutable and payment state is D-PAY gated.
 export interface SessionBillDTO {
@@ -353,6 +370,14 @@ export interface ServiceRequestRepository {
   getBySession(sessionId: string): Promise<ServiceRequestDTO[]>;
   /** PENDING + ACKNOWLEDGED, oldest first (FIFO). Ordering is impl detail. */
   getPendingByRestaurant(restaurantId: string): Promise<ServiceRequestDTO[]>;
+  /**
+   * Vendor operations queue (DINE-OPS2): PENDING + ACKNOWLEDGED oldest-first,
+   * EXCLUDING BRING_BILL, each with the server-derived table identity. The
+   * repository owns the session -> table derivation (no route-side N+1).
+   */
+  getOperationsQueueByRestaurant(
+    restaurantId: string,
+  ): Promise<ServiceRequestOperationsDTO[]>;
   create(input: CreateServiceRequestInput): Promise<ServiceRequestDTO>;
   acknowledge(
     requestId: string,

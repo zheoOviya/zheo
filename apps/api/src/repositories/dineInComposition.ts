@@ -6,11 +6,13 @@ import type {
   DineInTransactionRepos,
   TableResolveRepository,
   DineInOrderRepository,
+  ServiceRequestRepository,
 } from "./dineInContracts";
 import { DrizzleDineInTransactionPort } from "./drizzle/dineInTransactionPort";
 import {
   DrizzleRestaurantTableRepository,
   DrizzleDineInOrderRepository,
+  DrizzleServiceRequestRepository,
 } from "./drizzle/dineInRepositories";
 import {
   buildMemoryDineInRepos,
@@ -143,4 +145,26 @@ export function getDineInOrderReadRepository(): DineInOrderRepository {
     }
   }
   return _vendorOrderReadRepo;
+}
+
+// Read-only vendor Dine-In service-request surface (DINE-OPS2). Postgres mode
+// -> the Drizzle service-request repository over the shared db handle (same
+// logical rows as the tx port). Memory mode -> the SAME
+// MemoryServiceRequestRepository held by the shared memory repo set, so route
+// tests seed one universe. Only read methods are invoked through the returned
+// repository surface (getById / operations queue).
+let _vendorServiceRequestReadRepo: ServiceRequestRepository | null = null;
+
+export function getDineInServiceRequestReadRepository(): ServiceRequestRepository {
+  if (!_vendorServiceRequestReadRepo) {
+    const mode = getStorageMode();
+    if (mode === "postgres") {
+      _vendorServiceRequestReadRepo = new DrizzleServiceRequestRepository(getDb());
+    } else {
+      getDineInTransactionPort();
+      _vendorServiceRequestReadRepo =
+        _memoryRepos!.serviceRequests as unknown as ServiceRequestRepository;
+    }
+  }
+  return _vendorServiceRequestReadRepo;
 }

@@ -37,6 +37,7 @@ import type {
   RestaurantEligibilityDTO,
   RestaurantTableDTO,
   ServiceRequestDTO,
+  ServiceRequestOperationsDTO,
   SessionBillDTO,
   StaffAssignmentDTO,
   TableResolveDTO,
@@ -940,6 +941,102 @@ export class DrizzleServiceRequestRepository
       .sort(
         (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
       );
+  }
+
+  // DINE-OPS2 vendor operations queue. Mirrors the DINE-OPS1.2 kitchen-queue
+  // read-model shape: status filter at the SQL boundary, oldest-first, and the
+  // table identity DERIVED from the owning session -> restaurant table (never
+  // client-supplied). BRING_BILL is excluded because the billing flow owns
+  // that artifact.
+  //
+  // Query shape: a BOUNDED fixed-query fetch (no per-row DB calls). The
+  // DrizzleDb facade (lib/dbType.ts) deliberately exposes only
+  // select/where — no join/orderBy surface — so a literal SQL JOIN is not
+  // expressible inside the repository without widening the shared facade
+  // (outside this bounded context). Instead the session/table resolution uses
+  // two inArray-batched lookups (1 requests query + 1 sessions query + 1
+  // tables query, regardless of queue size). Ordering is deterministic in
+  // memory: (created_at ASC, id ASC). A request whose session/table cannot be
+  // resolved is OMITTED (inner-join semantics) — never surfaced with an empty
+  // fake table identity.
+  async getOperationsQueueByRestaurant(
+    restaurantId: string,
+  ): Promise<ServiceRequestOperationsDTO[]> {
+    const reqRows = (await this.db
+      .select()
+      .from(service_requests)
+      .where(
+        and(
+          eq(service_requests.restaurant_id, restaurantId),
+          inArray(service_requests.status, PENDING_REQUEST_STATUSES),
+          ne(service_requests.request_type, "BRING_BILL"),
+        ),
+      )) as Record<string, unknown>[];
+
+    const sessionIds = [
+      ...new Set(reqRows.map((r) => r.session_id as string)),
+    ];
+    const sessionRows = sessionIds.length
+      ? ((await this.db
+          .select()
+          .from(dining_sessions)
+          .where(inArray(dining_sessions.id, sessionIds))) as Record<
+          string,
+          unknown
+        >[])
+      : [];
+    const sessionsById = new Map(
+      sessionRows.map((s) => [s.id as string, s]),
+    );
+
+    const tableIds = [
+      ...new Set(
+        sessionRows
+          .map((s) => s.table_id as string)
+          .filter((id): id is string => id !== null && id !== undefined),
+      ),
+    ];
+    const tableRows = tableIds.length
+      ? ((await this.db
+          .select()
+          .from(restaurant_tables)
+          .where(inArray(restaurant_tables.id, tableIds))) as Record<
+          string,
+          unknown
+        >[])
+      : [];
+    const tablesById = new Map(tableRows.map((t) => [t.id as string, t]));
+
+    reqRows.sort(
+      (a, b) =>
+        new Date(a.created_at as Date).getTime() -
+          new Date(b.created_at as Date).getTime() ||
+        (a.id as string).localeCompare(b.id as string),
+    );
+    const results: ServiceRequestOperationsDTO[] = [];
+    for (const row of reqRows) {
+      const request = mapRequestRow(row);
+      const session = sessionsById.get(request.session_id);
+      const table = session
+        ? tablesById.get(session.table_id as string)
+        : undefined;
+      if (!session || !table) {
+        // Inner-join semantics: no resolvable server-derived table identity
+        // -> the row is not part of the actionable queue.
+        continue;
+      }
+      results.push({
+        id: request.id,
+        session_id: request.session_id,
+        restaurant_id: request.restaurant_id,
+        request_type: request.request_type,
+        status: request.status,
+        note: request.note,
+        created_at: request.created_at,
+        table: { id: table.id as string, label: table.label as string },
+      });
+    }
+    return results;
   }
 
   async create(input: CreateServiceRequestInput): Promise<ServiceRequestDTO> {
