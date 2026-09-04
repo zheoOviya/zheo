@@ -126,14 +126,35 @@ describe("InsightsService", () => {
   });
 
   it("scopes peak hours to the order timestamps in IST buckets", async () => {
-    // All three orders at exactly the same clock time -> one bucket = 3
-    const base = new Date("2026-08-04T10:00:00.000Z").getTime();
+    // MAINT-INSIGHTS-CI1: the fixtures are anchored to YESTERDAY at
+    // 10:00:00.000Z (UTC) so all three orders ALWAYS fall inside the
+    // service's Date.now()-based rolling 30-day window, while the IST bucket
+    // stays deterministic forever: 10:00Z + 05:30 = 15:30 IST -> hour 15.
+    // (The prior calendar-fixed 2026-08-04 fixture expired once the clock
+    // crossed the 30-day boundary, making the gate fail after 2026-09-03.)
+    const now = new Date();
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const baseDate = new Date(
+      Date.UTC(
+        yesterday.getUTCFullYear(),
+        yesterday.getUTCMonth(),
+        yesterday.getUTCDate(),
+        10,
+        0,
+        0,
+        0,
+      ),
+    );
+    const base = baseDate.getTime();
+    const expectedHour = toIstHour(baseDate.toISOString());
+    expect(expectedHour).toBe(15); // 10:00Z -> 15:30 IST, hour bucket 15
+
     repo._seed(makeOrder("p1", "u1", new Date(base).toISOString(), "CONFIRMED", 100));
     repo._seed(makeOrder("p2", "u2", new Date(base + 60000).toISOString(), "PICKED_UP", 100));
     repo._seed(makeOrder("p3", "u3", new Date(base + 120000).toISOString(), "SETTLED", 100));
 
     const insights = await service.compute(REST_ID, 30);
-    const bucket = insights.peak_hours.find((b) => b.hour === 15);
+    const bucket = insights.peak_hours.find((b) => b.hour === expectedHour);
     expect(bucket?.order_count).toBe(3);
   });
 });
