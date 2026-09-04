@@ -7,18 +7,26 @@ import type {
   TableResolveRepository,
   DineInOrderRepository,
   ServiceRequestRepository,
+  DineInTableBoardReadRepository,
 } from "./dineInContracts";
 import { DrizzleDineInTransactionPort } from "./drizzle/dineInTransactionPort";
 import {
   DrizzleRestaurantTableRepository,
   DrizzleDineInOrderRepository,
   DrizzleServiceRequestRepository,
+  DrizzleDineInTableBoardRepository,
 } from "./drizzle/dineInRepositories";
 import {
   buildMemoryDineInRepos,
   MemoryDineInTransactionPort,
   MemoryRestaurantEligibilityReader,
   MemoryRestaurantTableRepository,
+  MemoryDineInTableBoardRepository,
+} from "./dineInMemoryRepositories";
+import type {
+  MemoryDiningSessionRepository,
+  MemoryDineInOrderRepository,
+  MemoryServiceRequestRepository,
 } from "./dineInMemoryRepositories";
 
 // ============================================================
@@ -91,9 +99,37 @@ export function getDineInTableResolveRepository(): TableResolveRepository {
   return _tableResolve;
 }
 
+// Read-only vendor Dine-In table/session board surface (DINE-OPS3). Postgres
+// mode -> the Drizzle board repository over the shared db handle (bounded
+// fixed query set, no N+1). Memory mode -> a MemoryDineInTableBoardRepository
+// that reads the SAME shared memory repo instances (tables / sessions /
+// orders / requests) held by the shared memory repo set, so route tests seed
+// one universe; its memory-only zone registry is exposed via _seedZone and
+// cleared by resetDineInState(). Read-only — no mutation surface.
+let _vendorTableBoardRepo: DineInTableBoardReadRepository | null = null;
+
+export function getDineInTableBoardReadRepository(): DineInTableBoardReadRepository {
+  if (!_vendorTableBoardRepo) {
+    const mode = getStorageMode();
+    if (mode === "postgres") {
+      _vendorTableBoardRepo = new DrizzleDineInTableBoardRepository(getDb());
+    } else {
+      getDineInTransactionPort();
+      _vendorTableBoardRepo = new MemoryDineInTableBoardRepository(
+        _memoryRepos!.restaurantTables as unknown as MemoryRestaurantTableRepository,
+        _memoryRepos!.diningSessions as unknown as MemoryDiningSessionRepository,
+        _memoryRepos!.dineInOrders as unknown as MemoryDineInOrderRepository,
+        _memoryRepos!.serviceRequests as unknown as MemoryServiceRequestRepository,
+      );
+    }
+  }
+  return _vendorTableBoardRepo;
+}
+
 export function resetDineInState(): void {
   if (!_memoryRepos) return;
   const reset = (repo: unknown): void => {
+    if (repo == null) return;
     (repo as { _reset?: () => void })._reset?.();
   };
   reset(_memoryRepos.restaurantTables);
@@ -103,6 +139,7 @@ export function resetDineInState(): void {
   reset(_memoryRepos.serviceRequests);
   reset(_memoryRepos.sessionBills);
   reset(_memoryRepos.restaurantEligibility);
+  reset(_vendorTableBoardRepo);
 }
 
 // Deterministic memory-only E2E fixture seam (UI8-A-R1/R2). Returns the SAME

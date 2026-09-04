@@ -51,6 +51,8 @@ import type {
   TransactionalStaffAssignmentRepository,
   DineZoneRepository,
   SessionBillRepository,
+  DineInTableBoardReadRepository,
+  VendorTableBoardRow,
 } from "../dineInContracts";
 
 // ============================================
@@ -1276,5 +1278,149 @@ export class DrizzleRestaurantEligibilityReader implements TransactionalRestaura
     const row = rows[0];
     if (!row) return null;
     return { id: row.id as string, is_active: row.is_active as boolean };
+  }
+}
+
+// ------------------------------------------------------------
+// Dine-in table/session board (DINE-OPS3, read-only).
+// ------------------------------------------------------------
+
+// DINE-OPS3 vendor occupancy board: a dedicated read model so the route
+// performs no joins / no N+1. Every restaurant table (including disabled
+// tables) is returned with the server-derived live session — the
+// single-live-session invariant means at most one per table — and the
+// actionable open-order (PLACED/PREPARING/READY_TO_SERVE) and open-request
+// (PENDING/ACKNOWLEDGED, EXCLUDING BRING_BILL) counts.
+//
+// Query shape: a BOUNDED fixed query set (1 tables + 1 zones + 1 live
+// sessions + 1 orders + 1 requests, regardless of table count) — no per-row
+// DB calls, mirroring the kitchen/SR read-model facade constraint (the
+// DrizzleDb facade exposes only select/where). Zone name, live-session, and
+// counts are resolved from those bounded sets in memory. A table whose
+// zone_id does not resolve to a zone row is surfaced with zone: null
+// (truthful — no fake zone). A disabled table that still carries a live
+// session reports BOTH facts (is_active false + session present).
+// Ordering is deterministic: (label ASC, id ASC).
+export class DrizzleDineInTableBoardRepository
+  implements DineInTableBoardReadRepository
+{
+  constructor(private db: DrizzleDb) {}
+
+  async getByRestaurant(restaurantId: string): Promise<VendorTableBoardRow[]> {
+    const tableRows = (await this.db
+      .select()
+      .from(restaurant_tables)
+      .where(eq(restaurant_tables.restaurant_id, restaurantId))) as Record<
+      string,
+      unknown
+    >[];
+    const zoneRows = (await this.db
+      .select()
+      .from(dine_zones)
+      .where(eq(dine_zones.restaurant_id, restaurantId))) as Record<
+      string,
+      unknown
+    >[];
+    const sessionRows = (await this.db
+      .select()
+      .from(dining_sessions)
+      .where(
+        and(
+          eq(dining_sessions.restaurant_id, restaurantId),
+          inArray(dining_sessions.status, LIVE_SESSION_STATUSES),
+        ),
+      )) as Record<string, unknown>[];
+
+    const liveSessionIds = [
+      ...new Set(sessionRows.map((s) => s.id as string)),
+    ];
+    const orderRows = liveSessionIds.length
+      ? ((await this.db
+          .select()
+          .from(dine_in_orders)
+          .where(
+            and(
+              eq(dine_in_orders.restaurant_id, restaurantId),
+              inArray(dine_in_orders.session_id, liveSessionIds),
+              inArray(dine_in_orders.status, KITCHEN_ORDER_STATUSES),
+            ),
+          )) as Record<string, unknown>[])
+      : [];
+    const requestRows = liveSessionIds.length
+      ? ((await this.db
+          .select()
+          .from(service_requests)
+          .where(
+            and(
+              eq(service_requests.restaurant_id, restaurantId),
+              inArray(service_requests.session_id, liveSessionIds),
+              inArray(service_requests.status, PENDING_REQUEST_STATUSES),
+              ne(service_requests.request_type, "BRING_BILL"),
+            ),
+          )) as Record<string, unknown>[])
+      : [];
+
+    const zonesById = new Map<string, { id: string; name: string }>(
+      zoneRows.map((z) => [
+        z.id as string,
+        { id: z.id as string, name: z.name as string },
+      ]),
+    );
+
+    // Single-live-session invariant -> at most one live session per table;
+    // keep the first row defensively if the invariant were ever violated.
+    const liveByTableId = new Map<string, Record<string, unknown>>();
+    for (const s of sessionRows) {
+      const tableId = s.table_id as string;
+      if (!liveByTableId.has(tableId)) liveByTableId.set(tableId, s);
+    }
+
+    const openOrderCounts = new Map<string, number>();
+    for (const o of orderRows) {
+      const sessionId = o.session_id as string;
+      openOrderCounts.set(sessionId, (openOrderCounts.get(sessionId) ?? 0) + 1);
+    }
+    const openRequestCounts = new Map<string, number>();
+    for (const r of requestRows) {
+      const sessionId = r.session_id as string;
+      openRequestCounts.set(sessionId, (openRequestCounts.get(sessionId) ?? 0) + 1);
+    }
+
+    const rows: VendorTableBoardRow[] = [];
+    for (const t of tableRows) {
+      const zoneId = t.zone_id as string | null;
+      const live = liveByTableId.get(t.id as string);
+      rows.push({
+        table: {
+          id: t.id as string,
+          label: t.label as string,
+          seat_count: (t.seat_count as number | null) ?? null,
+          is_active: t.is_active as boolean,
+        },
+        zone: zoneId ? (zonesById.get(zoneId) ?? null) : null,
+        session: live
+          ? {
+              id: live.id as string,
+              status: live.status as DiningSessionStatus,
+              opened_at: (live.created_at as Date).toISOString(),
+              bill_requested_at:
+                (live.bill_requested_at as Date | null)?.toISOString() ?? null,
+            }
+          : null,
+        open_order_count: live
+          ? (openOrderCounts.get(live.id as string) ?? 0)
+          : 0,
+        open_request_count: live
+          ? (openRequestCounts.get(live.id as string) ?? 0)
+          : 0,
+      });
+    }
+
+    rows.sort(
+      (a, b) =>
+        a.table.label.localeCompare(b.table.label) ||
+        a.table.id.localeCompare(b.table.id),
+    );
+    return rows;
   }
 }

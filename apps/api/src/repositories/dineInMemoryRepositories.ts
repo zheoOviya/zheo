@@ -18,9 +18,11 @@ import type {
   DineInKitchenOrderDTO,
   DineInOrderItemDTO,
   DineInOrderWithItemsDTO,
+  DineInTableBoardReadRepository,
   DineInTransactionPort,
   DineInTransactionRepos,
   DiningSessionDTO,
+  DineZoneDTO,
   RestaurantEligibilityDTO,
   RestaurantTableDTO,
   ServiceRequestDTO,
@@ -30,6 +32,7 @@ import type {
   StaffAssignmentDTO,
   TableResolveDTO,
   TableResolveRepository,
+  VendorTableBoardRow,
   TransitionResult,
   TransactionalRestaurantReader,
   TransactionalDineInOrderRepository,
@@ -727,6 +730,115 @@ export class MemoryServiceRequestRepository
   _seed(request: ServiceRequestDTO): ServiceRequestDTO {
     this.requests.set(request.id, request);
     return request;
+  }
+}
+
+// ------------------------------------------------------------
+// Dine-in table/session board (DINE-OPS3, read-only).
+// ------------------------------------------------------------
+
+// DINE-OPS3 vendor occupancy board: mirrors the Drizzle read-model semantics
+// over the shared in-memory universe. All dependencies are optional for unit
+// isolation; buildMemoryDineInRepos / dineInComposition wire the shared
+// instances. Zone names are held by THIS repository (a small memory-only
+// registry seeded via _seedZone) because the shared transaction repo set has
+// no zone store; the Drizzle implementation reads the real dine_zones rows.
+// A table whose zone_id does not resolve to a seeded zone is surfaced with
+// zone: null (truthful). A disabled table that still carries a live session
+// reports BOTH facts. Ordering is deterministic: (label ASC, id ASC).
+export class MemoryDineInTableBoardRepository
+  implements DineInTableBoardReadRepository
+{
+  private zones = new Map<string, DineZoneDTO>();
+
+  constructor(
+    private readonly tables?: MemoryRestaurantTableRepository,
+    private readonly sessions?: MemoryDiningSessionRepository,
+    private readonly orders?: MemoryDineInOrderRepository,
+    private readonly requests?: MemoryServiceRequestRepository,
+  ) {}
+
+  async getByRestaurant(restaurantId: string): Promise<VendorTableBoardRow[]> {
+    const restaurantZones = new Map<string, { id: string; name: string }>();
+    for (const z of this.zones.values()) {
+      if (z.restaurant_id === restaurantId) {
+        restaurantZones.set(z.id, { id: z.id, name: z.name });
+      }
+    }
+
+    const tables = this.tables
+      ? await this.tables.getByRestaurant(restaurantId)
+      : [];
+    const rows: VendorTableBoardRow[] = [];
+    for (const t of tables) {
+      const session = this.sessions
+        ? await this.sessions.findLiveByTable(t.id)
+        : null;
+      // Restaurant-scope guard mirrors the Drizzle query: a session that does
+      // not belong to the requested restaurant is never surfaced on its table.
+      const scoped = session && session.restaurant_id === restaurantId ? session : null;
+
+      let openOrderCount = 0;
+      let openRequestCount = 0;
+      if (scoped && this.orders) {
+        const orders = await this.orders.getBySession(scoped.id);
+        // Defensive restaurant filter mirrors the Drizzle query (which scopes
+        // by BOTH restaurant_id and session_id). The composite FK forbids a
+        // cross-restaurant child in any reachable state, so behavior is
+        // unchanged — this keeps the two read models identical by construction.
+        openOrderCount = orders.filter(
+          (o) =>
+            o.restaurant_id === restaurantId &&
+            KITCHEN_ORDER_STATUSES.includes(o.status),
+        ).length;
+      }
+      if (scoped && this.requests) {
+        const requests = await this.requests.getBySession(scoped.id);
+        openRequestCount = requests.filter(
+          (r) =>
+            r.restaurant_id === restaurantId &&
+            PENDING_REQUEST_STATUSES.includes(r.status) &&
+            r.request_type !== "BRING_BILL",
+        ).length;
+      }
+
+      rows.push({
+        table: {
+          id: t.id,
+          label: t.label,
+          seat_count: t.seat_count,
+          is_active: t.is_active,
+        },
+        zone: t.zone_id ? (restaurantZones.get(t.zone_id) ?? null) : null,
+        session: scoped
+          ? {
+              id: scoped.id,
+              status: scoped.status,
+              opened_at: scoped.created_at,
+              bill_requested_at: scoped.bill_requested_at,
+            }
+          : null,
+        open_order_count: scoped ? openOrderCount : 0,
+        open_request_count: scoped ? openRequestCount : 0,
+      });
+    }
+
+    rows.sort(
+      (a, b) =>
+        a.table.label.localeCompare(b.table.label) ||
+        a.table.id.localeCompare(b.table.id),
+    );
+    return rows;
+  }
+
+  /** Memory-only zone registry (test seeding seam). */
+  _seedZone(zone: DineZoneDTO): DineZoneDTO {
+    this.zones.set(zone.id, zone);
+    return zone;
+  }
+
+  _reset(): void {
+    this.zones.clear();
   }
 }
 

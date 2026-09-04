@@ -8,6 +8,7 @@ import { getCatalogRepository } from "./catalog";
 import {
   getDineInOrderReadRepository,
   getDineInServiceRequestReadRepository,
+  getDineInTableBoardReadRepository,
   getDineInTransactionPort,
 } from "../repositories/dineInComposition";
 import {
@@ -886,5 +887,53 @@ vendorOpsRouter.post(
     });
 
     ok(res, { request: outcome.value.request });
+  }),
+);
+
+// ---- DINE-OPS3: Vendor Dine-In Table / Session Board ----------------------
+//
+// Read surface:
+//   GET /dine-in/tables?restaurant_id=<uuid>
+//
+// Read-ONLY occupancy board. Every restaurant table (including disabled
+// tables, dimmed client-side) is returned with the server-derived live
+// session (if any) and the actionable open-order / open-request counts.
+// Occupancy is DERIVED by the read-model repository (bounded fixed query set,
+// no N+1; no route-side joins) — never stored on the table and never
+// client-supplied. BILL_REQUESTED travels on session.status (never as a
+// request count); BRING_BILL is excluded from open_request_count (the billing
+// flow owns that artifact). No owner/customer identity and no table_token are
+// exposed, and no money/payment data is present.
+//
+// Authorization:
+//   1. restaurant_id is transport-validated (UUID).
+//   2. The existing assertRestaurantAccess gate (owner / chain / role) runs.
+//   3. An accessible-but-unknown/empty restaurant truthfully resolves to an
+//      empty array; a foreign restaurant receives the gate's FORBIDDEN. No
+//      existence oracle is introduced. Response envelope via ok() -> exact
+//      { success: true, data: VendorTableBoardRow[], error: null }.
+// No request body, no query state, no mutation surface.
+
+const VendorDineInTablesQuerySchema = z.object({
+  restaurant_id: z.string().uuid("restaurant_id must be a valid uuid"),
+});
+
+vendorOpsRouter.get(
+  "/dine-in/tables",
+  asyncHandler(async (req, res) => {
+    const parsed = VendorDineInTablesQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid query parameters",
+        400,
+        parsed.error.flatten(),
+      );
+    }
+    const { restaurant_id } = parsed.data;
+    await assertRestaurantAccess(res, restaurant_id);
+    const rows =
+      await getDineInTableBoardReadRepository().getByRestaurant(restaurant_id);
+    ok(res, rows);
   }),
 );

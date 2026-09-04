@@ -190,6 +190,33 @@ export interface ServiceRequestOperationsDTO {
   table: { id: string; label: string };
 }
 
+// Vendor table/session board row (DINE-OPS3). Read-only occupancy board: one
+// row per restaurant table (including disabled tables) with the server-derived
+// live session (if any) and the actionable open-order / open-request counts.
+// Occupancy is DERIVED from the live-session invariant (at most one live
+// session per table), never stored on the table; a table may be disabled AND
+// still carry a live session, and the board surfaces both facts truthfully.
+// BILL_REQUESTED is carried by session.status (never by a request count);
+// open_request_count intentionally excludes BRING_BILL (the billing flow owns
+// that artifact). No owner/customer identity and no table_token are exposed.
+export interface VendorTableBoardRow {
+  table: {
+    id: string;
+    label: string;
+    seat_count: number | null;
+    is_active: boolean;
+  };
+  zone: { id: string; name: string } | null;
+  session: {
+    id: string;
+    status: DiningSessionStatus;
+    opened_at: string;
+    bill_requested_at: string | null;
+  } | null;
+  open_order_count: number;
+  open_request_count: number;
+}
+
 // Deliberately no updated_at and no payment fields: a frozen bill is
 // immutable and payment state is D-PAY gated.
 export interface SessionBillDTO {
@@ -395,6 +422,17 @@ export interface ServiceRequestRepository {
     cancelledAt: string,
   ): Promise<TransitionResult<ServiceRequestDTO, ServiceRequestStatus>>;
   findBringBillBySession(sessionId: string): Promise<ArtifactLookup<ServiceRequestDTO>>;
+}
+
+/**
+ * Vendor Dine-In table/session board (DINE-OPS3): a dedicated read model
+ * repository so the route performs no joins and no N+1. Every restaurant
+ * table (including disabled ones) is returned with the server-derived live
+ * session and actionable counts, resolved from a bounded fixed query set.
+ * Read-only — no mutation surface.
+ */
+export interface DineInTableBoardReadRepository {
+  getByRestaurant(restaurantId: string): Promise<VendorTableBoardRow[]>;
 }
 
 export interface SessionBillRepository {
