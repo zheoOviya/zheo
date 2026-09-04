@@ -135,6 +135,61 @@ export interface VendorDineInOrder {
   }[];
 }
 
+export type ServiceRequestType =
+  | "WATER"
+  | "EXTRA_PLATE"
+  | "CUTLERY"
+  | "TISSUE"
+  | "CLEAN_TABLE"
+  | "CALL_STAFF"
+  | "BRING_BILL"
+  | "OTHER";
+
+export type ServiceRequestStatus =
+  | "PENDING"
+  | "ACKNOWLEDGED"
+  | "COMPLETED"
+  | "CANCELLED";
+
+// Vendor service-request operations board row. Mirrors the backend
+// ServiceRequestOperationsDTO read surface exactly: actionable statuses only
+// (PENDING/ACKNOWLEDGED), BRING_BILL excluded server-side, table identity
+// derived server-side. No client-side order/session join is attempted.
+export interface VendorServiceRequest {
+  id: string;
+  session_id: string;
+  restaurant_id: string;
+  request_type: ServiceRequestType;
+  status: ServiceRequestStatus;
+  note: string | null;
+  created_at: string;
+  table: { id: string; label: string };
+}
+
+// Acknowledge/complete mutation result. The backend returns the request's
+// ServiceRequestDTO under `data.request`; the board only patches status from it
+// (table/note/created_at live in the queue row and stay authoritative there).
+// The type mirrors the DTO fields the board reads (requested_by and other
+// fields are intentionally omitted).
+export interface ServiceRequestMutationResult {
+  request: {
+    id: string;
+    session_id: string;
+    restaurant_id: string;
+    request_type: ServiceRequestType;
+    status: ServiceRequestStatus;
+    note: string | null;
+    acknowledged_by: string | null;
+    acknowledged_at: string | null;
+    completed_by: string | null;
+    completed_at: string | null;
+    cancelled_by: string | null;
+    cancelled_at: string | null;
+    created_at: string;
+    updated_at: string;
+  };
+}
+
 export interface VendorMenuItem {
   id: string;
   name: string;
@@ -315,6 +370,39 @@ export async function advanceDineInOrder(
 export async function cancelDineInOrder(orderId: string): Promise<DineInMutationResult> {
   return read<DineInMutationResult>(
     await authedFetch(`/api/vendor/dine-in/orders/${orderId}/cancel`, {
+      method: "POST",
+    }),
+  );
+}
+
+// ============================================
+// Dine-In service requests
+// ============================================
+
+export async function fetchDineInServiceRequests(
+  restaurantId: string,
+): Promise<VendorServiceRequest[]> {
+  const params = new URLSearchParams({ restaurant_id: restaurantId });
+  return read<VendorServiceRequest[]>(
+    await authedFetch(`/api/vendor/dine-in/service-requests?${params.toString()}`),
+  );
+}
+
+export async function acknowledgeDineInServiceRequest(
+  requestId: string,
+): Promise<ServiceRequestMutationResult> {
+  return read<ServiceRequestMutationResult>(
+    await authedFetch(`/api/vendor/dine-in/service-requests/${requestId}/acknowledge`, {
+      method: "POST",
+    }),
+  );
+}
+
+export async function completeDineInServiceRequest(
+  requestId: string,
+): Promise<ServiceRequestMutationResult> {
+  return read<ServiceRequestMutationResult>(
+    await authedFetch(`/api/vendor/dine-in/service-requests/${requestId}/complete`, {
       method: "POST",
     }),
   );
