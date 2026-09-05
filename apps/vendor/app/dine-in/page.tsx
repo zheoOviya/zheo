@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { m, AnimatePresence } from "framer-motion";
 import { Badge, EmptyState } from "@snakzap/ui";
 import {
@@ -329,6 +330,14 @@ export default function DineInPage() {
       <PageHeader
         title="Dine-In Orders"
         subtitle={`${orders.length} active dine-in order${orders.length === 1 ? "" : "s"}`}
+        actions={
+          <Link
+            href="/dine-in/tables"
+            className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 active:scale-[0.98]"
+          >
+            Table board
+          </Link>
+        }
       />
 
       <ErrorBanner message={fetchError} />

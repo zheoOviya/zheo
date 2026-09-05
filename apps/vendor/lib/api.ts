@@ -171,6 +171,41 @@ export interface VendorServiceRequest {
 // (table/note/created_at live in the queue row and stay authoritative there).
 // The type mirrors the DTO fields the board reads (requested_by and other
 // fields are intentionally omitted).
+// Vendor table/session board row (DINE-OPS3). Read-only occupancy board: one
+// row per restaurant table (disabled tables included) with the server-derived
+// live session (if any) and the actionable open-order / open-request counts.
+// Mirrors the backend VendorTableBoardRow read surface exactly. Occupancy is
+// derived from the live-session invariant (at most one live session per table),
+// never stored on the table; a table may be disabled AND still carry a live
+// session, and the board surfaces both facts truthfully. BILL_REQUESTED is
+// carried by session.status (never by a request count); open_request_count
+// intentionally excludes BRING_BILL. No owner/customer identity and no table
+// token are exposed. The union is live-session states only: the board endpoint
+// never emits CLOSED (the live-session invariant).
+export type DineInTableSessionStatus =
+  | "OPEN"
+  | "ACTIVE"
+  | "BILL_REQUESTED"
+  | "PAYMENT_PENDING";
+
+export interface VendorTableBoardRow {
+  table: {
+    id: string;
+    label: string;
+    seat_count: number | null;
+    is_active: boolean;
+  };
+  zone: { id: string; name: string } | null;
+  session: {
+    id: string;
+    status: DineInTableSessionStatus;
+    opened_at: string;
+    bill_requested_at: string | null;
+  } | null;
+  open_order_count: number;
+  open_request_count: number;
+}
+
 export interface ServiceRequestMutationResult {
   request: {
     id: string;
@@ -405,6 +440,17 @@ export async function completeDineInServiceRequest(
     await authedFetch(`/api/vendor/dine-in/service-requests/${requestId}/complete`, {
       method: "POST",
     }),
+  );
+}
+
+// ============================================
+// Dine-in table board (read-only)
+// ============================================
+
+export async function fetchDineInTables(restaurantId: string): Promise<VendorTableBoardRow[]> {
+  const params = new URLSearchParams({ restaurant_id: restaurantId });
+  return read<VendorTableBoardRow[]>(
+    await authedFetch(`/api/vendor/dine-in/tables?${params.toString()}`),
   );
 }
 
