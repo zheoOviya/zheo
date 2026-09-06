@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, ne } from "drizzle-orm";
-import { KITCHEN_ORDER_STATUSES } from "../dineInContracts";
+import { AppError } from "../../middleware/envelope";
+import {
+  BRING_BILL_QUEUE_STATUSES,
+  BRING_BILL_VISIBLE_STATUSES,
+  KITCHEN_ORDER_STATUSES,
+} from "../dineInContracts";
 import {
   dine_in_order_items,
   dine_in_orders,
@@ -21,6 +26,8 @@ import type {
 } from "@snakzap/types";
 import type {
   ArtifactLookup,
+  BillAccessContext,
+  BillActionContext,
   CreateDineInOrderInput,
   CreateDineZoneInput,
   CreateDiningSessionInput,
@@ -29,6 +36,7 @@ import type {
   CreateServiceRequestInput,
   CreateStaffAssignmentInput,
   DiningSessionDTO,
+  DineInBillReadRepository,
   DineInOrderDTO,
   DineInKitchenOrderDTO,
   DineInOrderItemDTO,
@@ -52,6 +60,9 @@ import type {
   DineZoneRepository,
   SessionBillRepository,
   DineInTableBoardReadRepository,
+  VendorBillDetail,
+  VendorBillTotalsDTO,
+  VendorPendingBillRow,
   VendorTableBoardRow,
 } from "../dineInContracts";
 
@@ -1422,5 +1433,387 @@ export class DrizzleDineInTableBoardRepository
         a.table.id.localeCompare(b.table.id),
     );
     return rows;
+  }
+}
+
+// ------------------------------------------------------------
+// Vendor Dine-In bill read model (DINE-OPS4-B1, read-only).
+//
+// DINE-OPS4-B1 vendor bill surface: a dedicated read model so the routes
+// perform no joins / no N+1. Query shape is a BOUNDED fixed query set per
+// call (like the table board), regardless of row count:
+//   - getPendingQueueByRestaurant: 1 requests + 1 sessions + 1 bills + 1
+//     tables for the restaurant.
+//   - getBillDetailByBillId / getBillActionContextByBillId: bill + session +
+//     bring-bill requests + table (+ zone + orders + order items for detail).
+//
+// Queue membership: session.status === "BILL_REQUESTED" AND the session's
+// BRING_BILL artifact is PENDING/ACKNOWLEDGED; ordering bill_requested_at ASC
+// then bill.id ASC. A delivered (COMPLETED) artifact leaves the queue while
+// the bill detail stays readable. The frozen exactly-one-BRING_BILL invariant
+// is enforced ONLY inside the post-authorization reads below (BILL_REQUESTED
+// with NONE/MULTIPLE -> BILL_INVARIANT_VIOLATION 500); getAccessContextByBillId
+// is invariant-free discovery so the 404/403 precedence never leaks a
+// corrupted state before authorization. Read-only — no mutation surface.
+// ------------------------------------------------------------
+
+function mapBillTotalsRow(row: Record<string, unknown>): VendorBillTotalsDTO {
+  return {
+    id: row.id as string,
+    session_id: row.session_id as string,
+    restaurant_id: row.restaurant_id as string,
+    food_subtotal: Number(row.food_subtotal),
+    packaging_fee: Number(row.packaging_fee),
+    gst_food: Number(row.gst_food),
+    gst_packaging: Number(row.gst_packaging),
+    total_amount: Number(row.total_amount),
+    frozen_at: (row.frozen_at as Date).toISOString(),
+  };
+}
+
+function serviceRequestLookup(
+  rows: Record<string, unknown>[],
+): ArtifactLookup<ServiceRequestDTO> {
+  if (rows.length === 0) return { kind: "NONE" };
+  if (rows.length === 1) {
+    return { kind: "FOUND", value: mapRequestRow(rows[0]!) };
+  }
+  return { kind: "MULTIPLE", values: rows.map(mapRequestRow) };
+}
+
+export class DrizzleDineInBillReadRepository
+  implements DineInBillReadRepository
+{
+  constructor(private db: DrizzleDb) {}
+
+  async getAccessContextByBillId(
+    billId: string,
+  ): Promise<BillAccessContext | null> {
+    const rows = (await this.db
+      .select()
+      .from(session_bills)
+      .where(eq(session_bills.id, billId))) as Record<string, unknown>[];
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      bill_id: row.id as string,
+      session_id: row.session_id as string,
+      restaurant_id: row.restaurant_id as string,
+    };
+  }
+
+  async getPendingQueueByRestaurant(
+    restaurantId: string,
+  ): Promise<VendorPendingBillRow[]> {
+    const requestRows = (await this.db
+      .select()
+      .from(service_requests)
+      .where(
+        and(
+          eq(service_requests.restaurant_id, restaurantId),
+          eq(service_requests.request_type, "BRING_BILL"),
+          inArray(service_requests.status, BRING_BILL_QUEUE_STATUSES),
+        ),
+      )) as Record<string, unknown>[];
+    const requestSessionIds = [
+      ...new Set(requestRows.map((r) => r.session_id as string)),
+    ];
+    const sessionRows = requestSessionIds.length
+      ? ((await this.db
+          .select()
+          .from(dining_sessions)
+          .where(inArray(dining_sessions.id, requestSessionIds))) as Record<
+          string,
+          unknown
+        >[])
+      : [];
+    const billRequestedSessionIds = sessionRows
+      .filter((s) => (s.status as string) === "BILL_REQUESTED")
+      .map((s) => s.id as string);
+    const billRows = billRequestedSessionIds.length
+      ? ((await this.db
+          .select()
+          .from(session_bills)
+          .where(
+            and(
+              eq(session_bills.restaurant_id, restaurantId),
+              inArray(session_bills.session_id, billRequestedSessionIds),
+            ),
+          )) as Record<string, unknown>[])
+      : [];
+    const tableIds = [
+      ...new Set(sessionRows.map((s) => s.table_id as string)),
+    ];
+    const tableRows = tableIds.length
+      ? ((await this.db
+          .select()
+          .from(restaurant_tables)
+          .where(inArray(restaurant_tables.id, tableIds))) as Record<
+          string,
+          unknown
+        >[])
+      : [];
+
+    const sessionById = new Map<string, Record<string, unknown>>(
+      sessionRows.map((s) => [s.id as string, s]),
+    );
+    const billBySessionId = new Map<string, Record<string, unknown>>(
+      billRows.map((b) => [b.session_id as string, b]),
+    );
+    const tableById = new Map<string, Record<string, unknown>>(
+      tableRows.map((t) => [t.id as string, t]),
+    );
+    // Exactly-one BRING_BILL per session is the healthy state; defensively
+    // keep the earliest matching request per session so a corrupted MULTIPLE
+    // can never double-report the same bill on the queue.
+    const earliestBySession = new Map<string, Record<string, unknown>>();
+    for (const request of requestRows) {
+      const sessionId = request.session_id as string;
+      const current = earliestBySession.get(sessionId);
+      const requestTime = (request.created_at as Date).getTime();
+      const currentTime = current
+        ? (current.created_at as Date).getTime()
+        : Infinity;
+      if (
+        !current ||
+        requestTime < currentTime ||
+        (requestTime === currentTime &&
+          (request.id as string) < (current.id as string))
+      ) {
+        earliestBySession.set(sessionId, request);
+      }
+    }
+
+    const rows: VendorPendingBillRow[] = [];
+    for (const request of earliestBySession.values()) {
+      const session = sessionById.get(request.session_id as string);
+      if (!session || (session.status as string) !== "BILL_REQUESTED") continue;
+      const bill = billBySessionId.get(session.id as string);
+      if (!bill) continue;
+      const table = tableById.get(session.table_id as string);
+      if (!table) continue;
+      rows.push({
+        bill: mapBillTotalsRow(bill),
+        session: {
+          id: session.id as string,
+          status: "BILL_REQUESTED",
+          // Healthy BILL_REQUESTED always carries bill_requested_at (the
+          // request-bill transition writes status + timestamp together); the
+          // created_at fallback only keeps a corrupted row ordered.
+          bill_requested_at:
+            (session.bill_requested_at as Date | null)?.toISOString() ??
+            (session.created_at as Date).toISOString(),
+          opened_at: (session.created_at as Date).toISOString(),
+        },
+        table: {
+          id: table.id as string,
+          label: table.label as string,
+        },
+        bring_bill_request: {
+          id: request.id as string,
+          status: request.status as "PENDING" | "ACKNOWLEDGED",
+        },
+      });
+    }
+
+    rows.sort(
+      (a, b) =>
+        Date.parse(a.session.bill_requested_at) -
+          Date.parse(b.session.bill_requested_at) ||
+        a.bill.id.localeCompare(b.bill.id),
+    );
+    return rows;
+  }
+
+  async getBillDetailByBillId(billId: string): Promise<VendorBillDetail | null> {
+    const billRows = (await this.db
+      .select()
+      .from(session_bills)
+      .where(eq(session_bills.id, billId))) as Record<string, unknown>[];
+    const billRow = billRows[0];
+    if (!billRow) return null;
+    const sessionId = billRow.session_id as string;
+
+    const sessionRows = (await this.db
+      .select()
+      .from(dining_sessions)
+      .where(eq(dining_sessions.id, sessionId))) as Record<string, unknown>[];
+    const session = sessionRows[0];
+    if (!session) {
+      // Defensive structural corruption (FK forbids in postgres; mirrors the
+      // service's INTERNAL_ERROR convention for a missing locked session).
+      throw new AppError("INTERNAL_ERROR", "Frozen bill has no session", 500);
+    }
+
+    const bringBillRows = (await this.db
+      .select()
+      .from(service_requests)
+      .where(
+        and(
+          eq(service_requests.session_id, sessionId),
+          eq(service_requests.request_type, "BRING_BILL"),
+        ),
+      )) as Record<string, unknown>[];
+    const lookup = serviceRequestLookup(bringBillRows);
+    // Frozen invariant: NONE and MULTIPLE both breach the exactly-one-artifact
+    // rule. Enforced ONLY under BILL_REQUESTED and ONLY post-authorization.
+    if (
+      (session.status as string) === "BILL_REQUESTED" &&
+      lookup.kind !== "FOUND"
+    ) {
+      throw new AppError(
+        "BILL_INVARIANT_VIOLATION",
+        "BILL_REQUESTED session must have exactly one BRING_BILL request",
+        500,
+      );
+    }
+
+    const tableRows = (await this.db
+      .select()
+      .from(restaurant_tables)
+      .where(eq(restaurant_tables.id, session.table_id as string))) as Record<
+      string,
+      unknown
+    >[];
+    const table = tableRows[0];
+    if (!table) {
+      throw new AppError(
+        "INTERNAL_ERROR",
+        "Frozen bill session has no table",
+        500,
+      );
+    }
+    const zoneId = (table.zone_id as string | null) ?? null;
+    const zoneRows = zoneId
+      ? ((await this.db
+          .select()
+          .from(dine_zones)
+          .where(eq(dine_zones.id, zoneId))) as Record<string, unknown>[])
+      : [];
+    const zoneRow = zoneRows[0] ?? null;
+
+    const orderRows = (await this.db
+      .select()
+      .from(dine_in_orders)
+      .where(
+        and(
+          eq(dine_in_orders.session_id, sessionId),
+          // Same non-CANCELLED snapshot semantics as listForBill.
+          ne(dine_in_orders.status, "CANCELLED"),
+        ),
+      )) as Record<string, unknown>[];
+    const orderIds = orderRows.map((o) => o.id as string);
+    const itemRows = orderIds.length
+      ? ((await this.db
+          .select()
+          .from(dine_in_order_items)
+          .where(
+            inArray(dine_in_order_items.dine_in_order_id, orderIds),
+          )) as Record<string, unknown>[])
+      : [];
+    const itemsByOrderId = new Map<string, VendorBillDetail["orders"][number]["items"]>();
+    for (const item of itemRows) {
+      const orderId = item.dine_in_order_id as string;
+      const list = itemsByOrderId.get(orderId) ?? [];
+      list.push({
+        name: item.name as string,
+        quantity: item.quantity as number,
+        item_subtotal: Number(item.item_subtotal),
+      });
+      itemsByOrderId.set(orderId, list);
+    }
+
+    return {
+      bill: mapBillTotalsRow(billRow),
+      session: {
+        id: session.id as string,
+        status: session.status as DiningSessionStatus,
+        bill_requested_at:
+          (session.bill_requested_at as Date | null)?.toISOString() ?? null,
+        opened_at: (session.created_at as Date).toISOString(),
+      },
+      table: { id: table.id as string, label: table.label as string },
+      zone: zoneRow
+        ? { id: zoneRow.id as string, name: zoneRow.name as string }
+        : null,
+      bring_bill_request: this.visibleBringBill(lookup),
+      orders: orderRows.map((o) => ({
+        id: o.id as string,
+        status: o.status as DineInOrderStatus,
+        created_at: (o.created_at as Date).toISOString(),
+        items: itemsByOrderId.get(o.id as string) ?? [],
+      })),
+    };
+  }
+
+  async getBillActionContextByBillId(
+    billId: string,
+  ): Promise<BillActionContext | null> {
+    const billRows = (await this.db
+      .select()
+      .from(session_bills)
+      .where(eq(session_bills.id, billId))) as Record<string, unknown>[];
+    const billRow = billRows[0];
+    if (!billRow) return null;
+    const sessionId = billRow.session_id as string;
+
+    const sessionRows = (await this.db
+      .select()
+      .from(dining_sessions)
+      .where(eq(dining_sessions.id, sessionId))) as Record<string, unknown>[];
+    const session = sessionRows[0];
+    if (!session) {
+      throw new AppError("INTERNAL_ERROR", "Frozen bill has no session", 500);
+    }
+
+    const bringBillRows = (await this.db
+      .select()
+      .from(service_requests)
+      .where(
+        and(
+          eq(service_requests.session_id, sessionId),
+          eq(service_requests.request_type, "BRING_BILL"),
+        ),
+      )) as Record<string, unknown>[];
+    const lookup = serviceRequestLookup(bringBillRows);
+    if (
+      (session.status as string) === "BILL_REQUESTED" &&
+      lookup.kind !== "FOUND"
+    ) {
+      throw new AppError(
+        "BILL_INVARIANT_VIOLATION",
+        "BILL_REQUESTED session must have exactly one BRING_BILL request",
+        500,
+      );
+    }
+
+    return {
+      session: {
+        id: session.id as string,
+        status: session.status as DiningSessionStatus,
+      },
+      bring_bill_request:
+        lookup.kind === "FOUND" &&
+        BRING_BILL_VISIBLE_STATUSES.includes(lookup.value.status)
+          ? { id: lookup.value.id, status: lookup.value.status }
+          : null,
+    };
+  }
+
+  private visibleBringBill(
+    lookup: ArtifactLookup<ServiceRequestDTO>,
+  ): VendorBillDetail["bring_bill_request"] {
+    if (
+      lookup.kind !== "FOUND" ||
+      !BRING_BILL_VISIBLE_STATUSES.includes(lookup.value.status)
+    ) {
+      return null;
+    }
+    return {
+      id: lookup.value.id,
+      status: lookup.value.status as "PENDING" | "ACKNOWLEDGED" | "COMPLETED",
+      acknowledged_at: lookup.value.acknowledged_at,
+      completed_at: lookup.value.completed_at,
+    };
   }
 }

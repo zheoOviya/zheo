@@ -9,6 +9,7 @@ import {
   getDineInOrderReadRepository,
   getDineInServiceRequestReadRepository,
   getDineInTableBoardReadRepository,
+  getDineInBillReadRepository,
   getDineInTransactionPort,
 } from "../repositories/dineInComposition";
 import {
@@ -935,5 +936,178 @@ vendorOpsRouter.get(
     const rows =
       await getDineInTableBoardReadRepository().getByRestaurant(restaurant_id);
     ok(res, rows);
+  }),
+);
+
+// ---- DINE-OPS4-B1: Vendor Dine-In Bill Read + Acknowledge/Deliver ---------
+//
+// Read surfaces:
+//   GET  /dine-in/bills?restaurant_id=<uuid>   (actionable pending-bill queue)
+//   GET  /dine-in/bills/:billId                (full bill detail)
+// Mutation wrappers (acknowledge / deliver ONLY — the billing flow owns the
+// BRING_BILL artifact; there is no vendor cancel/close surface):
+//   POST /dine-in/bills/:billId/acknowledge    PENDING -> ACKNOWLEDGED
+//   POST /dine-in/bills/:billId/deliver        ACKNOWLEDGED -> COMPLETED
+//
+// This is a PRODUCT-FUNCTIONAL wrapper only. The frozen DiningSessionService
+// owns the request transitions (idempotent retries, terminal 409s,
+// server-authoritative audit) and the bill read model is a dedicated
+// repository (no joins / no N+1). Nothing here adds or changes state-machine
+// logic, and neither the session nor the bill is ever mutated: acknowledge /
+// deliver only move the BRING_BILL artifact while the session stays
+// BILL_REQUESTED and the bill stays frozen.
+//
+// Authorization precedence (frozen DINE-OPS4-A1R1/R2): billId transport
+// validation (400) -> getAccessContextByBillId (404 BILL_NOT_FOUND when
+// absent) -> assertRestaurantAccess (403) -> post-auth read (the exactly-one
+// BRING_BILL invariant under BILL_REQUESTED is a 500 only AFTER authorization)
+// -> BILL_REQUESTED action boundary (409 INVALID_SERVICE_REQUEST_TRANSITION)
+// -> frozen service mutation. Restaurant identity is DERIVED from the
+// persisted bill — never from body/query. No body is read: acknowledged_by /
+// completed_by timestamps are server-authoritative.
+
+const DineInBillIdSchema = z.string().uuid("billId must be a valid uuid");
+
+const VendorDineInBillsQuerySchema = z.object({
+  restaurant_id: z.string().uuid("restaurant_id must be a valid uuid"),
+});
+
+async function loadVendorBillForMutation(
+  res: { locals: Record<string, unknown> },
+  billId: string,
+): Promise<string> {
+  const billRead = getDineInBillReadRepository();
+  const access = await billRead.getAccessContextByBillId(billId);
+  if (access === null) {
+    throw new AppError("BILL_NOT_FOUND", "Dine-in bill not found", 404);
+  }
+  // AUTHORIZATION BEFORE DOMAIN DECISION: the restaurant gate runs first so an
+  // unauthorized caller receives a plain FORBIDDEN and can never distinguish a
+  // foreign bill's existence or state via a later 409/500. Only after access
+  // is proven do the invariant and action-boundary checks run.
+  await assertRestaurantAccess(res, access.restaurant_id);
+  const action = await billRead.getBillActionContextByBillId(billId);
+  if (action === null) {
+    throw new AppError("BILL_NOT_FOUND", "Dine-in bill not found", 404);
+  }
+  // Bill actions are legal ONLY while the session is BILL_REQUESTED. No
+  // session/bill is mutated here — this is the frozen action boundary.
+  if (action.session.status !== "BILL_REQUESTED") {
+    throw new AppError(
+      "INVALID_SERVICE_REQUEST_TRANSITION",
+      "Bill action requires a BILL_REQUESTED session",
+      409,
+    );
+  }
+  // Under BILL_REQUESTED the post-auth read already enforced the exactly-one
+  // invariant, so the BRING_BILL artifact is guaranteed present.
+  if (action.bring_bill_request === null) {
+    throw new AppError(
+      "INTERNAL_ERROR",
+      "BILL_REQUESTED session has no BRING_BILL artifact",
+      500,
+    );
+  }
+  return action.bring_bill_request.id;
+}
+
+vendorOpsRouter.get(
+  "/dine-in/bills",
+  asyncHandler(async (req, res) => {
+    const parsed = VendorDineInBillsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid query parameters",
+        400,
+        parsed.error.flatten(),
+      );
+    }
+    const { restaurant_id } = parsed.data;
+    await assertRestaurantAccess(res, restaurant_id);
+    const rows =
+      await getDineInBillReadRepository().getPendingQueueByRestaurant(
+        restaurant_id,
+      );
+    ok(res, rows);
+  }),
+);
+
+vendorOpsRouter.get(
+  "/dine-in/bills/:billId",
+  asyncHandler(async (req, res) => {
+    const billId = DineInBillIdSchema.safeParse(req.params.billId);
+    if (!billId.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid bill id",
+        400,
+        billId.error.flatten(),
+      );
+    }
+    const billRead = getDineInBillReadRepository();
+    const access = await billRead.getAccessContextByBillId(billId.data);
+    if (access === null) {
+      throw new AppError("BILL_NOT_FOUND", "Dine-in bill not found", 404);
+    }
+    await assertRestaurantAccess(res, access.restaurant_id);
+    const detail = await billRead.getBillDetailByBillId(billId.data);
+    if (detail === null) {
+      // Unreachable in the memory universe; defensive against a pg race only.
+      throw new AppError("BILL_NOT_FOUND", "Dine-in bill not found", 404);
+    }
+    ok(res, detail);
+  }),
+);
+
+vendorOpsRouter.post(
+  "/dine-in/bills/:billId/acknowledge",
+  asyncHandler(async (req, res) => {
+    const billId = DineInBillIdSchema.safeParse(req.params.billId);
+    if (!billId.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid bill id",
+        400,
+        billId.error.flatten(),
+      );
+    }
+    const userId = res.locals.userId as string;
+    if (!userId) {
+      throw new AppError("UNAUTHORIZED", "User identity missing from token", 401);
+    }
+    const requestId = await loadVendorBillForMutation(res, billId.data);
+    const outcome = await dineInSessionService.acknowledgeServiceRequest({
+      request_id: requestId,
+      caller_user_id: userId,
+      correlation_id: res.locals.correlationId,
+    });
+    ok(res, { request: outcome.value.request });
+  }),
+);
+
+vendorOpsRouter.post(
+  "/dine-in/bills/:billId/deliver",
+  asyncHandler(async (req, res) => {
+    const billId = DineInBillIdSchema.safeParse(req.params.billId);
+    if (!billId.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid bill id",
+        400,
+        billId.error.flatten(),
+      );
+    }
+    const userId = res.locals.userId as string;
+    if (!userId) {
+      throw new AppError("UNAUTHORIZED", "User identity missing from token", 401);
+    }
+    const requestId = await loadVendorBillForMutation(res, billId.data);
+    const outcome = await dineInSessionService.completeServiceRequest({
+      request_id: requestId,
+      caller_user_id: userId,
+      correlation_id: res.locals.correlationId,
+    });
+    ok(res, { request: outcome.value.request });
   }),
 );

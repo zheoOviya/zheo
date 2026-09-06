@@ -441,6 +441,168 @@ export interface SessionBillRepository {
 }
 
 // ------------------------------------------------------------
+// Vendor Dine-In bill read model (DINE-OPS4-B1, read-only).
+//
+// Public wire DTOs (frozen DINE-OPS4-A1R1/A1R2). These shapes are the exact
+// JSON contract for the vendor bill endpoints:
+//   GET  /api/vendor/dine-in/bills?restaurant_id=<uuid>
+//          -> VendorPendingBillRow[]
+//   GET  /api/vendor/dine-in/bills/:billId
+//          -> VendorBillDetail
+//   POST /api/vendor/dine-in/bills/:billId/acknowledge
+//          -> { request: ServiceRequestDTO }
+//   POST /api/vendor/dine-in/bills/:billId/deliver
+//          -> { request: ServiceRequestDTO }
+//
+// Membership rules:
+//   - The actionable queue is exactly the sessions where
+//     session.status === "BILL_REQUESTED" AND the session's BRING_BILL
+//     artifact status is PENDING or ACKNOWLEDGED. A delivered (COMPLETED)
+//     artifact leaves the queue; the bill detail stays readable.
+//   - Queue ordering is bill_requested_at ASC, then bill.id ASC
+//     (deterministic).
+//   - Bill actions are legal ONLY while session.status === "BILL_REQUESTED".
+//   - A BILL_REQUESTED session must carry EXACTLY ONE BRING_BILL artifact;
+//     NONE or MULTIPLE is a BILL_INVARIANT_VIOLATION (500). That invariant is
+//     enforced ONLY inside the post-authorization repository reads below —
+//     never by getAccessContextByBillId, which is invariant-free so the
+//     404/403 precedence can never leak a corrupted state before
+//     authorization.
+//
+// The following never appear on the wire: owner_user_id, requested_by,
+// table_token, payment_method / payment_status / payment_transaction_id,
+// settlement and close-session fields.
+// ------------------------------------------------------------
+
+// The frozen bill half of both bill read models (SessionBillDTO minus the
+// non-wire created_at).
+export interface VendorBillTotalsDTO {
+  id: string;
+  session_id: string;
+  restaurant_id: string;
+  food_subtotal: number;
+  packaging_fee: number;
+  gst_food: number;
+  gst_packaging: number;
+  total_amount: number;
+  frozen_at: string;
+}
+
+// BRING_BILL statuses that keep a bill on the actionable queue.
+export const BRING_BILL_QUEUE_STATUSES: ServiceRequestStatus[] = [
+  "PENDING",
+  "ACKNOWLEDGED",
+];
+
+// BRING_BILL statuses surfaced on the bill detail (COMPLETED keeps the
+// delivered bill readable; CANCELLED is unreachable — the billing flow owns
+// BRING_BILL cancellation and never cancels it).
+export const BRING_BILL_VISIBLE_STATUSES: ServiceRequestStatus[] = [
+  "PENDING",
+  "ACKNOWLEDGED",
+  "COMPLETED",
+];
+
+export interface VendorPendingBillRow {
+  bill: VendorBillTotalsDTO;
+  session: {
+    id: string;
+    status: "BILL_REQUESTED";
+    bill_requested_at: string;
+    opened_at: string;
+  };
+  table: {
+    id: string;
+    label: string;
+  };
+  bring_bill_request: {
+    id: string;
+    status: "PENDING" | "ACKNOWLEDGED";
+  };
+}
+
+export interface VendorBillDetail {
+  bill: VendorBillTotalsDTO;
+  session: {
+    id: string;
+    status: DiningSessionStatus;
+    bill_requested_at: string | null;
+    opened_at: string;
+  };
+  table: {
+    id: string;
+    label: string;
+  };
+  zone: {
+    id: string;
+    name: string;
+  } | null;
+  bring_bill_request: {
+    id: string;
+    status: "PENDING" | "ACKNOWLEDGED" | "COMPLETED";
+    acknowledged_at: string | null;
+    completed_at: string | null;
+  } | null;
+  orders: Array<{
+    id: string;
+    status: DineInOrderStatus;
+    created_at: string;
+    items: Array<{
+      name: string;
+      quantity: number;
+      item_subtotal: number;
+    }>;
+  }>;
+}
+
+// Pre-authorization discovery (existence + owning restaurant only). No joins,
+// no invariant checks, no session/service-request reads.
+export interface BillAccessContext {
+  bill_id: string;
+  session_id: string;
+  restaurant_id: string;
+}
+
+// Post-authorization action context. session.status truthfully reflects the
+// current session (the caller enforces the BILL_REQUESTED action boundary);
+// bring_bill_request is null only outside BILL_REQUESTED.
+export interface BillActionContext {
+  session: {
+    id: string;
+    status: DiningSessionStatus;
+  };
+  bring_bill_request: {
+    id: string;
+    status: ServiceRequestStatus;
+  } | null;
+}
+
+/**
+ * Vendor Dine-In bill read surface (DINE-OPS4-B1): a dedicated read model
+ * repository so the routes perform no joins and no N+1 (bounded fixed query
+ * set in postgres mode). Read-only — no mutation surface; bill actions go
+ * through the frozen DiningSessionService.
+ *
+ * Authorization split (caller contract):
+ *   1. getAccessContextByBillId is INVARIANT-FREE discovery used BEFORE the
+ *      restaurant gate (missing bill -> null -> route 404; then gate 403).
+ *   2. getBillDetailByBillId / getBillActionContextByBillId are
+ *      POST-authorization reads. While session.status === "BILL_REQUESTED"
+ *      they throw BILL_INVARIANT_VIOLATION (500) when the session has zero or
+ *      more than one BRING_BILL artifact — never reachable before a 403.
+ */
+export interface DineInBillReadRepository {
+  getAccessContextByBillId(billId: string): Promise<BillAccessContext | null>;
+  getPendingQueueByRestaurant(
+    restaurantId: string,
+  ): Promise<VendorPendingBillRow[]>;
+  getBillDetailByBillId(billId: string): Promise<VendorBillDetail | null>;
+  getBillActionContextByBillId(
+    billId: string,
+  ): Promise<BillActionContext | null>;
+}
+
+// ------------------------------------------------------------
 // Transactional variants: row-lock primitives (frozen D2.4H2).
 // Exact lock set only — no extra lock methods.
 // ------------------------------------------------------------

@@ -8,6 +8,7 @@ import type {
   DineInOrderRepository,
   ServiceRequestRepository,
   DineInTableBoardReadRepository,
+  DineInBillReadRepository,
 } from "./dineInContracts";
 import { DrizzleDineInTransactionPort } from "./drizzle/dineInTransactionPort";
 import {
@@ -15,6 +16,7 @@ import {
   DrizzleDineInOrderRepository,
   DrizzleServiceRequestRepository,
   DrizzleDineInTableBoardRepository,
+  DrizzleDineInBillReadRepository,
 } from "./drizzle/dineInRepositories";
 import {
   buildMemoryDineInRepos,
@@ -22,11 +24,13 @@ import {
   MemoryRestaurantEligibilityReader,
   MemoryRestaurantTableRepository,
   MemoryDineInTableBoardRepository,
+  MemoryDineInBillReadRepository,
 } from "./dineInMemoryRepositories";
 import type {
   MemoryDiningSessionRepository,
   MemoryDineInOrderRepository,
   MemoryServiceRequestRepository,
+  MemorySessionBillRepository,
 } from "./dineInMemoryRepositories";
 
 // ============================================================
@@ -204,4 +208,33 @@ export function getDineInServiceRequestReadRepository(): ServiceRequestRepositor
     }
   }
   return _vendorServiceRequestReadRepo;
+}
+
+// Read-only vendor Dine-In bill surface (DINE-OPS4-B1). Postgres mode -> the
+// Drizzle bill read repository over the shared db handle (bounded fixed query
+// set, no N+1). Memory mode -> a MemoryDineInBillReadRepository that reads the
+// SAME shared memory repo instances (tables / sessions / orders / requests /
+// bills) held by the shared memory repo set AND the SAME table-board zone
+// registry, so route tests seed one universe. Read-only — no mutation surface.
+let _vendorBillReadRepo: DineInBillReadRepository | null = null;
+
+export function getDineInBillReadRepository(): DineInBillReadRepository {
+  if (!_vendorBillReadRepo) {
+    const mode = getStorageMode();
+    if (mode === "postgres") {
+      _vendorBillReadRepo = new DrizzleDineInBillReadRepository(getDb());
+    } else {
+      getDineInTransactionPort();
+      getDineInTableBoardReadRepository();
+      _vendorBillReadRepo = new MemoryDineInBillReadRepository(
+        _memoryRepos!.restaurantTables as unknown as MemoryRestaurantTableRepository,
+        _memoryRepos!.diningSessions as unknown as MemoryDiningSessionRepository,
+        _memoryRepos!.dineInOrders as unknown as MemoryDineInOrderRepository,
+        _memoryRepos!.serviceRequests as unknown as MemoryServiceRequestRepository,
+        _memoryRepos!.sessionBills as unknown as MemorySessionBillRepository,
+        _vendorTableBoardRepo as unknown as MemoryDineInTableBoardRepository,
+      );
+    }
+  }
+  return _vendorBillReadRepo;
 }

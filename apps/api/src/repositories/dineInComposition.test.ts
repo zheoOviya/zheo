@@ -15,11 +15,13 @@ import type {
 import { getStorageMode } from "./shared";
 import {
   buildDineInTransactionPort,
+  getDineInBillReadRepository,
   getDineInTransactionPort,
   resetDineInState,
 } from "./dineInComposition";
 import {
   buildMemoryDineInRepos,
+  MemoryDineInBillReadRepository,
   MemoryDineInTransactionPort,
 } from "./dineInMemoryRepositories";
 import { DrizzleDineInTransactionPort } from "./drizzle/dineInTransactionPort";
@@ -235,6 +237,83 @@ describe("Dine-In runtime composition (H2.1)", () => {
       }
       expect(created.value.request.status).toBe("PENDING");
       expect(created.value.request.request_type).toBe("WATER");
+    });
+  });
+
+  describe("vendor bill read surface (DINE-OPS4-B1)", () => {
+    it("memory mode wires the MemoryDineInBillReadRepository singleton", () => {
+      // In the test environment the shared storage-mode decision is memory.
+      const reader = getDineInBillReadRepository();
+      expect(reader).toBeInstanceOf(MemoryDineInBillReadRepository);
+      const second = getDineInBillReadRepository();
+      expect(second).toBe(reader);
+    });
+
+    it("bill-read repository reads the SAME universe as the tx-port singleton", async () => {
+      const port = getDineInTransactionPort();
+      resetDineInState();
+
+      const repos = (port as unknown as { repos: DineInTransactionRepos }).repos;
+      seedRepos(repos, makeTable());
+      const { catalog } = makeCatalog({
+        "item-1": makeMenuItem({ price: 100 }),
+      });
+
+      const sessionService = new DiningSessionService(port, noopEmitter);
+      const orderService = new DineInOrderService(port, catalog);
+
+      const opened = await sessionService.openSession({
+        caller_user_id: "user-1",
+        table_token: "token-abc",
+        correlation_id: "corr-b1-1",
+      });
+      if (opened.kind !== "NEW_MUTATION") {
+        throw new Error(`expected NEW_MUTATION, got ${opened.kind}`);
+      }
+      const sessionId = opened.value.session.id;
+
+      const placed = await orderService.placeOrder({
+        session_id: sessionId,
+        caller_user_id: "user-1",
+        correlation_id: "corr-b1-2",
+        items: [{ menu_item_id: "item-1", quantity: 2 }],
+      });
+      if (placed.kind !== "NEW_MUTATION") {
+        throw new Error(`expected NEW_MUTATION, got ${placed.kind}`);
+      }
+
+      const billed = await sessionService.requestBill({
+        session_id: sessionId,
+        caller_user_id: "user-1",
+        correlation_id: "corr-b1-3",
+      });
+      if (billed.kind !== "NEW_MUTATION") {
+        throw new Error(`expected NEW_MUTATION, got ${billed.kind}`);
+      }
+      const billId = billed.value.bill.id;
+      if (billed.value.bringBillRequest === null) {
+        throw new Error("expected BRING_BILL request on new mutation");
+      }
+      const bringBillId = billed.value.bringBillRequest.id;
+
+      // The bill reader must see the very session/bill/request rows the
+      // singleton transaction port just wrote (ONE logical repo universe).
+      const reader = getDineInBillReadRepository();
+
+      const queue = await reader.getPendingQueueByRestaurant("restaurant-1");
+      expect(queue).toHaveLength(1);
+      const row = queue[0]!;
+      expect(row.bill.id).toBe(billId);
+      expect(row.session.id).toBe(sessionId);
+      expect(row.session.status).toBe("BILL_REQUESTED");
+      expect(row.bring_bill_request.id).toBe(bringBillId);
+
+      const detail = await reader.getBillDetailByBillId(billId);
+      expect(detail).not.toBeNull();
+      expect(detail!.bill.id).toBe(billId);
+      expect(detail!.zone).toBeNull();
+      expect(detail!.orders).toHaveLength(1);
+      expect(detail!.orders[0]!.items[0]!.item_subtotal).toBe(200);
     });
   });
 

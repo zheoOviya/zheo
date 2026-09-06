@@ -5,15 +5,24 @@ import type {
   ServiceRequestStatus,
   StaffAssignmentStatus,
 } from "@snakzap/types";
-import { makeTxBoundSessionBill, KITCHEN_ORDER_STATUSES } from "./dineInContracts";
+import { AppError } from "../middleware/envelope";
+import {
+  BRING_BILL_QUEUE_STATUSES,
+  BRING_BILL_VISIBLE_STATUSES,
+  makeTxBoundSessionBill,
+  KITCHEN_ORDER_STATUSES,
+} from "./dineInContracts";
 import type {
   ArtifactLookup,
+  BillAccessContext,
+  BillActionContext,
   CreateDineInOrderInput,
   CreateDiningSessionInput,
   CreateFrozenBillInput,
   CreateRestaurantTableInput,
   CreateServiceRequestInput,
   CreateStaffAssignmentInput,
+  DineInBillReadRepository,
   DineInOrderDTO,
   DineInKitchenOrderDTO,
   DineInOrderItemDTO,
@@ -32,6 +41,9 @@ import type {
   StaffAssignmentDTO,
   TableResolveDTO,
   TableResolveRepository,
+  VendorBillDetail,
+  VendorBillTotalsDTO,
+  VendorPendingBillRow,
   VendorTableBoardRow,
   TransitionResult,
   TransactionalRestaurantReader,
@@ -837,6 +849,14 @@ export class MemoryDineInTableBoardRepository
     return zone;
   }
 
+  /** Narrow zone lookup shared with the vendor bill read model (memory mode
+   *  only) so both read models resolve zone names from the SAME registry the
+   *  route tests seed via _seedZone. */
+  getZoneById(zoneId: string): { id: string; name: string } | null {
+    const zone = this.zones.get(zoneId);
+    return zone ? { id: zone.id, name: zone.name } : null;
+  }
+
   _reset(): void {
     this.zones.clear();
   }
@@ -885,6 +905,16 @@ export class MemorySessionBillRepository implements SessionBillRepository {
   _seed(bill: SessionBillDTO): SessionBillDTO {
     this.bills.set(bill.session_id, bill);
     return bill;
+  }
+
+  /** Bill-id lookup for the vendor bill read model (DINE-OPS4-B1). Not part of
+   *  the frozen SessionBillRepository contract (which reads by session_id);
+   *  the in-memory map is keyed by session_id, so this scans the values. */
+  async getById(billId: string): Promise<SessionBillDTO | null> {
+    for (const bill of this.bills.values()) {
+      if (bill.id === billId) return bill;
+    }
+    return null;
   }
 }
 
@@ -943,4 +973,225 @@ export function buildMemoryDineInRepos(): DineInTransactionRepos {
 
 export function buildMemoryDineInTransactionPort(): DineInTransactionPort {
   return new MemoryDineInTransactionPort(buildMemoryDineInRepos());
+}
+
+// ------------------------------------------------------------
+// Vendor Dine-In bill read model (DINE-OPS4-B1, read-only, memory).
+//
+// The frozen bill half of the wire rows: SessionBillDTO minus created_at.
+// ------------------------------------------------------------
+
+function billTotals(bill: SessionBillDTO): VendorBillTotalsDTO {
+  return {
+    id: bill.id,
+    session_id: bill.session_id,
+    restaurant_id: bill.restaurant_id,
+    food_subtotal: bill.food_subtotal,
+    packaging_fee: bill.packaging_fee,
+    gst_food: bill.gst_food,
+    gst_packaging: bill.gst_packaging,
+    total_amount: bill.total_amount,
+    frozen_at: bill.frozen_at,
+  };
+}
+
+export class MemoryDineInBillReadRepository implements DineInBillReadRepository {
+  // Every read dependency is OPTIONAL for unit isolation; the memory
+  // transaction-repo builder wires the SHARED instances so this read model
+  // observes the SAME universe as the transaction services and the table
+  // board. Zone names resolve through the shared table-board zone registry
+  // (route tests seed it via _seedZone). Read-only — no mutation surface.
+  constructor(
+    private readonly tables?: MemoryRestaurantTableRepository,
+    private readonly sessions?: MemoryDiningSessionRepository,
+    private readonly orders?: MemoryDineInOrderRepository,
+    private readonly requests?: MemoryServiceRequestRepository,
+    private readonly bills?: MemorySessionBillRepository,
+    private readonly board?: MemoryDineInTableBoardRepository,
+  ) {}
+
+  // Pre-auth discovery: the bill row only — no joins, no session/request
+  // reads, no invariant checks (so the 404/403 precedence can never leak a
+  // corrupted BILL_REQUESTED state before authorization).
+  async getAccessContextByBillId(
+    billId: string,
+  ): Promise<BillAccessContext | null> {
+    const bill = this.bills ? await this.bills.getById(billId) : null;
+    if (!bill) return null;
+    return {
+      bill_id: bill.id,
+      session_id: bill.session_id,
+      restaurant_id: bill.restaurant_id,
+    };
+  }
+
+  async getPendingQueueByRestaurant(
+    restaurantId: string,
+  ): Promise<VendorPendingBillRow[]> {
+    if (!this.bills || !this.sessions || !this.requests || !this.tables) {
+      return [];
+    }
+    const requests = (
+      await this.requests.getPendingByRestaurant(restaurantId)
+    ).filter((r) => r.request_type === "BRING_BILL");
+    // Exactly-one BRING_BILL per session is the healthy state; defensively
+    // keep the earliest matching request per session so a corrupted MULTIPLE
+    // can never double-report the same bill on the queue.
+    const earliestBySession = new Map<string, ServiceRequestDTO>();
+    for (const request of requests) {
+      const current = earliestBySession.get(request.session_id);
+      if (
+        !current ||
+        request.created_at < current.created_at ||
+        (request.created_at === current.created_at && request.id < current.id)
+      ) {
+        earliestBySession.set(request.session_id, request);
+      }
+    }
+
+    const rows: VendorPendingBillRow[] = [];
+    for (const request of earliestBySession.values()) {
+      const session = await this.sessions.getById(request.session_id);
+      if (!session || session.restaurant_id !== restaurantId) continue;
+      // Queue membership: session BILL_REQUESTED + BRING_BILL PENDING/ACK.
+      if (session.status !== "BILL_REQUESTED") continue;
+      if (!BRING_BILL_QUEUE_STATUSES.includes(request.status)) continue;
+      const bill = await this.bills.getBySessionId(session.id);
+      if (!bill || bill.restaurant_id !== restaurantId) continue;
+      const table = await this.tables.getById(session.table_id);
+      if (!table || table.restaurant_id !== restaurantId) continue;
+      rows.push({
+        bill: billTotals(bill),
+        session: {
+          id: session.id,
+          status: "BILL_REQUESTED",
+          // Healthy BILL_REQUESTED always carries bill_requested_at (the
+          // request-bill transition writes status + timestamp together); the
+          // created_at fallback only keeps a corrupted row ordered.
+          bill_requested_at: session.bill_requested_at ?? session.created_at,
+          opened_at: session.created_at,
+        },
+        table: { id: table.id, label: table.label },
+        bring_bill_request: {
+          id: request.id,
+          status: request.status as "PENDING" | "ACKNOWLEDGED",
+        },
+      });
+    }
+
+    rows.sort(
+      (a, b) =>
+        Date.parse(a.session.bill_requested_at) -
+          Date.parse(b.session.bill_requested_at) ||
+        a.bill.id.localeCompare(b.bill.id),
+    );
+    return rows;
+  }
+
+  // Post-auth detail read. While BILL_REQUESTED, the exactly-one BRING_BILL
+  // invariant is enforced here (never before authorization).
+  async getBillDetailByBillId(billId: string): Promise<VendorBillDetail | null> {
+    if (!this.sessions || !this.requests || !this.tables) return null;
+    const bill = this.bills ? await this.bills.getById(billId) : null;
+    if (!bill) return null;
+    const session = await this.sessions.getById(bill.session_id);
+    if (session === null) {
+      // Defensive structural corruption (FK forbids in postgres; mirrors the
+      // service's INTERNAL_ERROR convention for a missing locked session).
+      throw new AppError("INTERNAL_ERROR", "Frozen bill has no session", 500);
+    }
+    const lookup = await this.requests.findBringBillBySession(session.id);
+    this.assertBringBillInvariant(session, lookup);
+    const table = await this.tables.getById(session.table_id);
+    if (table === null) {
+      throw new AppError("INTERNAL_ERROR", "Frozen bill session has no table", 500);
+    }
+    const zone = table.zone_id
+      ? (this.board?.getZoneById(table.zone_id) ?? null)
+      : null;
+    const orders = this.orders
+      ? (await this.orders.getBySessionWithItems(session.id)).filter(
+          // Same non-CANCELLED snapshot semantics as listForBill.
+          (o) => o.status !== "CANCELLED",
+        )
+      : [];
+    return {
+      bill: billTotals(bill),
+      session: {
+        id: session.id,
+        status: session.status,
+        bill_requested_at: session.bill_requested_at,
+        opened_at: session.created_at,
+      },
+      table: { id: table.id, label: table.label },
+      zone,
+      bring_bill_request: this.visibleBringBill(lookup),
+      orders: orders.map((o) => ({
+        id: o.id,
+        status: o.status,
+        created_at: o.created_at,
+        items: o.items.map((i) => ({
+          name: i.name,
+          quantity: i.quantity,
+          item_subtotal: i.item_subtotal,
+        })),
+      })),
+    };
+  }
+
+  // Post-auth action context. Session status is returned truthfully so the
+  // route can enforce the BILL_REQUESTED action boundary (409) itself.
+  async getBillActionContextByBillId(
+    billId: string,
+  ): Promise<BillActionContext | null> {
+    if (!this.sessions || !this.requests) return null;
+    const bill = this.bills ? await this.bills.getById(billId) : null;
+    if (!bill) return null;
+    const session = await this.sessions.getById(bill.session_id);
+    if (session === null) {
+      throw new AppError("INTERNAL_ERROR", "Frozen bill has no session", 500);
+    }
+    const lookup = await this.requests.findBringBillBySession(session.id);
+    this.assertBringBillInvariant(session, lookup);
+    return {
+      session: { id: session.id, status: session.status },
+      bring_bill_request:
+        lookup.kind === "FOUND" &&
+        BRING_BILL_VISIBLE_STATUSES.includes(lookup.value.status)
+          ? { id: lookup.value.id, status: lookup.value.status }
+          : null,
+    };
+  }
+
+  private assertBringBillInvariant(
+    session: DiningSessionDTO,
+    lookup: ArtifactLookup<ServiceRequestDTO>,
+  ): void {
+    // Frozen invariant: NONE and MULTIPLE both breach the exactly-one-artifact
+    // rule. Enforced ONLY under BILL_REQUESTED and ONLY post-authorization.
+    if (session.status === "BILL_REQUESTED" && lookup.kind !== "FOUND") {
+      throw new AppError(
+        "BILL_INVARIANT_VIOLATION",
+        "BILL_REQUESTED session must have exactly one BRING_BILL request",
+        500,
+      );
+    }
+  }
+
+  private visibleBringBill(
+    lookup: ArtifactLookup<ServiceRequestDTO>,
+  ): VendorBillDetail["bring_bill_request"] {
+    if (
+      lookup.kind !== "FOUND" ||
+      !BRING_BILL_VISIBLE_STATUSES.includes(lookup.value.status)
+    ) {
+      return null;
+    }
+    return {
+      id: lookup.value.id,
+      status: lookup.value.status as "PENDING" | "ACKNOWLEDGED" | "COMPLETED",
+      acknowledged_at: lookup.value.acknowledged_at,
+      completed_at: lookup.value.completed_at,
+    };
+  }
 }
