@@ -356,3 +356,18 @@ describe("Dine-In page service-request strip", () => {
     expect(screen.getByRole("button", { name: "Mark Complete" })).toBeDefined();
   });
 });
+
+describe("Dine-In page header navigation (DINE-OPS4-C2 regression)", () => {
+  it("keeps the dining board reachable from the bill queue link in the header", async () => {
+    mocks.fetchDineInOrders.mockResolvedValue([]);
+    mocks.fetchDineInServiceRequests.mockResolvedValue([]);
+
+    render(<DineInPage />);
+
+    await screen.findByRole("heading", { name: "Dine-In Orders" });
+    const billsLink = screen.getByRole("link", { name: "Bills" });
+    const tablesLink = screen.getByRole("link", { name: "Table board" });
+    expect(billsLink.getAttribute("href")).toBe("/dine-in/bills");
+    expect(tablesLink.getAttribute("href")).toBe("/dine-in/tables");
+  });
+});

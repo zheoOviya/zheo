@@ -225,6 +225,91 @@ export interface ServiceRequestMutationResult {
   };
 }
 
+// Vendor Dine-In bill read model (DINE-OPS4-B1/B2). Exact wire mirrors of the
+// released backend read surface (never reconstructed or re-joined client-side):
+//   GET /api/vendor/dine-in/bills?restaurant_id=<uuid> -> VendorPendingBillRow[]
+//   GET /api/vendor/dine-in/bills/:billId              -> VendorBillDetail
+// The queue is exactly the sessions whose status is BILL_REQUESTED with a
+// BRING_BILL artifact in PENDING/ACKNOWLEDGED, ordered server-side by
+// bill_requested_at ASC then bill.id ASC. COMPLETED leaves the queue while the
+// detail stays readable. The bill monetary snapshot (totals/items) is frozen;
+// only the BRING_BILL lifecycle fields move until COMPLETED. The following
+// never appear on the wire and are never read here: owner_user_id,
+// requested_by, table_token, payment method/status/transaction, settlement and
+// close-session fields.
+export interface VendorBillTotalsDTO {
+  id: string;
+  session_id: string;
+  restaurant_id: string;
+  food_subtotal: number;
+  packaging_fee: number;
+  gst_food: number;
+  gst_packaging: number;
+  total_amount: number;
+  frozen_at: string;
+}
+
+// Mirrors the backend DiningSessionStatus wire union (the bill detail join is
+// never limited to live-session states).
+export type VendorDineInBillSessionStatus =
+  | "OPEN"
+  | "ACTIVE"
+  | "BILL_REQUESTED"
+  | "PAYMENT_PENDING"
+  | "CLOSED";
+
+export interface VendorPendingBillRow {
+  bill: VendorBillTotalsDTO;
+  session: {
+    id: string;
+    status: "BILL_REQUESTED";
+    bill_requested_at: string;
+    opened_at: string;
+  };
+  table: {
+    id: string;
+    label: string;
+  };
+  bring_bill_request: {
+    id: string;
+    status: "PENDING" | "ACKNOWLEDGED";
+  };
+}
+
+export interface VendorBillDetail {
+  bill: VendorBillTotalsDTO;
+  session: {
+    id: string;
+    status: VendorDineInBillSessionStatus;
+    bill_requested_at: string | null;
+    opened_at: string;
+  };
+  table: {
+    id: string;
+    label: string;
+  };
+  zone: {
+    id: string;
+    name: string;
+  } | null;
+  bring_bill_request: {
+    id: string;
+    status: "PENDING" | "ACKNOWLEDGED" | "COMPLETED";
+    acknowledged_at: string | null;
+    completed_at: string | null;
+  } | null;
+  orders: Array<{
+    id: string;
+    status: DineInOrderStatus;
+    created_at: string;
+    items: Array<{
+      name: string;
+      quantity: number;
+      item_subtotal: number;
+    }>;
+  }>;
+}
+
 export interface VendorMenuItem {
   id: string;
   name: string;
@@ -451,6 +536,45 @@ export async function fetchDineInTables(restaurantId: string): Promise<VendorTab
   const params = new URLSearchParams({ restaurant_id: restaurantId });
   return read<VendorTableBoardRow[]>(
     await authedFetch(`/api/vendor/dine-in/tables?${params.toString()}`),
+  );
+}
+
+// ============================================
+// Vendor Dine-In bills (DINE-OPS4-B1/B2)
+// ============================================
+
+export async function fetchVendorPendingBills(
+  restaurantId: string,
+): Promise<VendorPendingBillRow[]> {
+  const params = new URLSearchParams({ restaurant_id: restaurantId });
+  return read<VendorPendingBillRow[]>(
+    await authedFetch(`/api/vendor/dine-in/bills?${params.toString()}`),
+  );
+}
+
+export async function fetchVendorBillDetail(billId: string): Promise<VendorBillDetail> {
+  return read<VendorBillDetail>(await authedFetch(`/api/vendor/dine-in/bills/${billId}`));
+}
+
+// Acknowledge/deliver return the moved BRING_BILL artifact under the same
+// `{ request: ServiceRequestDTO }` envelope the frozen service emits, so the
+// existing ServiceRequestMutationResult shape is reused verbatim. No body is
+// sent; timestamps are server-authoritative.
+export async function acknowledgeVendorBill(
+  billId: string,
+): Promise<ServiceRequestMutationResult> {
+  return read<ServiceRequestMutationResult>(
+    await authedFetch(`/api/vendor/dine-in/bills/${billId}/acknowledge`, {
+      method: "POST",
+    }),
+  );
+}
+
+export async function deliverVendorBill(billId: string): Promise<ServiceRequestMutationResult> {
+  return read<ServiceRequestMutationResult>(
+    await authedFetch(`/api/vendor/dine-in/bills/${billId}/deliver`, {
+      method: "POST",
+    }),
   );
 }
 

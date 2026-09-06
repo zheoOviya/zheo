@@ -429,4 +429,16 @@ describe("Dine-In table board page", () => {
 
     expect(await screen.findByText(/1 of 2 tables occupied/)).toBeDefined();
   });
+
+  it("links to the bill queue and the orders surface from the board header (DINE-OPS4-C2 regression)", async () => {
+    mocks.fetchDineInTables.mockResolvedValue([]);
+
+    render(<DineInTableBoardPage />);
+
+    await screen.findByRole("heading", { name: "Table Board" });
+    const billsLink = screen.getByRole("link", { name: "Bills" });
+    const ordersLink = screen.getByRole("link", { name: "Orders & requests" });
+    expect(billsLink.getAttribute("href")).toBe("/dine-in/bills");
+    expect(ordersLink.getAttribute("href")).toBe("/dine-in");
+  });
 });

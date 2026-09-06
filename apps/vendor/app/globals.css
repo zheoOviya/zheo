@@ -74,3 +74,30 @@
     min-width: 44px;
   }
 }
+
+/*
+ * Bill print isolation (DINE-OPS4-C2).
+ *
+ * The rules below only engage when the printed document actually contains the
+ * bill detail anchor (#bill-print-region), which exists solely on the
+ * /dine-in/bills/[billId] route. Every other vendor route prints its normal
+ * DOM: the `body:has(...)` gate never matches there, so no other page is
+ * affected. There is deliberately NO unconditional `body *` print rule.
+ */
+@media print {
+  body:has(#bill-print-region) * {
+    visibility: hidden;
+  }
+
+  body:has(#bill-print-region) #bill-print-region,
+  body:has(#bill-print-region) #bill-print-region * {
+    visibility: visible;
+  }
+
+  body:has(#bill-print-region) #bill-print-region {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+}

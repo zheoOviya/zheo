@@ -123,12 +123,20 @@ export default function DineInTableBoardPage() {
         title="Table Board"
         subtitle={`${summary.total} ${tableNoun} · ${summary.occupied} occupied, ${summary.free} free`}
         actions={
-          <Link
-            href="/dine-in"
-            className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 active:scale-[0.98]"
-          >
-            Orders &amp; requests
-          </Link>
+          <>
+            <Link
+              href="/dine-in/bills"
+              className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 active:scale-[0.98]"
+            >
+              Bills
+            </Link>
+            <Link
+              href="/dine-in"
+              className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 active:scale-[0.98]"
+            >
+              Orders &amp; requests
+            </Link>
+          </>
         }
       />
 
