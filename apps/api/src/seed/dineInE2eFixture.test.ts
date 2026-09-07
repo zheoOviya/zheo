@@ -165,7 +165,7 @@ describe("UI8-A-R2 memory seed", () => {
     });
   });
 
-  it("7. double invocation -> exactly 15 tables, no duplicates", async () => {
+  it("7. double invocation -> exactly the fixture table count, no duplicates", async () => {
     vi.stubEnv("DINE_IN_E2E_FIXTURE", "true");
 
     await seedDineInE2eFixture();
@@ -242,22 +242,23 @@ describe("UI8-A-R2 memory seed", () => {
 });
 
 describe("UI8-A-R2 multi-table isolation", () => {
-  it("11. exactly 15 distinct active tables seed and all tokens resolve independently", async () => {
+  it("11. all fixture tables are distinct, active, and resolve independently", async () => {
     vi.stubEnv("DINE_IN_E2E_FIXTURE", "true");
     await seedDineInE2eFixture();
 
-    expect(DINE_IN_FIXTURE_TABLES).toHaveLength(15);
+    const expectedCount = DINE_IN_FIXTURE_TABLES.length;
+    expect(expectedCount).toBeGreaterThan(0);
     const ids = new Set(DINE_IN_FIXTURE_TABLES.map((t) => t.id));
     const labels = new Set(DINE_IN_FIXTURE_TABLES.map((t) => t.label));
     const tokens = new Set(DINE_IN_FIXTURE_TABLES.map((t) => t.token));
-    expect(ids.size).toBe(15);
-    expect(labels.size).toBe(15);
-    expect(tokens.size).toBe(15);
+    expect(ids.size).toBe(expectedCount);
+    expect(labels.size).toBe(expectedCount);
+    expect(tokens.size).toBe(expectedCount);
 
     const tables = await sharedRepos().restaurantTables.getByRestaurant(
       DINE_IN_FIXTURE_RESTAURANT_ID,
     );
-    expect(tables).toHaveLength(15);
+    expect(tables).toHaveLength(expectedCount);
     expect(tables.every((t) => t.is_active)).toBe(true);
 
     for (const t of DINE_IN_FIXTURE_TABLES) {
@@ -275,7 +276,7 @@ describe("UI8-A-R2 multi-table isolation", () => {
     }
   });
 
-  it("12. a live session on Table 01 does not block Table 02-15", async () => {
+  it("12. a live session on Table 01 does not block any other fixture table", async () => {
     vi.stubEnv("DINE_IN_E2E_FIXTURE", "true");
     await seedDineInE2eFixture();
 

@@ -38,11 +38,12 @@ import {
 //                               bill detail still renders from a direct URL
 //                               after a reload shows the queue row is gone
 //
-// RUN MODEL — FRESH STACK PER CHECKPOINT (same contract as the consumer
-// dine-in tracks): each test consumes its own fixture table from
-// DINE_IN_FIXTURE_TABLES, and openSession rejects a second, different-owner
-// open on a live table. Process restart is the ONLY sanctioned reset, so run
-// this file against a freshly seeded API process, e.g.:
+// RUN MODEL — each test consumes its own reserved fixture table ([15..17])
+// from DINE_IN_FIXTURE_TABLES, statically disjoint from the consumer dine-in
+// suite's [0..14]. openSession rejects a second, different-owner open on a
+// live table, so the reserved partition keeps this suite green both in a full
+// shared single-API-process run (consumer project first, live sessions left on
+// [0..14]) and standalone against a freshly seeded API process, e.g.:
 //   npx playwright test e2e/vendor/dine-in-bills.spec.ts --project=vendor
 //
 // Sanitization: the opaque table token and the Authorization header value are
@@ -56,12 +57,16 @@ import {
 const CONSUMER_VIEWPORT = { width: 375, height: 844 };
 const VENDOR_VIEWPORT = { width: 1440, height: 900 };
 
-// Three deterministic fixture tables, one per test. 375px consumer viewport
-// mirrors the consumer dine-in spec; the vendor console runs desktop.
+// Three reserved fixture tables ([15..17] -> Table 16-18), one per test,
+// statically disjoint from the consumer dine-in suite's [0..14]. In a full
+// shared single-API-process run the consumer project runs first and leaves
+// live sessions on [0..14], so only this reserved partition keeps the vendor
+// bill suite collision-free. The 375px consumer viewport mirrors the consumer
+// dine-in spec; the vendor console runs desktop.
 const BILLS_FIXTURES: readonly DineInFixtureTable[] = [
-  DINE_IN_FIXTURE_TABLES[12],
-  DINE_IN_FIXTURE_TABLES[13],
-  DINE_IN_FIXTURE_TABLES[14],
+  DINE_IN_FIXTURE_TABLES[15],
+  DINE_IN_FIXTURE_TABLES[16],
+  DINE_IN_FIXTURE_TABLES[17],
 ];
 
 // The seeded Biryani House restaurant (the vendor bound to the seeded vendor

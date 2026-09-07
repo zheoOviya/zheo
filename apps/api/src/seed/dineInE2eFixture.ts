@@ -5,15 +5,19 @@ import { getDineInE2eSeedRepos } from "../repositories/dineInComposition";
 // ============================================
 // Deterministic memory-only Dine-In E2E fixture (UI8-A-R1/R2).
 //
-// Bootstrap seed that makes exactly ONE Dine-In table resolvable for the
+// Bootstrap seed that makes a fixed set of Dine-In tables resolvable for the
 // browser E2E suite. Fail-closed: seeds ONLY when every guard passes
 // (explicit DINE_IN_E2E_FIXTURE=true, non-production, memory storage mode).
 // It never touches Postgres, never creates a session/order/request/bill, and
 // never duplicates the catalog seed (menu items are owned by catalogSeed).
 //
-// Isolation model: fresh API memory process -> fixture seeds once -> one
-// ordered browser scenario -> process termination discards all state. A
-// rerun restarts the API process; there is deliberately no runtime reset
+// Isolation model: one API process is shared by every Playwright project in a
+// full run, so the 18 deterministic tables are statically partitioned. The
+// first 15 ([0..14], Table 01-15) are consumed by the consumer dine-in tracks
+// (A..H2) and the final 3 ([15..17], Table 16-18) are reserved for the vendor
+// dine-in-bills suite. Each track/suite opens one live session on its own
+// disjoint table, so no run order can contend for the one-live-session slot.
+// A rerun restarts the API process; there is deliberately no runtime reset
 // endpoint and no HTTP seed/control surface.
 //
 // The opaque table token is a shared fixture constant (mirrored by the e2e
@@ -39,10 +43,13 @@ export const DINE_IN_FIXTURE_TABLE_LABEL = "Table 01";
 export const DINE_IN_FIXTURE_TABLE_TOKEN =
   "dine-e2e-table-01-opaque-4f3c2a11e2b64d9fa8c0f6b2d7e1a9c4";
 
-// Deterministic collection of 15 independent tables under the same fixture
-// restaurant. Each track of the full-file browser suite will later consume its
-// own table so tracks never contend for the single live-session slot. The
-// one-live-session-per-table product rule is preserved per table.
+// Deterministic collection of 18 independent tables under the same fixture
+// restaurant. The first 15 ([0..14], Table 01-15) are consumed by the consumer
+// dine-in tracks (A..H2); the final 3 ([15..17], Table 16-18) are reserved for
+// the vendor dine-in-bills suite. In a full shared single-API-process run the
+// consumer project runs first and leaves live sessions on [0..14], so the
+// disjoint reserved partition is what keeps the vendor suite collision-free.
+// The one-live-session-per-table product rule is preserved per table.
 export const DINE_IN_FIXTURE_TABLES: readonly DineInFixtureTable[] = [
   {
     id: "b0000000-0000-4000-8000-000000000001",
@@ -118,6 +125,21 @@ export const DINE_IN_FIXTURE_TABLES: readonly DineInFixtureTable[] = [
     id: "b0000000-0000-4000-8000-000000000015",
     label: "Table 15",
     token: "dine-e2e-table-15-opaque-25580d4f3dc478c0db3a726223f70abd",
+  },
+  {
+    id: "b0000000-0000-4000-8000-000000000016",
+    label: "Table 16",
+    token: "dine-e2e-table-16-opaque-9de79f2cd40bd411645c9f6fe8ddc921",
+  },
+  {
+    id: "b0000000-0000-4000-8000-000000000017",
+    label: "Table 17",
+    token: "dine-e2e-table-17-opaque-7bbaccd9f483ed9388a5fc0c4314fd95",
+  },
+  {
+    id: "b0000000-0000-4000-8000-000000000018",
+    label: "Table 18",
+    token: "dine-e2e-table-18-opaque-e7f799f6776859b03df2016e0d86fcbb",
   },
 ] as const;
 

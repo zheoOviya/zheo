@@ -22,8 +22,11 @@ export interface DineInFixtureTable {
 }
 
 // Mirrors apps/api/src/seed/dineInE2eFixture.ts DINE_IN_FIXTURE_TABLES.
-// Table 01 is the first/legacy entry; tracks consume distinct tables so a
-// full-file CI run never contends for one live-session slot.
+// Table 01 is the first/legacy entry. The collection is statically partitioned
+// for a shared single-API-process run: the first 15 ([0..14], Table 01-15) are
+// consumed by the consumer dine-in tracks, and the final 3 ([15..17], Table
+// 16-18) are reserved for the vendor dine-in-bills suite so the two suites
+// never contend for the same live-session slot.
 export const DINE_IN_FIXTURE_TABLES: readonly DineInFixtureTable[] = [
   {
     id: "b0000000-0000-4000-8000-000000000001",
@@ -99,5 +102,20 @@ export const DINE_IN_FIXTURE_TABLES: readonly DineInFixtureTable[] = [
     id: "b0000000-0000-4000-8000-000000000015",
     label: "Table 15",
     token: "dine-e2e-table-15-opaque-25580d4f3dc478c0db3a726223f70abd",
+  },
+  {
+    id: "b0000000-0000-4000-8000-000000000016",
+    label: "Table 16",
+    token: "dine-e2e-table-16-opaque-9de79f2cd40bd411645c9f6fe8ddc921",
+  },
+  {
+    id: "b0000000-0000-4000-8000-000000000017",
+    label: "Table 17",
+    token: "dine-e2e-table-17-opaque-7bbaccd9f483ed9388a5fc0c4314fd95",
+  },
+  {
+    id: "b0000000-0000-4000-8000-000000000018",
+    label: "Table 18",
+    token: "dine-e2e-table-18-opaque-e7f799f6776859b03df2016e0d86fcbb",
   },
 ] as const;
