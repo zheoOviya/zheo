@@ -1163,6 +1163,18 @@ export class MemoryDineInBillReadRepository implements DineInBillReadRepository 
     };
   }
 
+  // Admin live-session frozen-bill read (ADMIN-OPS1-A2): the session's frozen
+  // bill snapshot or null. Read-only and invariant-free (never throws) — an
+  // oversight read over DELIVERED-or-later bills, not the actionable vendor
+  // queue, so no BILL_INVARIANT_VIOLATION and no payment/settlement state
+  // invention. Unit-isolated (no sessions/orders/requests wired) -> null.
+  async getFrozenBillBySessionId(
+    sessionId: string,
+  ): Promise<VendorBillTotalsDTO | null> {
+    const bill = this.bills ? await this.bills.getBySessionId(sessionId) : null;
+    return bill ? billTotals(bill) : null;
+  }
+
   private assertBringBillInvariant(
     session: DiningSessionDTO,
     lookup: ArtifactLookup<ServiceRequestDTO>,

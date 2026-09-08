@@ -540,3 +540,153 @@ export async function getSessionRoles(): Promise<string[]> {
   const role = await hydrateSession();
   return role ? [role] : [];
 }
+
+// ---------------------------------------------------------------------------
+// Dine-In Oversight (read-only). Mirrors the frozen A1/A2 wire contract.
+// Only read GETs exist here — no payment/settlement/close helper is added.
+// ---------------------------------------------------------------------------
+
+export type AdminDineInLiveSessionStatus =
+  | "OPEN"
+  | "ACTIVE"
+  | "BILL_REQUESTED"
+  | "PAYMENT_PENDING";
+
+export type AdminDineInBillStatus =
+  | "NONE"
+  | "REQUESTED"
+  | "ACKNOWLEDGED"
+  | "DELIVERED";
+
+export interface AdminDineInOverviewRestaurant {
+  restaurant_id: string;
+  restaurant_name: string;
+  active_sessions: number;
+  bill_requested_sessions: number;
+  pending_service_requests: number;
+}
+
+export interface AdminDineInOverview {
+  totals: {
+    restaurants: number;
+    active_sessions: number;
+    bill_requested_sessions: number;
+    pending_service_requests: number;
+  };
+  by_restaurant: AdminDineInOverviewRestaurant[];
+  generated_at: string;
+}
+
+export interface AdminDineInSessionRow {
+  session_id: string;
+  restaurant_id: string;
+  restaurant_name: string;
+  table_id: string;
+  table_label: string;
+  zone_name: string | null;
+  status: AdminDineInLiveSessionStatus;
+  order_count: number;
+  pending_service_request_count: number;
+  bill_status: AdminDineInBillStatus;
+  opened_at: string;
+  updated_at: string;
+}
+
+export interface AdminDineInSessionList {
+  items: AdminDineInSessionRow[];
+  pagination: { page: number; limit: number; total: number };
+}
+
+export interface AdminDineInSessionListParams {
+  restaurant_id?: string;
+  status?: AdminDineInLiveSessionStatus;
+  zone_id?: string;
+  sort?: "opened_at" | "updated_at" | "table_label";
+  order?: "asc" | "desc";
+  page?: number;
+  limit?: number;
+}
+
+export interface AdminDineInSessionDetailOrderItem {
+  name: string;
+  quantity: number;
+  item_subtotal: number;
+}
+
+export interface AdminDineInSessionDetailOrder {
+  id: string;
+  status: string;
+  total_amount: number;
+  created_at: string;
+  items: AdminDineInSessionDetailOrderItem[];
+}
+
+export interface AdminDineInSessionDetailRequest {
+  id: string;
+  request_type: string;
+  status: string;
+  note: string | null;
+  created_at: string;
+  acknowledged_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+}
+
+export interface AdminDineInFrozenBillTotals {
+  food_subtotal: number;
+  packaging_fee: number;
+  gst_food: number;
+  gst_packaging: number;
+  total_amount: number;
+  frozen_at: string;
+}
+
+export interface AdminDineInBillSection {
+  status: AdminDineInBillStatus;
+  requested_at: string | null;
+  acknowledged_at: string | null;
+  delivered_at: string | null;
+  totals: AdminDineInFrozenBillTotals | null;
+}
+
+export interface AdminDineInSessionDetail {
+  session: {
+    session_id: string;
+    status: AdminDineInLiveSessionStatus;
+    opened_at: string;
+    updated_at: string;
+    bill_requested_at: string | null;
+    payment_pending_at: string | null;
+  };
+  restaurant: { restaurant_id: string; restaurant_name: string };
+  table: { table_id: string; table_label: string; seat_count: number | null };
+  zone: { zone_id: string; zone_name: string } | null;
+  orders: AdminDineInSessionDetailOrder[];
+  service_requests: AdminDineInSessionDetailRequest[];
+  bill: AdminDineInBillSection;
+}
+
+export function fetchAdminDineInOverview(): Promise<AdminDineInOverview> {
+  return adminFetch<AdminDineInOverview>("/dine-in/overview");
+}
+
+export function fetchAdminDineInSessions(
+  params: AdminDineInSessionListParams = {},
+): Promise<AdminDineInSessionList> {
+  const qs = new URLSearchParams();
+  if (params.restaurant_id) qs.set("restaurant_id", params.restaurant_id);
+  if (params.status) qs.set("status", params.status);
+  if (params.zone_id) qs.set("zone_id", params.zone_id);
+  if (params.sort) qs.set("sort", params.sort);
+  if (params.order) qs.set("order", params.order);
+  if (params.page) qs.set("page", String(params.page));
+  if (params.limit) qs.set("limit", String(params.limit));
+  const query = qs.toString();
+  return adminFetch<AdminDineInSessionList>(`/dine-in/sessions${query ? `?${query}` : ""}`);
+}
+
+export function fetchAdminDineInSessionDetail(
+  sessionId: string,
+): Promise<AdminDineInSessionDetail> {
+  return adminFetch<AdminDineInSessionDetail>(`/dine-in/sessions/${sessionId}`);
+}

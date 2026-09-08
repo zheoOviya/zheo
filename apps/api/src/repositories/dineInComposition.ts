@@ -9,6 +9,7 @@ import type {
   ServiceRequestRepository,
   DineInTableBoardReadRepository,
   DineInBillReadRepository,
+  DiningSessionRepository,
 } from "./dineInContracts";
 import { DrizzleDineInTransactionPort } from "./drizzle/dineInTransactionPort";
 import {
@@ -17,6 +18,7 @@ import {
   DrizzleServiceRequestRepository,
   DrizzleDineInTableBoardRepository,
   DrizzleDineInBillReadRepository,
+  DrizzleDiningSessionRepository,
 } from "./drizzle/dineInRepositories";
 import {
   buildMemoryDineInRepos,
@@ -237,4 +239,30 @@ export function getDineInBillReadRepository(): DineInBillReadRepository {
     }
   }
   return _vendorBillReadRepo;
+}
+
+// Read-only non-transactional Dine-In session surface (ADMIN-OPS1-A2). The
+// admin read service needs per-session identity + live-state reads OUTSIDE any
+// transaction — the session repos on the tx port are transaction-scoped and
+// the table-board rows carry only {id,status,opened_at,bill_requested_at}, so
+// this is the dedicated accessor for overview/list/detail composition. Postgres
+// mode -> the Drizzle session repository over the shared db handle (single-row
+// selects, bounded). Memory mode -> the SAME MemoryDiningSessionRepository held
+// by the shared memory repo set, so admin route tests seed one universe and
+// resetDineInState() clears it. Only the getById read is invoked through the
+// returned surface.
+let _adminSessionReadRepo: DiningSessionRepository | null = null;
+
+export function getDineInSessionReadRepository(): DiningSessionRepository {
+  if (!_adminSessionReadRepo) {
+    const mode = getStorageMode();
+    if (mode === "postgres") {
+      _adminSessionReadRepo = new DrizzleDiningSessionRepository(getDb());
+    } else {
+      getDineInTransactionPort();
+      _adminSessionReadRepo =
+        _memoryRepos!.diningSessions as unknown as DiningSessionRepository;
+    }
+  }
+  return _adminSessionReadRepo;
 }

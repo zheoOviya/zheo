@@ -32,6 +32,7 @@ import { registerVendorNotificationHandlers } from "./services/notifications";
 import { initEventSubscriber } from "./lib/eventBus";
 import { metrics, metricsRouter } from "./routes/metrics";
 import { adminRouter } from "./routes/admin";
+import { adminDineInRouter } from "./routes/adminDineIn";
 import { vendorApplicationRouter } from "./routes/vendorApplications";
 import { requireVendorOrAdmin } from "./middleware/requireRoles";
 import { getRedis } from "./lib/redis";
@@ -193,6 +194,10 @@ export function createApp(): Express {
   app.use("/api/vendor", requireVendorOrAdmin, chainsRouter);
   app.use(`${API_PREFIX}/vendor-applications`, vendorApplicationRouter);
   app.use(`${API_PREFIX}/admin`, adminRouter);
+  // ADMIN-OPS1-A2: admin read-only Dine-In live-ops surface (own router under
+  // /admin — never under /api/vendor). Per-route adminReadOnly inside the
+  // router; read-model composition only.
+  app.use(`${API_PREFIX}/admin/dine-in`, adminDineInRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

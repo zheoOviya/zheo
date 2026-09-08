@@ -600,6 +600,17 @@ export interface DineInBillReadRepository {
   getBillActionContextByBillId(
     billId: string,
   ): Promise<BillActionContext | null>;
+  /**
+   * Admin Dine-In live-session frozen-bill read (ADMIN-OPS1-A2): returns the
+   * frozen bill snapshot for a session_id, or null when the session has no
+   * frozen bill. Read-only and invariant-free (never throws) — this feeds
+   * admin live-operations oversight over DELIVERED-or-later bills, not the
+   * actionable vendor queue, so no BILL_INVARIANT_VIOLATION and no
+   * payment/settlement state invention.
+   */
+  getFrozenBillBySessionId(
+    sessionId: string,
+  ): Promise<VendorBillTotalsDTO | null>;
 }
 
 // ------------------------------------------------------------

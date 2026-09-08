@@ -1800,6 +1800,26 @@ export class DrizzleDineInBillReadRepository
     };
   }
 
+  // Admin live-session frozen-bill read (ADMIN-OPS1-A2): the session's frozen
+  // bill snapshot or null (session_id -> session_bills direct lookup, single
+  // bounded select). Read-only and invariant-free (never throws) — an
+  // oversight read over DELIVERED-or-later bills, not the actionable vendor
+  // queue, so no BILL_INVARIANT_VIOLATION and no payment/settlement state
+  // invention.
+  async getFrozenBillBySessionId(
+    sessionId: string,
+  ): Promise<VendorBillTotalsDTO | null> {
+    const rows = (await this.db
+      .select()
+      .from(session_bills)
+      .where(eq(session_bills.session_id, sessionId))) as Record<
+      string,
+      unknown
+    >[];
+    const row = rows[0];
+    return row ? mapBillTotalsRow(row) : null;
+  }
+
   private visibleBringBill(
     lookup: ArtifactLookup<ServiceRequestDTO>,
   ): VendorBillDetail["bring_bill_request"] {
