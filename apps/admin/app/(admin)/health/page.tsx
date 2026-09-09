@@ -199,16 +199,18 @@ export default function HealthPage() {
           </p>
         </div>
         <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">Webhook Failures</p>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">Fulfilled Orders Today</p>
           <p className="mt-2 text-2xl font-bold text-neutral-900 dark:text-neutral-100">
-            {metrics ? `${metrics.webhook_failure_pct}%` : "-"}
+            {metrics?.fulfilled_orders_today ?? "-"}
           </p>
+          <p className="mt-1 text-xs text-neutral-400">PICKED_UP / SETTLED · placed today</p>
         </div>
         <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">Daily Revenue</p>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">Today's Revenue</p>
           <p className="mt-2 text-2xl font-bold text-neutral-900 dark:text-neutral-100">
-            {metrics ? `₹${metrics.daily_revenue.toLocaleString("en-IN")}` : "-"}
+            {metrics ? `₹${metrics.revenue_today.toLocaleString("en-IN")}` : "-"}
           </p>
+          <p className="mt-1 text-xs text-neutral-400">Gross incl. GST · orders placed today</p>
         </div>
       </div>
 

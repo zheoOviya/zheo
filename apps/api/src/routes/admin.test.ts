@@ -132,19 +132,93 @@ describe("Admin RBAC (A-01, A-11)", () => {
     });
   });
 
-  describe("Metrics includes CAC/LTV (A-10)", () => {
-    it("GET /admin/metrics returns cac/ltv fields", async () => {
+  describe("Dashboard /metrics truth (ADMIN-PLATFORM-TRUTH)", () => {
+    const METRICS_USER = "metric-user-000000000000000001";
+    const METRICS_RESTAURANT = "a0000000-0000-4000-8000-000000000001";
+
+    function metricsOrder(id: string, status: OrderDTO["status"], total: number, createdIso: string) {
+      return {
+        id,
+        user_id: METRICS_USER,
+        restaurant_id: METRICS_RESTAURANT,
+        restaurant_name: "Test Cafe",
+        items: [],
+        total_amount: total,
+        status,
+        commission_rate: 0.08,
+        commission_amount: Math.round(total * 0.08),
+        is_catering: false,
+        headcount: null,
+        pickup_otp: null,
+        qr_token: null,
+        checked_in: false,
+        scheduled_pickup_time: null,
+        created_at: createdIso,
+        updated_at: createdIso,
+      };
+    }
+
+    beforeAll(() => {
+      sharedOrderRepo._reset();
+      sharedPaymentRepo._reset();
+      const nowIso = new Date().toISOString();
+      const yesterdayIso = new Date(Date.now() - 86400000).toISOString();
+      const preWindowIso = new Date(Date.now() - 8 * 86400000).toISOString();
+      sharedOrderRepo._seed(metricsOrder("metric-order-0000000000001", "PICKED_UP", 1000, nowIso));
+      sharedOrderRepo._seed(metricsOrder("metric-order-0000000000002", "SETTLED", 500, nowIso));
+      sharedOrderRepo._seed(metricsOrder("metric-order-0000000000003", "CANCELLED", 9000, nowIso));
+      sharedOrderRepo._seed(metricsOrder("metric-order-0000000000004", "REFUNDED", 8000, nowIso));
+      sharedOrderRepo._seed(metricsOrder("metric-order-0000000000005", "PICKED_UP", 2000, yesterdayIso));
+      sharedOrderRepo._seed(metricsOrder("metric-order-0000000000006", "PICKED_UP", 555, preWindowIso));
+      sharedOrderRepo._seed(metricsOrder("metric-order-0000000000007", "CONFIRMED", 120, nowIso));
+    });
+
+    it("GET /admin/metrics returns truthful windowed totals and no leakage", async () => {
       const res = await request(app)
         .get("/api/v1/admin/metrics")
         .set("Authorization", adminToken("ADMIN"));
       expect(res.status).toBe(200);
       const data = res.body.data;
-      expect(data).toHaveProperty("cac_amount");
-      expect(data).toHaveProperty("ltv_amount");
-      expect(data).toHaveProperty("cac_ltv_ratio");
-      expect(typeof data.cac_amount).toBe("number");
-      expect(typeof data.ltv_amount).toBe("number");
-      expect(typeof data.cac_ltv_ratio).toBe("number");
+      expect(data.revenue_today).toBe(1500);
+      expect(data.fulfilled_orders_today).toBe(2);
+      expect(data.active_orders).toBe(1);
+      expect(data.daily_series.length).toBe(7);
+      expect(data.daily_series[6].revenue).toBe(1500);
+      expect(data.daily_series[6].fulfilled_orders).toBe(2);
+      const windowTotal = data.daily_series.reduce((sum: number, p: { revenue: number }) => sum + p.revenue, 0);
+      // yesterday PICKED_UP 2000 is inside the window; 8-day-old 555 plus
+      // CANCELLED 9000 and REFUNDED 8000 never count toward revenue.
+      expect(windowTotal).toBe(3500);
+      const flat = data.daily_series.flatMap((p: { revenue: number }) => [p.revenue]);
+      expect(flat).not.toContain(555);
+      expect(flat).not.toContain(9000);
+      expect(flat).not.toContain(8000);
+      // zero-data bucket is literal 0 (6 days ago)
+      expect(data.daily_series[0].revenue).toBe(0);
+    });
+
+    it("GET /admin/metrics removes every fabricated KPI field", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/metrics")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      const data = res.body.data;
+      for (const removed of [
+        "vendor_churn_pct",
+        "webhook_failure_pct",
+        "avg_pickup_time_min",
+        "cac_amount",
+        "ltv_amount",
+        "cac_ltv_ratio",
+        "daily_revenue",
+        "total_orders_today",
+      ]) {
+        expect(data).not.toHaveProperty(removed);
+      }
+      expect(data).toHaveProperty("revenue_today");
+      expect(data).toHaveProperty("fulfilled_orders_today");
+      expect(data).toHaveProperty("active_orders");
+      expect(data).toHaveProperty("daily_series");
     });
   });
 

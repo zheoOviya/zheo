@@ -97,7 +97,7 @@ export default function KillSwitchesPage() {
                   <div>
                     <p className="text-xs text-neutral-400">Current Value</p>
                     <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">
-                      {sw.current_value ?? "N/A"}
+                      Manual / n/a
                     </p>
                   </div>
                   <div>

@@ -149,15 +149,14 @@ interface LiveOrdersResponse {
 }
 
 export interface DashboardMetrics {
-  daily_revenue: number;
+  /** Gross revenue (incl. GST) for PICKED_UP/SETTLED orders placed on the IST day of "today". */
+  revenue_today: number;
+  /** Count of the exact orders feeding revenue_today. */
+  fulfilled_orders_today: number;
+  /** Orders currently in the live kitchen pipeline. */
   active_orders: number;
-  total_orders_today: number;
-  vendor_churn_pct: number;
-  webhook_failure_pct: number;
-  avg_pickup_time_min: number;
-  cac_amount: number;
-  ltv_amount: number;
-  cac_ltv_ratio: number;
+  /** Last 7 IST day buckets, ending with the partial current day. Zero-data buckets are 0. */
+  daily_series: { date: string; revenue: number; fulfilled_orders: number }[];
 }
 
 export interface HealthReport {

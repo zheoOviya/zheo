@@ -25,6 +25,7 @@ import type { RestaurantDTO } from "../repositories/catalogRepository";
 import type { KillSwitchDTO } from "../repositories/killSwitchRepository";
 import type { OrderDTO } from "../repositories/orderRepository";
 import { VipSupportService } from "../services/vipSupport";
+import { computeAdminMetrics, istDateKeys, istDayKey } from "../services/adminMetricsReadService";
 
 const adminRouter: Router = Router();
 
@@ -687,46 +688,16 @@ adminRouter.get(
 );
 
 // ============================================
-// Dashboard Metrics (A-10) — Sprint 5.1: CAC/LTV
+// Dashboard Metrics — truthful, repository-derived KPIs
+// (ADMIN-PLATFORM-TRUTH). No fabricated operational constants.
 // ============================================
 
 adminRouter.get(
   "/metrics",
   adminReadOnly,
   asyncHandler(async (_req, res) => {
-    const allOrders = await sharedOrderRepo.getAll();
-    const completedOrders = allOrders.filter((o) =>
-      ["PICKED_UP", "SETTLED"].includes(o.status),
-    );
-    const dailyRevenue = completedOrders.reduce((sum, o) => sum + Number(o.total_amount), 0);
-    const activeOrders = allOrders.filter((o) =>
-      ["CONFIRMED", "PREPARING", "ALMOST_READY", "READY_FOR_PICKUP"].includes(o.status),
-    ).length;
-
-    const uniqueUsers = new Set(completedOrders.map((o) => o.user_id)).size;
-
-    const totalMarketingSpend = 5000;
-    const cacAmount = uniqueUsers > 0 ? Math.round(totalMarketingSpend / uniqueUsers) : 0;
-
-    const avgOrderValue = completedOrders.length > 0
-      ? completedOrders.reduce((sum, o) => sum + Number(o.total_amount), 0) / completedOrders.length
-      : 0;
-    const ordersPerUser = uniqueUsers > 0 ? completedOrders.length / uniqueUsers : 0;
-    const estimatedLifespanMonths = 6;
-    const ltvAmount = Math.round(avgOrderValue * ordersPerUser * estimatedLifespanMonths);
-    const cacLtvRatio = ltvAmount > 0 ? parseFloat((cacAmount / ltvAmount).toFixed(2)) : 0;
-
-    ok(res, {
-      daily_revenue: Math.round(dailyRevenue),
-      active_orders: activeOrders,
-      total_orders_today: completedOrders.length,
-      vendor_churn_pct: 2.3,
-      webhook_failure_pct: 0.05,
-      avg_pickup_time_min: 18,
-      cac_amount: cacAmount,
-      ltv_amount: ltvAmount,
-      cac_ltv_ratio: cacLtvRatio,
-    });
+    const metrics = await computeAdminMetrics(sharedOrderRepo);
+    ok(res, metrics);
   }),
 );
 
@@ -743,15 +714,17 @@ adminRouter.get(
     const completed = allOrders.filter((o) => REVENUE_COMPLETED_STATUSES.has(o.status));
 
     const buckets: Record<string, { date: string; revenue: number; orders: number; commission: number }> = {};
-    const today = new Date();
-    for (let i = days - 1; i >= 0; i -= 1) {
-      const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - i));
-      const key = d.toISOString().slice(0, 10);
+    // IST day boundaries (fixed +05:30) — shared with /metrics via the admin
+    // metrics service. Response shape is unchanged; only day attribution moved
+    // from UTC to IST, which can shift bucket membership by <= 1 day for
+    // orders near 00:00-05:29 IST.
+    const seriesKeys = istDateKeys(days);
+    for (const key of seriesKeys) {
       buckets[key] = { date: key, revenue: 0, orders: 0, commission: 0 };
     }
 
     for (const o of completed) {
-      const key = new Date(o.created_at).toISOString().slice(0, 10);
+      const key = istDayKey(o.created_at);
       if (buckets[key]) {
         buckets[key].revenue += Number(o.total_amount);
         buckets[key].orders += 1;

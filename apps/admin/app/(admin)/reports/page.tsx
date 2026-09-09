@@ -78,30 +78,27 @@ export default function ReportsPage() {
         </div>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">Daily Revenue</p>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">Today's Revenue</p>
           <p className="mt-1 text-2xl font-bold text-primary-600 dark:text-primary-400">
-            {metrics ? fmt(metrics.daily_revenue) : "-"}
+            {metrics ? fmt(metrics.revenue_today) : "-"}
           </p>
+          <p className="mt-1 text-xs text-neutral-400">Gross incl. GST · orders placed today</p>
         </div>
         <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">Orders Today</p>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">Fulfilled Orders Today</p>
           <p className="mt-1 text-2xl font-bold text-neutral-900 dark:text-neutral-100">
-            {metrics?.total_orders_today ?? "-"}
+            {metrics?.fulfilled_orders_today ?? "-"}
           </p>
+          <p className="mt-1 text-xs text-neutral-400">PICKED_UP / SETTLED · placed today</p>
         </div>
         <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">Avg Pickup Time</p>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">Active Orders</p>
           <p className="mt-1 text-2xl font-bold text-neutral-900 dark:text-neutral-100">
-            {metrics ? `${metrics.avg_pickup_time_min} min` : "-"}
+            {metrics?.active_orders ?? "-"}
           </p>
-        </div>
-        <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">CAC / LTV</p>
-          <p className={`mt-1 text-2xl font-bold ${metrics && metrics.cac_ltv_ratio > 1 ? "text-red-500" : "text-emerald-500"}`}>
-            {metrics ? metrics.cac_ltv_ratio.toFixed(2) : "-"}
-          </p>
+          <p className="mt-1 text-xs text-neutral-400">Live kitchen pipeline</p>
         </div>
       </div>
 

@@ -3,38 +3,14 @@
 import { useEffect, useState, useCallback } from "react";
 import { fetchDashboardMetrics, type DashboardMetrics } from "../../../lib/api";
 import { getTotpStatus } from "../../../lib/totp";
-import { trendColors } from "../../../lib/colors";
 import Link from "next/link";
 
-const fmt = (n: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
-
-function Sparkline({ values, color }: { values: number[]; color: string }) {
-  if (values.length === 0) return null;
-  const max = Math.max(...values, 1);
-  const min = 0;
-  const range = max - min || 1;
-  const width = 70;
-  const height = 24;
-  const stepX = width / (values.length - 1);
-  const points = values
-    .map((v, i) => `${(i * stepX).toFixed(1)},${(height - ((v - min) / range) * height).toFixed(1)}`)
-    .join(" ");
-  return (
-    <svg width={width} height={height} className="inline-block ml-2">
-      <polyline
-        fill="none"
-        stroke={color}
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        points={points}
-      />
-    </svg>
-  );
-}
-
-const TREND_WEEKLY = [120, 85, 210, 95, 180, 70, 260];
-const TREND_DECREASING = [300, 290, 250, 220, 200, 180, 150];
+const fmt = (n: number) =>
+  new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  }).format(n);
 
 export default function DashboardPage() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
@@ -71,43 +47,33 @@ export default function DashboardPage() {
     return (
       <div className="space-y-4">
         {[1, 2, 3].map((i) => (
-          <div key={i} className="h-24 animate-pulse rounded-xl bg-neutral-200 dark:bg-neutral-800" />
+          <div
+            key={i}
+            className="h-24 animate-pulse rounded-xl bg-neutral-200 dark:bg-neutral-800"
+          />
         ))}
       </div>
     );
   }
 
-  const vendorChurnColor = metrics.vendor_churn_pct > 5 ? trendColors.danger : trendColors.primary;
-  const webhookColor = metrics.webhook_failure_pct > 0.5 ? trendColors.accent : trendColors.primary;
-
   const cards = [
     {
-      label: "Daily Revenue",
-      value: fmt(metrics.daily_revenue),
+      label: "Today's Revenue",
+      value: fmt(metrics.revenue_today),
+      sub: "Gross incl. GST · orders placed today",
       color: "text-primary-600 dark:text-primary-400",
-      trend: TREND_WEEKLY,
-      trendColor: trendColors.primary,
+    },
+    {
+      label: "Fulfilled Orders Today",
+      value: metrics.fulfilled_orders_today.toString(),
+      sub: "PICKED_UP / SETTLED · placed today",
+      color: "text-neutral-900 dark:text-neutral-100",
     },
     {
       label: "Active Orders",
       value: metrics.active_orders.toString(),
+      sub: "Live kitchen pipeline",
       color: "text-accent-600 dark:text-accent-400",
-      trend: TREND_WEEKLY,
-      trendColor: trendColors.accent,
-    },
-    {
-      label: "Orders Today",
-      value: metrics.total_orders_today.toString(),
-      color: "text-neutral-900 dark:text-neutral-100",
-      trend: TREND_WEEKLY,
-      trendColor: trendColors.neutral,
-    },
-    {
-      label: "Avg Pickup Time",
-      value: `${metrics.avg_pickup_time_min} min`,
-      color: "text-neutral-700 dark:text-neutral-300",
-      trend: TREND_DECREASING,
-      trendColor: trendColors.success,
     },
   ];
 
@@ -131,78 +97,47 @@ export default function DashboardPage() {
       )}
 
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-neutral-400 dark:text-neutral-500">
-          Dashboard
-        </h2>
+        <h2 className="text-lg font-semibold text-neutral-400 dark:text-neutral-500">Dashboard</h2>
         <span className="text-xs text-neutral-400">Auto-refresh 60s</span>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {cards.map((c) => (
           <div
             key={c.label}
             className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5"
           >
             <p className="text-sm text-neutral-500 dark:text-neutral-400">{c.label}</p>
-            <div className="flex items-center">
-              <p className={`mt-1 text-2xl font-bold ${c.color}`}>{c.value}</p>
-              <Sparkline values={c.trend} color={c.trendColor} />
-            </div>
+            <p className={`mt-1 text-2xl font-bold ${c.color}`}>{c.value}</p>
+            <p className="mt-1 text-xs text-neutral-400">{c.sub}</p>
           </div>
         ))}
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">Vendor Churn</p>
-          <div className="flex items-center">
-            <p className={`mt-1 text-2xl font-bold`} style={{ color: vendorChurnColor }}>
-              {metrics.vendor_churn_pct}%
-            </p>
-            <Sparkline values={[2.0, 2.5, 2.1, 1.8, 2.9, 2.3, metrics.vendor_churn_pct] as number[]} color={vendorChurnColor} />
-          </div>
-          <p className="mt-1 text-xs text-neutral-400">Threshold: 10%</p>
+      <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="font-semibold text-neutral-800 dark:text-neutral-200">
+            Revenue — last 7 days
+          </p>
+          <span className="text-xs text-neutral-400">IST day buckets</span>
         </div>
-        <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">Webhook Failures</p>
-          <div className="flex items-center">
-            <p className={`mt-1 text-2xl font-bold`} style={{ color: webhookColor }}>
-              {metrics.webhook_failure_pct}%
-            </p>
-            <Sparkline values={[0.1, 0.2, 0.08, 0.15, 0.05, 0.12, metrics.webhook_failure_pct] as number[]} color={webhookColor} />
-          </div>
-          <p className="mt-1 text-xs text-neutral-400">Threshold: 1%</p>
-        </div>
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">CAC (per user)</p>
-          <div className="flex items-center">
-            <p className="mt-1 text-2xl font-bold text-neutral-700 dark:text-neutral-300">
-              {fmt(metrics.cac_amount)}
-            </p>
-            <Sparkline values={TREND_DECREASING} color={trendColors.neutral} />
-          </div>
-        </div>
-        <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">LTV (6 mo est.)</p>
-          <div className="flex items-center">
-            <p className="mt-1 text-2xl font-bold text-primary-600 dark:text-primary-400">
-              {fmt(metrics.ltv_amount)}
-            </p>
-            <Sparkline values={TREND_WEEKLY} color={trendColors.primary} />
-          </div>
-        </div>
-        <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">CAC / LTV Ratio</p>
-          <div className="flex items-center">
-            <p className={`mt-1 text-2xl font-bold ${metrics.cac_ltv_ratio > 1 ? "text-red-500" : "text-primary-500"}`}>
-              {metrics.cac_ltv_ratio.toFixed(2)}
-            </p>
-            <Sparkline values={[1.2, 0.9, 0.85, 1.0, 0.7, 0.6, metrics.cac_ltv_ratio] as number[]} color={metrics.cac_ltv_ratio > 1 ? trendColors.danger : trendColors.primary} />
-          </div>
-          <p className="mt-1 text-xs text-neutral-400">Healthy if &lt; 1.0</p>
+        <p className="mt-1 text-xs text-neutral-400">
+          Attributed to the day each order was placed (PICKED_UP / SETTLED, gross incl. GST). Days
+          with no fulfilled orders show zero.
+        </p>
+        <div className="mt-4 space-y-2">
+          {metrics.daily_series.map((p) => (
+            <div
+              key={p.date}
+              className="flex items-center justify-between border-b border-neutral-100 py-1.5 text-sm last:border-0 dark:border-neutral-800"
+            >
+              <span className="font-mono text-neutral-500 dark:text-neutral-400">{p.date}</span>
+              <span className="font-semibold text-neutral-800 dark:text-neutral-200">
+                {fmt(p.revenue)}
+              </span>
+              <span className="text-xs text-neutral-400">{p.fulfilled_orders} fulfilled</span>
+            </div>
+          ))}
         </div>
       </div>
 
