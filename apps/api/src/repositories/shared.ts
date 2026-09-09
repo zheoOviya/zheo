@@ -41,6 +41,7 @@ import { DrizzleVendorApplicationRepository } from "./vendorApplicationRepositor
 import { DrizzleNotificationRepository } from "./notificationRepository";
 import { DrizzleUserRoleRepository } from "./userRoleRepository";
 import { DrizzleGiftRepository } from "./drizzle/drizzleGiftRepository";
+import { DrizzleSupportRepository } from "./drizzle/drizzleSupportRepository";
 
 import { getDb } from "../lib/db";
 
@@ -140,7 +141,7 @@ function getRepos(): RepoSet {
         sharedLoyaltyRepo: new MemoryLoyaltyRepository(),
         sharedGroupCartRepo: new MemoryGroupCartRepository(),
         sharedChainRepo: new DrizzleChainRepository(db) as unknown as RepoSet["sharedChainRepo"],
-        sharedSupportRepo: new MemorySupportRepository(),
+        sharedSupportRepo: new DrizzleSupportRepository(db) as unknown as RepoSet["sharedSupportRepo"],
         sharedKillSwitchRepo: new DrizzleKillSwitchRepository(db) as unknown as RepoSet["sharedKillSwitchRepo"],
         sharedRoleRepo: new MemoryRoleRepository(),
         sharedVendorApplicationRepo: new DrizzleVendorApplicationRepository(db) as unknown as RepoSet["sharedVendorApplicationRepo"],
