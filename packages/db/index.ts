@@ -12,6 +12,15 @@ export { vendorApplicationStatusEnum, vendorApplicationTypeEnum, vendor_applicat
 export { notificationStatusEnum, notifications } from "./src/schema/notifications";
 export { userRoleScopeEnum, user_roles } from "./src/schema/userRoles";
 export {
+  loyaltyLedgerReasonEnum,
+  loyalty_referral_codes,
+  loyalty_referrals,
+  loyalty_wallets,
+  loyalty_ledger,
+  loyalty_streaks,
+  loyalty_stamp_cards,
+} from "./src/schema/loyalty";
+export {
   diningSessionStatusEnum,
   dining_sessions,
   dineInOrderStatusEnum,

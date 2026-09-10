@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AppError } from "../middleware/envelope";
 
 // ============================================
 // Loyalty context repository (loyalty bounded context)
@@ -109,8 +110,46 @@ function generateReferralCode(userId: string): string {
   return `SNKZ-${Math.abs(hash).toString(36).toUpperCase().slice(0, 6)}`;
 }
 
+/** Maximum deterministic attempts before giving up on allocating a code. */
+export const MAX_REFERRAL_CODE_ATTEMPTS = 16;
+
+/** Shared deterministic referral-code derivation for BOTH the Memory and
+ *  Drizzle repositories so the two implementations cannot diverge.
+ *
+ *  - attempt 0 preserves the legacy bytes exactly (`userId` with dashes
+ *    stripped) so existing codes are unchanged.
+ *  - attempt > 0 derives an alternate code from `${userId}#${attempt}`,
+ *    used only when a lower attempt is already owned by another user.
+ *  - Codes are deliberately unpadded: the historical shape is
+ *    /^SNKZ-[A-Z0-9]{1,6}$/ and the referral contract accepts length 1..24. */
+export function deriveReferralCode(userId: string, attempt: number): string {
+  if (attempt === 0) return generateReferralCode(userId);
+  let hash = 0;
+  const raw = `${userId}#${attempt}`;
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw.charCodeAt(i);
+    hash = (hash << 5) - hash + ch;
+    hash |= 0;
+  }
+  return `SNKZ-${Math.abs(hash).toString(36).toUpperCase().slice(0, 6)}`;
+}
+
+/** Rolls a UTC YYYY-MM-DD day forward/backward by `delta` days. Shared by the
+ *  Memory and Drizzle streak implementations so their logic cannot diverge. */
+export function shiftUtcDay(day: string, delta: number): string {
+  const [yRaw, mRaw, dRaw] = day.split("-");
+  const y = Number(yRaw) || 0;
+  const m = Number(mRaw) || 1;
+  const d = Number(dRaw) || 1;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + delta);
+  return dt.toISOString().slice(0, 10);
+}
+
 export class MemoryLoyaltyRepository implements LoyaltyRepository {
   private readonly referralCodes = new Map<string, string>();
+  /** Reverse index: code -> owner. Kept in lockstep with referralCodes. */
+  private readonly codeOwners = new Map<string, string>();
   private claims: ReferralClaim[] = [];
   private readonly wallets = new Map<string, LoyaltyWallet>();
   private transactions: WalletTransaction[] = [];
@@ -124,17 +163,26 @@ export class MemoryLoyaltyRepository implements LoyaltyRepository {
   async getReferralCode(userId: string): Promise<string> {
     const existing = this.referralCodes.get(userId);
     if (existing) return existing;
-    const code = generateReferralCode(userId);
-    this.referralCodes.set(userId, code);
-    return code;
+    // Collision-safe: walk deterministic attempts until an unclaimed code is
+    // found. A user can never share or overwrite another user's code.
+    for (let attempt = 0; attempt < MAX_REFERRAL_CODE_ATTEMPTS; attempt += 1) {
+      const candidate = deriveReferralCode(userId, attempt);
+      if (!this.codeOwners.has(candidate)) {
+        this.referralCodes.set(userId, candidate);
+        this.codeOwners.set(candidate, userId);
+        return candidate;
+      }
+    }
+    throw new AppError(
+      "REFERRAL_CODE_GENERATION_FAILED",
+      "Could not allocate a unique referral code",
+      500,
+    );
   }
 
   async getReferrerByCode(code: string): Promise<string | null> {
     const normalized = code.trim().toUpperCase();
-    for (const [userId, userCode] of this.referralCodes.entries()) {
-      if (userCode.toUpperCase() === normalized) return userId;
-    }
-    return null;
+    return this.codeOwners.get(normalized) ?? null;
   }
 
   async hasClaimedByIp(ipAddress: string): Promise<boolean> {
@@ -252,13 +300,7 @@ export class MemoryLoyaltyRepository implements LoyaltyRepository {
 
   /** Rolls a UTC YYYY-MM-DD day forward/backward by `delta` days. */
   private shiftDay(day: string, delta: number): string {
-    const [yRaw, mRaw, dRaw] = day.split("-");
-    const y = Number(yRaw) || 0;
-    const m = Number(mRaw) || 1;
-    const d = Number(dRaw) || 1;
-    const dt = new Date(Date.UTC(y, m - 1, d));
-    dt.setUTCDate(dt.getUTCDate() + delta);
-    return dt.toISOString().slice(0, 10);
+    return shiftUtcDay(day, delta);
   }
 
   async getStampCard(
@@ -304,6 +346,7 @@ export class MemoryLoyaltyRepository implements LoyaltyRepository {
   /** Resets the store between tests. */
   _reset(): void {
     this.referralCodes.clear();
+    this.codeOwners.clear();
     this.claims = [];
     this.wallets.clear();
     this.transactions = [];
