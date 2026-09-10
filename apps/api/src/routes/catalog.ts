@@ -14,7 +14,8 @@ import {
 } from "../repositories/catalogRepository";
 import { cacheKey, getOrSet } from "../services/cache";
 import { jwtService } from "../services/jwt";
-import { getStorageMode, sharedIdentityRepo } from "../repositories/shared";
+import { getStorageMode, sharedIdentityRepo, sharedOrderRepo } from "../repositories/shared";
+import { generatePickupSlots } from "../services/pickupSlots";
 import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
 import { SEED_MENU, SEED_RESTAURANTS } from "../seed/catalogData";
@@ -158,50 +159,6 @@ const PickupSlotsQuerySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
 });
 
-/**
- * Pickup slot window for a date (DINE checkout contract).
- *
- * A single clock snapshot prevents separate clock reads from straddling a time
- * boundary: `toISOString()` yields the UTC date while `getHours()` yields the
- * process-local hour, and those existing semantics are intentionally left
- * unchanged by this maintenance patch.
- *
- * - Same-day requests only ever offer FUTURE slots: the window starts at the
- *   next full hour after now (never earlier) and ends at the last slot of the
- *   day (22:45). When the day's pickup window has closed (startHour >=
- *   endHour, i.e. local hour >= 22) the same-day list is LEGITIMATELY EMPTY —
- *   the kitchen takes no more scheduled pickups today.
- * - Future dates always return the full 08:00-22:45 window.
- */
-function generatePickupSlots(forDate: string) {
-  const slots: Array<{
-    time: string;
-    label: string;
-    available: boolean;
-    current_orders: number;
-    max_capacity: number;
-  }> = [];
-  const now = new Date();
-  const today = now.toISOString().slice(0, 10);
-  const startHour = forDate === today ? Math.max(now.getHours() + 1, 8) : 8;
-  const endHour = 23;
-
-  for (let hour = startHour; hour < endHour; hour++) {
-    for (const minute of [0, 15, 30, 45]) {
-      const t = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-      const currentOrders = Math.floor(Math.random() * 6);
-      slots.push({
-        time: t,
-        label: t,
-        available: currentOrders < 10,
-        current_orders: currentOrders,
-        max_capacity: 10,
-      });
-    }
-  }
-  return slots;
-}
-
 catalogRouter.get(
   "/restaurants/:id/pickup-slots",
   asyncHandler(async (req, res) => {
@@ -220,7 +177,7 @@ catalogRouter.get(
       throw new AppError("RESTAURANT_NOT_FOUND", "Restaurant not found or inactive", 404);
     }
 
-    const slots = generatePickupSlots(query.data.date);
+    const slots = await generatePickupSlots(sharedOrderRepo, params.data.id, query.data.date);
     ok(res, { restaurant_id: params.data.id, date: query.data.date, slots });
   }),
 );

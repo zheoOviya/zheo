@@ -71,6 +71,17 @@ export interface OrderRepository {
     fromIso: string,
     toIso: string,
   ): Promise<OrderDTO[]>;
+  /**
+   * Pickup-slot truth (PICKUP-SLOT-TRUTH-A2): orders for a restaurant whose
+   * scheduled_pickup_time falls in the half-open range [fromIso, toIso).
+   * Reads order rows only; callers bucket them into slots by time and never
+   * need line items, so implementations must avoid the getByRestaurant N+1.
+   */
+  getOrdersScheduledBetween(
+    restaurantId: string,
+    fromIso: string,
+    toIso: string,
+  ): Promise<OrderDTO[]>;
   updateStatus(orderId: string, status: OrderStatus): Promise<OrderDTO | null>;
   setPickupOtp(orderId: string, otp: string, qrToken: string): Promise<OrderDTO | null>;
   setCheckedIn(orderId: string): Promise<OrderDTO | null>;
@@ -201,6 +212,27 @@ export class MemoryOrderRepository implements OrderRepository {
       .sort(
         (a, b) =>
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      );
+  }
+
+  async getOrdersScheduledBetween(
+    restaurantId: string,
+    fromIso: string,
+    toIso: string,
+  ): Promise<OrderDTO[]> {
+    const from = Date.parse(fromIso);
+    const to = Date.parse(toIso);
+    return Array.from(this.orders.values())
+      .filter((o) => o.restaurant_id === restaurantId)
+      .filter((o) => {
+        if (o.scheduled_pickup_time === null) return false;
+        const t = new Date(o.scheduled_pickup_time).getTime();
+        return Number.isFinite(t) && t >= from && t < to;
+      })
+      .sort(
+        (a, b) =>
+          new Date(a.scheduled_pickup_time!).getTime() -
+          new Date(b.scheduled_pickup_time!).getTime(),
       );
   }
 

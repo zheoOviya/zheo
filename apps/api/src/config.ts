@@ -27,6 +27,18 @@ function optionalBool(name: string, fallback: boolean): boolean {
   return value === "true" || value === "1";
 }
 
+/**
+ * Optional positive integer with NO fallback. Returns null when the variable
+ * is unset, blank, non-numeric, fractional, or <= 0, so callers can fail
+ * closed instead of silently substituting a fabricated value.
+ */
+function optionalPositiveInt(name: string): number | null {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 export const config = {
   env: optional("NODE_ENV", "development"),
   port: optionalInt("PORT", 3001),
@@ -105,6 +117,16 @@ export const config = {
     cacheTtlMenu: optionalInt("CATALOG_CACHE_TTL_MENU", 5 * 60),
     cacheTtlSearch: optionalInt("CATALOG_CACHE_TTL_SEARCH", 60),
     cacheTtlFilter: optionalInt("CATALOG_CACHE_TTL_FILTER", 5 * 60),
+  },
+
+  // Pickup-slot truth (PICKUP-SLOT-TRUTH-A2). Authoritative per-slot
+  // occupancy capacity. There is deliberately NO implicit default: a
+  // missing/invalid value disables truthful availability rather than
+  // fabricating a number. Production refuses to boot without it (see
+  // services/pickupSlots.ts); non-production slot requests fail closed
+  // with PICKUP_SLOT_CAPACITY_UNCONFIGURED.
+  pickupSlots: {
+    capacity: optionalPositiveInt("PICKUP_SLOT_CAPACITY"),
   },
 
   s3: {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, gte, lt } from "drizzle-orm";
 import { orders, order_items } from "@snakzap/db";
 import type { OrderStatus } from "@snakzap/types";
 import type { DrizzleDb } from "../../lib/dbType";
@@ -219,6 +219,33 @@ export class DrizzleOrderRepository implements OrderRepository {
       .sort(
         (a, b) =>
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      );
+  }
+
+  async getOrdersScheduledBetween(
+    restaurantId: string,
+    fromIso: string,
+    toIso: string,
+  ): Promise<OrderDTO[]> {
+    // Orders-only projection: pickup-slot occupancy never needs line items,
+    // so this deliberately skips the per-order loadItems N+1 in
+    // getByRestaurant.
+    const rows = (await this.db
+      .select()
+      .from(orders)
+      .where(
+        and(
+          eq(orders.restaurant_id, restaurantId),
+          gte(orders.scheduled_pickup_time, new Date(fromIso)),
+          lt(orders.scheduled_pickup_time, new Date(toIso)),
+        ),
+      )) as Record<string, unknown>[];
+    return rows
+      .map((row) => mapOrderRow(row, []))
+      .sort(
+        (a, b) =>
+          new Date(a.scheduled_pickup_time!).getTime() -
+          new Date(b.scheduled_pickup_time!).getTime(),
       );
   }
 

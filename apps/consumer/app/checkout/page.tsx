@@ -16,6 +16,7 @@ import {
 } from "@/lib/api";
 import { loadRazorpayScript, createRazorpayInstance } from "@/lib/razorpay";
 import { computePriceBreakdown, formatINR } from "@/lib/pricing";
+import { istDateString } from "@/lib/pickupTime";
 import { EmptyState } from "@snakzap/ui";
 
 type CheckoutStep = "cart" | "creating" | "payment" | "success" | "failed";
@@ -130,7 +131,7 @@ function PickupSlotSelector({
   const [error, setError] = useState("");
   const [focusedIndex, setFocusedIndex] = useState(-1);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istDateString();
 
   const fetchSlots = useCallback(async () => {
     setLoading(true);
@@ -342,7 +343,7 @@ function CheckoutContent() {
     setError("");
 
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = istDateString();
       const scheduledPickupTime = pickupSlot
         ? new Date(`${today}T${pickupSlot}:00+05:30`).toISOString()
         : undefined;
