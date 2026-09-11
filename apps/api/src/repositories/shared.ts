@@ -45,6 +45,7 @@ import { DrizzleSupportRepository } from "./drizzle/drizzleSupportRepository";
 import { DrizzleLoyaltyRepository } from "./drizzle/drizzleLoyaltyRepository";
 import { DrizzleGroupCartRepository } from "./drizzle/drizzleGroupCartRepository";
 import { DrizzleRoleRepository } from "./drizzle/drizzleRoleRepository";
+import { DrizzlePromotionRepository } from "./drizzle/drizzlePromotionRepository";
 
 import { getDb } from "../lib/db";
 
@@ -140,7 +141,7 @@ function getRepos(): RepoSet {
         sharedAuditRepo: new DrizzleAuditRepository(db) as unknown as RepoSet["sharedAuditRepo"],
         sharedIdentityRepo: new DrizzleIdentityRepository(db) as unknown as RepoSet["sharedIdentityRepo"],
         sharedPosOrderRepo: new MemoryPosOrderRepository(),
-        sharedPromotionRepo: new MemoryPromotionRepository(),
+        sharedPromotionRepo: new DrizzlePromotionRepository(db) as unknown as RepoSet["sharedPromotionRepo"],
         sharedLoyaltyRepo: new DrizzleLoyaltyRepository(db) as unknown as RepoSet["sharedLoyaltyRepo"],
         sharedGroupCartRepo: new DrizzleGroupCartRepository(db) as unknown as RepoSet["sharedGroupCartRepo"],
         sharedChainRepo: new DrizzleChainRepository(db) as unknown as RepoSet["sharedChainRepo"],

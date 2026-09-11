@@ -127,6 +127,13 @@
       "when": 1789110913273,
       "tag": "0017_custom_role_persistence",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789120738646,
+      "tag": "0018_promotion_persistence",
+      "breakpoints": true
     }
   ]
 }
