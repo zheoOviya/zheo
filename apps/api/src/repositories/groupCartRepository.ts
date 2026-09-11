@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { OrderRepository } from "./orderRepository";
 
 // ============================================
 // Group cart repository (ordering bounded context)
@@ -58,7 +59,64 @@ export interface GroupCartRepository {
     token: string,
     contribution: GroupCartContribution,
   ): Promise<GroupCart | null>;
+  /**
+   * Locks the cart row (`SELECT ... FOR UPDATE`) inside a transaction so
+   * concurrent adds serialize across replicas. Memory mode returns the cart
+   * without a DB lock (the service keeps its per-token in-process mutex for
+   * memory/test parity).
+   */
+  lockByToken(token: string): Promise<GroupCart | null>;
+  /**
+   * Postgres-only: builds a transaction port over the same DB handle so the
+   * create/add flows can write the order, its items, and the contributor
+   * attribution atomically. Memory repositories leave this undefined and the
+   * service falls back to {@link MemoryGroupOrderTransactionPort}.
+   */
+  transactionPort?(orders: OrderRepository): GroupOrderTransactionPort;
   _reset(): void;
+}
+
+// ============================================
+// Group-order transaction port (O02).
+//
+// Freezes the atomic write boundary for group carts: the DRAFT order, its
+// items, and the contributor attribution must commit or roll back together.
+// The port exposes only the operations the create/add flows need, so no
+// `as unknown as` cast is required at the service boundary.
+// ============================================
+
+export interface GroupOrderTxRepos {
+  orders: Pick<OrderRepository, "create" | "getById" | "setItems">;
+  carts: Pick<GroupCartRepository, "create" | "getByToken" | "addContribution"> & {
+    lockByToken(token: string): Promise<GroupCart | null>;
+  };
+}
+
+export interface GroupOrderTransactionPort {
+  runInTransaction<T>(fn: (repos: GroupOrderTxRepos) => Promise<T>): Promise<T>;
+}
+
+/**
+ * Memory-mode transaction port: executes the callback directly against the
+ * same in-memory repositories. The service's per-token mutex preserves the
+ * existing in-process serialization semantics for dev/tests.
+ */
+export class MemoryGroupOrderTransactionPort
+  implements GroupOrderTransactionPort
+{
+  constructor(
+    private readonly orders: Pick<OrderRepository, "create" | "getById" | "setItems">,
+    private readonly carts: Pick<
+      GroupCartRepository,
+      "create" | "getByToken" | "addContribution" | "lockByToken"
+    >,
+  ) {}
+
+  async runInTransaction<T>(
+    fn: (repos: GroupOrderTxRepos) => Promise<T>,
+  ): Promise<T> {
+    return fn({ orders: this.orders, carts: this.carts });
+  }
 }
 
 export class MemoryGroupCartRepository implements GroupCartRepository {
@@ -88,6 +146,12 @@ export class MemoryGroupCartRepository implements GroupCartRepository {
   }
 
   async getByToken(token: string): Promise<GroupCart | null> {
+    return this.carts.get(token) ?? null;
+  }
+
+  async lockByToken(token: string): Promise<GroupCart | null> {
+    // No DB row to lock in memory mode; the service's per-token mutex
+    // serializes concurrent adds within the process.
     return this.carts.get(token) ?? null;
   }
 

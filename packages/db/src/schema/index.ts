@@ -12,3 +12,4 @@ export * from "./notifications";
 export * from "./userRoles";
 export * from "./dinein";
 export * from "./loyalty";
+export * from "./groupCarts";

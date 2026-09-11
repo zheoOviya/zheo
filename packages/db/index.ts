@@ -21,6 +21,11 @@ export {
   loyalty_stamp_cards,
 } from "./src/schema/loyalty";
 export {
+  groupCarts,
+  groupCartContributors,
+} from "./src/schema/groupCarts";
+export type { GroupCartContributionItem } from "./src/schema/groupCarts";
+export {
   diningSessionStatusEnum,
   dining_sessions,
   dineInOrderStatusEnum,
