@@ -13,3 +13,4 @@ export * from "./userRoles";
 export * from "./dinein";
 export * from "./loyalty";
 export * from "./groupCarts";
+export * from "./customRoles";

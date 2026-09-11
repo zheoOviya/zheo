@@ -24,6 +24,7 @@ export {
   groupCarts,
   groupCartContributors,
 } from "./src/schema/groupCarts";
+export { custom_roles } from "./src/schema/customRoles";
 export type { GroupCartContributionItem } from "./src/schema/groupCarts";
 export {
   diningSessionStatusEnum,
