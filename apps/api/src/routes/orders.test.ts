@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { ApiEnvelopeSchema } from "@snakzap/types";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
@@ -367,5 +367,111 @@ describe("Ordering routes", () => {
       .set(authHeaders())
       .expect(400);
     expect(res.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  describe("pickup-slot write validation", () => {
+    const FUTURE = "2026-08-25";
+    const TODAY = "2026-08-24";
+    const PAST = "2026-08-23";
+
+    const orderBody = (scheduled?: string) => ({
+      restaurant_id: REST_ID,
+      items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+      ...(scheduled === undefined ? {} : { scheduled_pickup_time: scheduled }),
+    });
+
+    const placeOrder = (scheduled?: string) =>
+      request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send(orderBody(scheduled));
+
+    beforeEach(() => {
+      // 2026-08-24T12:00:00Z = 17:30 IST, so same-day slots start at 18:00.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-08-24T12:00:00.000Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** IST wall-clock instant as a UTC ISO string. */
+    function istInstant(date: string, hhmm: string): string {
+      return new Date(`${date}T${hhmm}:00+05:30`).toISOString();
+    }
+
+    it("accepts a valid future on-grid slot", async () => {
+      const slot = istInstant(FUTURE, "10:00");
+      const res = await placeOrder(slot).expect(201);
+      expect(res.body.data.scheduled_pickup_time).toBe(slot);
+    });
+
+    it("accepts the 22:45 last slot", async () => {
+      const res = await placeOrder(istInstant(FUTURE, "22:45")).expect(201);
+      expect(res.body.data.scheduled_pickup_time).toBe(istInstant(FUTURE, "22:45"));
+    });
+
+    it("accepts a same-day slot at the next full hour", async () => {
+      await placeOrder(istInstant(TODAY, "18:00")).expect(201);
+    });
+
+    it.each([
+      ["off-grid minute", () => istInstant(FUTURE, "12:07")],
+      ["before 08:00", () => istInstant(FUTURE, "07:45")],
+      ["at 23:00", () => istInstant(FUTURE, "23:00")],
+      ["in the past", () => istInstant(PAST, "12:00")],
+      ["same-day before next full hour", () => istInstant(TODAY, "17:45")],
+    ])("rejects an invalid pickup slot: %s", async (_label, makeSlot) => {
+      const res = await placeOrder(makeSlot()).expect(400);
+      expect(res.body.error.code).toBe("INVALID_PICKUP_SLOT");
+    });
+
+    it("still rejects malformed datetime syntax with VALIDATION_ERROR", async () => {
+      const res = await placeOrder("not-a-date").expect(400);
+      expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("keeps ASAP (no schedule) valid", async () => {
+      const res = await placeOrder().expect(201);
+      expect(res.body.data.scheduled_pickup_time).toBeNull();
+    });
+
+    it("reorder copies a still-valid slot", async () => {
+      const slot = istInstant(FUTURE, "10:00");
+      const first = await placeOrder(slot).expect(201);
+
+      const res = await request(app)
+        .post("/api/v1/orders/reorder")
+        .set(authHeaders())
+        .send({ old_order_id: first.body.data.id })
+        .expect(201);
+      expect(res.body.data.scheduled_pickup_time).toBe(slot);
+    });
+
+    it("reorder rejects a now-past slot instead of silently copying it", async () => {
+      const first = await placeOrder(istInstant(FUTURE, "10:00")).expect(201);
+
+      // Advance past the scheduled day so the stored slot is no longer offered.
+      vi.setSystemTime(new Date("2026-08-26T12:00:00.000Z"));
+
+      const res = await request(app)
+        .post("/api/v1/orders/reorder")
+        .set(authHeaders())
+        .send({ old_order_id: first.body.data.id })
+        .expect(400);
+      expect(res.body.error.code).toBe("INVALID_PICKUP_SLOT");
+    });
+
+    it("reorder of an ASAP order stays ASAP", async () => {
+      const first = await placeOrder().expect(201);
+
+      const res = await request(app)
+        .post("/api/v1/orders/reorder")
+        .set(authHeaders())
+        .send({ old_order_id: first.body.data.id })
+        .expect(201);
+      expect(res.body.data.scheduled_pickup_time).toBeNull();
+    });
   });
 });

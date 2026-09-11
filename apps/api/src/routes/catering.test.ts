@@ -116,6 +116,21 @@ describe("W12 Catering Orders", () => {
     expect(fetched.body.data.headcount).toBe(150);
   });
 
+  it("accepts an off-grid future event_date (advance scheduling, not a pickup slot)", async () => {
+    // Catering uses event_date, not the consumer 15-minute pickup grid. An
+    // off-grid instant must still be accepted and stored verbatim.
+    const eventDate = "2099-09-01T10:37:00+05:30";
+    const res = await request(app)
+      .post("/api/v1/orders/catering")
+      .set(auth(CUSTOMER))
+      .send(cateringPayload({ event_date: eventDate }))
+      .expect(201);
+
+    expect(res.body.data.is_catering).toBe(true);
+    expect(res.body.data.event_date).toBe(eventDate);
+    expect(res.body.data.status).toBe("CONFIRMED");
+  });
+
   it("bypasses the standard 50 per-line cap (quantity up to 1000)", async () => {
     const res = await request(app)
       .post("/api/v1/orders/catering")

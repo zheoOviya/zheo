@@ -87,6 +87,25 @@ describe("Petpooja POS webhook", () => {
     expect(order?.total_amount).toBeGreaterThan(0);
   });
 
+  it("imports a long-past ordered_at under the default scheduling policy", async () => {
+    // POS `ordered_at` is a provider-created timestamp, not a consumer pickup
+    // slot. The default "none" policy must store it verbatim without running
+    // it through the pickup-slot calendar (which would reject a past instant).
+    const { payload, signature } = buildPayload({
+      ordered_at: "2020-01-01T10:00:00.000Z",
+    });
+
+    const res = await request(app)
+      .post("/api/v1/webhooks/pos/petpooja")
+      .set("x-petpooja-signature", signature)
+      .send(payload)
+      .expect(200);
+
+    expect(res.body.data.order_status).toBe("CONFIRMED");
+    const order = await sharedOrderRepo.getById(res.body.data.order_id);
+    expect(order?.scheduled_pickup_time).toBe("2020-01-01T10:00:00.000Z");
+  });
+
   it("is idempotent: a retried pos_order_id never creates a second order", async () => {
     const { payload, signature } = buildPayload();
 

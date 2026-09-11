@@ -375,19 +375,31 @@ describe("Fulfillment routes", () => {
   });
 
   describe("P13 Early Ready Alert", () => {
-    it("emits EarlyReadyAlert when ready before scheduled_pickup_time", async () => {
-      const scheduled = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // +1h
+    // The Early Ready Alert logic is driven by an arbitrary scheduled time
+    // (deliberately not a bookable pickup slot). Create a real order through
+    // the route, then inject the schedule directly so the now-validated
+    // consumer POST /orders contract is not bypassed.
+    async function createEarlyReadyOrder(scheduled: string): Promise<string> {
       const orderRes = await request(app)
         .post("/api/v1/orders")
         .set(authHeaders())
         .send({
           restaurant_id: REST_ID,
           items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
-          scheduled_pickup_time: scheduled,
         })
         .expect(201);
 
       const orderId = orderRes.body.data.id;
+      const created = await sharedOrderRepo.getById(orderId);
+      if (!created) throw new Error("seeded order missing after create");
+      await sharedOrderRepo._seed({ ...created, scheduled_pickup_time: scheduled });
+      return orderId;
+    }
+
+    it("emits EarlyReadyAlert when ready before scheduled_pickup_time", async () => {
+      const scheduled = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // +1h
+      const orderId = await createEarlyReadyOrder(scheduled);
+
       await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
       await request(app)
         .put(`/api/vendor/orders/${orderId}/status`)
@@ -416,17 +428,8 @@ describe("Fulfillment routes", () => {
 
     it("does not alert when ready on/after scheduled_pickup_time", async () => {
       const scheduled = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // -1h (late)
-      const orderRes = await request(app)
-        .post("/api/v1/orders")
-        .set(authHeaders())
-        .send({
-          restaurant_id: REST_ID,
-          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
-          scheduled_pickup_time: scheduled,
-        })
-        .expect(201);
+      const orderId = await createEarlyReadyOrder(scheduled);
 
-      const orderId = orderRes.body.data.id;
       await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
       await request(app)
         .put(`/api/vendor/orders/${orderId}/status`)

@@ -150,6 +150,7 @@ ordersRouter.post(
       restaurant_id: body.data.restaurant_id,
       items: body.data.items,
       scheduled_pickup_time: body.data.scheduled_pickup_time,
+      scheduling_policy: "pickup-slot",
     });
 
     ok(res, order, 201);

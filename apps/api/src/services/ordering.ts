@@ -13,11 +13,20 @@ import {
   type CustomizationDelta,
   type OrderItemInput,
 } from "./pricing";
+import { assertValidPickupSlot } from "./pickupSlotPolicy";
 
 // ============================================
 // Ordering context service (ordering bounded context)
 // Orchestrates: validation -> pricing -> persistence -> event emission.
 // ============================================
+
+/**
+ * Write-time scheduling validation policy. `"pickup-slot"` enforces the
+ * consumer pickup-slot calendar; `"none"` (the default) preserves the value
+ * verbatim. Internal importers such as the POS webhook are not choosing a
+ * consumer pickup slot and must never be rejected by that calendar.
+ */
+export type SchedulingPolicy = "none" | "pickup-slot";
 
 export interface PlaceOrderRequest {
   user_id: string;
@@ -29,6 +38,7 @@ export interface PlaceOrderRequest {
     gift_id?: string;
   }[];
   scheduled_pickup_time?: string;
+  scheduling_policy?: SchedulingPolicy;
 }
 
 export class OrderingService {
@@ -52,6 +62,16 @@ export class OrderingService {
 
     if (request.items.length === 0) {
       throw new AppError("EMPTY_ORDER", "At least one item is required", 400);
+    }
+
+    // A consumer-chosen pickup slot must be one the booking display currently
+    // offers. Callers that omit the policy (e.g. the POS importer supplying a
+    // provider timestamp) keep their value verbatim.
+    if (
+      request.scheduling_policy === "pickup-slot" &&
+      request.scheduled_pickup_time !== undefined
+    ) {
+      assertValidPickupSlot(request.scheduled_pickup_time);
     }
 
     // A gift is single-use: reject a request that lists the same gift_id on
@@ -227,6 +247,10 @@ export class OrderingService {
       restaurant_id: oldOrder.restaurant_id,
       items,
       scheduled_pickup_time: oldOrder.scheduled_pickup_time ?? undefined,
+      // Catering uses advance event scheduling, so its stored date must not be
+      // re-judged against the consumer pickup calendar. Standard orders are
+      // re-validated: a now-past slot is rejected rather than silently copied.
+      scheduling_policy: oldOrder.is_catering === true ? "none" : "pickup-slot",
     });
   }
 }

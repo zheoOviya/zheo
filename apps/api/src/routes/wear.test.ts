@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
@@ -70,7 +70,16 @@ describe("W14 Smart Watch API", () => {
     resetRedisForTests();
     resetCatalogRepository();
     sharedOrderRepo._reset();
+    // Freeze only Date so the seeded pickup slot below stays in the future
+    // relative to the test clock (and reorder validation stays deterministic).
+    // Real timers remain untouched so supertest/express keep working.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-06T04:30:00.000Z")); // 10:00 IST
     app = createApp();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe("GET /api/v1/wear/orders/active", () => {
@@ -146,6 +155,16 @@ describe("W14 Smart Watch API", () => {
         .set(auth(USER))
         .expect(404);
       expect(res.body.error.code).toBe("NO_ORDERS");
+    });
+
+    it("rejects reorder when the stored pickup slot is in the past", async () => {
+      seedOrder("w1", "PICKED_UP", "2026-08-05T12:30:00+05:30");
+
+      const res = await request(app)
+        .post("/api/v1/wear/orders/reorder")
+        .set(auth(USER))
+        .expect(400);
+      expect(res.body.error.code).toBe("INVALID_PICKUP_SLOT");
     });
   });
 });
