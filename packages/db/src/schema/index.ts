@@ -15,3 +15,4 @@ export * from "./loyalty";
 export * from "./groupCarts";
 export * from "./customRoles";
 export * from "./promotions";
+export * from "./posOrderMappings";

@@ -1,7 +1,9 @@
 import type { Express } from "express";
+import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
+import { onEvent } from "../lib/eventBus";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
 import { getCatalogRepository, resetCatalogRepository } from "./catalog";
@@ -10,6 +12,15 @@ import {
   sharedOrderRepo,
   sharedPosOrderRepo,
 } from "../repositories/shared";
+import {
+  isPosOrderMappingDuplicate,
+  MemoryPosOrderRepository,
+  POS_ORDER_MAPPING_UNIQUE_CONSTRAINT,
+  type PosImportTxRepos,
+  type PosOrderRepository,
+} from "../repositories/posRepository";
+import { OrderingService } from "../services/ordering";
+import { PetpoojaPosService } from "../services/posPetpooja";
 
 // ============================================
 // Petpooja POS integration (V01) route tests
@@ -221,5 +232,253 @@ describe("Petpooja POS webhook", () => {
     const order = await sharedOrderRepo.getById(res.body.data.import.order_id);
     expect(order).not.toBeNull();
     expect(order?.restaurant_id).toBe(REST_ID);
+  });
+
+  it("resolves the default restaurant before precheck and scopes the mapping to it", async () => {
+    // No restaurant_id in the payload -> config default (== REST_ID) must be
+    // resolved and used for BOTH the precheck and the stored mapping.
+    const { payload, signature } = buildPayload({ restaurant_id: undefined });
+
+    const res = await request(app)
+      .post("/api/v1/webhooks/pos/petpooja")
+      .set("x-petpooja-signature", signature)
+      .send(payload)
+      .expect(200);
+
+    expect(res.body.data.processed).toBe(true);
+    const mapping = await sharedPosOrderRepo.getByPosOrderId(
+      REST_ID,
+      POS_ORDER_ID,
+    );
+    expect(mapping?.order_id).toBe(res.body.data.order_id);
+  });
+
+  it("keys the POS mapping by restaurant: same pos id in two restaurants never collides", async () => {
+    const repo = new MemoryPosOrderRepository();
+    const r1 = "11111111-1111-4111-8111-111111111111";
+    const r2 = "22222222-2222-4222-8222-222222222222";
+    const SHARED_POS_ID = "shared-pos-id-1";
+
+    const a = await repo.recordOrder(r1, SHARED_POS_ID, "order-a");
+    const b = await repo.recordOrder(r2, SHARED_POS_ID, "order-b");
+
+    expect(a.order_id).toBe("order-a");
+    expect(b.order_id).toBe("order-b");
+    expect((await repo.getByPosOrderId(r1, SHARED_POS_ID))?.order_id).toBe(
+      "order-a",
+    );
+    expect((await repo.getByPosOrderId(r2, SHARED_POS_ID))?.order_id).toBe(
+      "order-b",
+    );
+    // Restaurant-scoped: an unknown pair is a miss even though the pos id exists.
+    expect(await repo.getByPosOrderId(r1, "unknown-pos-id")).toBeNull();
+  });
+
+  it("normal OrderingService default still emits OrderCreated", async () => {
+    const seen: string[] = [];
+    onEvent("OrderCreated", async () => {
+      seen.push("OrderCreated");
+    });
+
+    const catalog = getCatalogRepository();
+    const menu = (await catalog.getMenuAll(REST_ID)).filter(
+      (m) => m.is_available,
+    );
+    const firstMenuItem = menu[0];
+    if (!firstMenuItem) throw new Error("expected a synced menu item");
+    const service = new OrderingService(sharedOrderRepo, catalog);
+    const order = await service.placeOrder({
+      user_id: OWNER_ID,
+      restaurant_id: REST_ID,
+      items: [
+        { menu_item_id: firstMenuItem.id, quantity: 1, customizations: [] },
+      ],
+    });
+
+    expect(order.id).toBeTruthy();
+    expect(seen.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("POS path suppresses the in-transaction OrderCreated (emits it only post-commit)", async () => {
+    let insideTransaction = false;
+    let orderCreatedInsideTx = false;
+    onEvent("OrderCreated", async () => {
+      if (insideTransaction) orderCreatedInsideTx = true;
+    });
+
+    const fake: PosOrderRepository = {
+      recordOrder: async (restaurantId, posOrderId, orderId) => ({
+        id: randomUUID(),
+        pos_order_id: posOrderId,
+        order_id: orderId,
+        restaurant_id: restaurantId,
+        created_at: new Date().toISOString(),
+      }),
+      getByPosOrderId: async () => null,
+      transactionPort: () => ({
+        runInTransaction: async <T,>(
+          fn: (repos: PosImportTxRepos) => Promise<T>,
+        ): Promise<T> => {
+          insideTransaction = true;
+          try {
+            return await fn({ orders: sharedOrderRepo, pos: fake });
+          } finally {
+            insideTransaction = false;
+          }
+        },
+      }),
+      _reset: () => {},
+    };
+
+    const service = new PetpoojaPosService(
+      sharedOrderRepo,
+      getCatalogRepository(),
+      sharedIdentityRepo,
+      fake,
+    );
+    const { payload, signature } = buildPayload();
+    const result = await service.processOrderWebhook(
+      JSON.stringify(payload),
+      signature,
+    );
+
+    expect(result.processed).toBe(true);
+    expect(orderCreatedInsideTx).toBe(false);
+  });
+
+  it("treats ONLY the exact POS mapping constraint as the idempotency violation", () => {
+    expect(
+      isPosOrderMappingDuplicate({
+        code: "23505",
+        constraint: POS_ORDER_MAPPING_UNIQUE_CONSTRAINT,
+      }),
+    ).toBe(true);
+    // Wrapped cause chain is inspected.
+    expect(
+      isPosOrderMappingDuplicate({
+        cause: {
+          code: "23505",
+          constraint: POS_ORDER_MAPPING_UNIQUE_CONSTRAINT,
+        },
+      }),
+    ).toBe(true);
+    // Unrelated 23505 must not be swallowed.
+    expect(
+      isPosOrderMappingDuplicate({ code: "23505", constraint: "some_other_uq" }),
+    ).toBe(false);
+    expect(
+      isPosOrderMappingDuplicate({
+        code: "23503",
+        constraint: POS_ORDER_MAPPING_UNIQUE_CONSTRAINT,
+      }),
+    ).toBe(false);
+    expect(isPosOrderMappingDuplicate(new Error("boom"))).toBe(false);
+  });
+
+  it("rethrows unrelated duplicates and resolves the exact duplicate race", async () => {
+    const buildFake = (
+      transactionPort: PosOrderRepository["transactionPort"],
+      getByPosOrderId: PosOrderRepository["getByPosOrderId"],
+    ): PosOrderRepository => ({
+      recordOrder: async (restaurantId, posOrderId, orderId) => ({
+        id: randomUUID(),
+        pos_order_id: posOrderId,
+        order_id: orderId,
+        restaurant_id: restaurantId,
+        created_at: new Date().toISOString(),
+      }),
+      getByPosOrderId,
+      transactionPort,
+      _reset: () => {},
+    });
+
+    // Unrelated 23505 from the transaction must propagate untouched.
+    const unrelated = new PetpoojaPosService(
+      sharedOrderRepo,
+      getCatalogRepository(),
+      sharedIdentityRepo,
+      buildFake(
+        () => ({
+          runInTransaction: async () => {
+            throw { code: "23505", constraint: "some_other_uq" };
+          },
+        }),
+        async () => null,
+      ),
+    );
+    const unrelatedPayload = buildPayload({ pos_order_id: "pp-unrelated" });
+    await expect(
+      unrelated.processOrderWebhook(
+        JSON.stringify(unrelatedPayload.payload),
+        unrelatedPayload.signature,
+      ),
+    ).rejects.toMatchObject({ code: "23505", constraint: "some_other_uq" });
+
+    // Exact duplicate: precheck misses, tx loses the race, reread finds the
+    // winner -> idempotent, no events (the winner already emitted).
+    const winner = {
+      id: "winner-mapping",
+      pos_order_id: "pp-race",
+      order_id: "winner-order",
+      restaurant_id: REST_ID,
+      created_at: new Date().toISOString(),
+    };
+    let reads = 0;
+    const raced = new PetpoojaPosService(
+      sharedOrderRepo,
+      getCatalogRepository(),
+      sharedIdentityRepo,
+      buildFake(
+        () => ({
+          runInTransaction: async () => {
+            throw {
+              code: "23505",
+              constraint: POS_ORDER_MAPPING_UNIQUE_CONSTRAINT,
+            };
+          },
+        }),
+        async (_restaurantId, posOrderId) => {
+          if (posOrderId !== "pp-race") return null;
+          reads += 1;
+          return reads >= 2 ? winner : null;
+        },
+      ),
+    );
+    const racePayload = buildPayload({ pos_order_id: "pp-race" });
+    const raceResult = await raced.processOrderWebhook(
+      JSON.stringify(racePayload.payload),
+      racePayload.signature,
+    );
+    expect(raceResult).toEqual({
+      processed: false,
+      idempotent: true,
+      order_id: "winner-order",
+    });
+
+    // Exact duplicate but the winner is unreadable -> explicit failure, never a
+    // fabricated success.
+    const unresolved = new PetpoojaPosService(
+      sharedOrderRepo,
+      getCatalogRepository(),
+      sharedIdentityRepo,
+      buildFake(
+        () => ({
+          runInTransaction: async () => {
+            throw {
+              code: "23505",
+              constraint: POS_ORDER_MAPPING_UNIQUE_CONSTRAINT,
+            };
+          },
+        }),
+        async () => null,
+      ),
+    );
+    const missingPayload = buildPayload({ pos_order_id: "pp-missing" });
+    await expect(
+      unresolved.processOrderWebhook(
+        JSON.stringify(missingPayload.payload),
+        missingPayload.signature,
+      ),
+    ).rejects.toMatchObject({ code: "POS_IMPORT_CONFLICT_UNRESOLVED" });
   });
 });

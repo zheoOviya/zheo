@@ -48,7 +48,10 @@ export class OrderingService {
     private readonly giftRepo?: GiftRepository,
   ) {}
 
-  async placeOrder(request: PlaceOrderRequest): Promise<OrderDTO> {
+  async placeOrder(
+    request: PlaceOrderRequest,
+    options?: { emitOrderCreated?: boolean },
+  ): Promise<OrderDTO> {
     const restaurant = await this.catalogRepo.getRestaurantById(
       request.restaurant_id,
     );
@@ -220,11 +223,17 @@ export class OrderingService {
       }
     }
 
-    await emit(
-      createEventEnvelope("OrderCreated", order.id, { order }, {
-        correlation_id: randomUUID(),
-      }),
-    );
+    // `emitOrderCreated` defaults to true so normal checkout/reorder keep the
+    // baseline behaviour. Internal importers that must emit AFTER their own
+    // commit boundary (the POS importer) pass false and emit post-commit
+    // themselves, so a rolled-back order can never publish a phantom event.
+    if (options?.emitOrderCreated !== false) {
+      await emit(
+        createEventEnvelope("OrderCreated", order.id, { order }, {
+          correlation_id: randomUUID(),
+        }),
+      );
+    }
 
     return order;
   }

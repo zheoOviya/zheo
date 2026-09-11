@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { config } from "../config";
 import { createEventEnvelope, emit } from "../lib/eventBus";
@@ -6,8 +6,12 @@ import { logger } from "../lib/logger";
 import { AppError } from "../middleware/envelope";
 import type { CatalogRepository } from "../repositories/catalogRepository";
 import type { IdentityRepository } from "../repositories/identityRepository";
-import type { OrderRepository } from "../repositories/orderRepository";
-import type { PosOrderRepository } from "../repositories/posRepository";
+import type { OrderDTO, OrderRepository } from "../repositories/orderRepository";
+import {
+  isPosOrderMappingDuplicate,
+  MemoryPosImportTransactionPort,
+  type PosOrderRepository,
+} from "../repositories/posRepository";
 import type { CustomizationDelta } from "./pricing";
 import { OrderingService } from "./ordering";
 
@@ -76,16 +80,12 @@ export interface PosImportResult {
 }
 
 export class PetpoojaPosService {
-  private readonly orderingService: OrderingService;
-
   constructor(
     private readonly orderRepo: OrderRepository,
     private readonly catalogRepo: CatalogRepository,
     private readonly identityRepo: IdentityRepository,
     private readonly posRepo: PosOrderRepository,
-  ) {
-    this.orderingService = new OrderingService(orderRepo, catalogRepo);
-  }
+  ) {}
 
   /** Mock mode mirrors the Razorpay seam: `valid_sig_` prefix when no secret. */
   verifySignature(rawBody: string, signature: string): boolean {
@@ -115,9 +115,19 @@ export class PetpoojaPosService {
       );
     }
 
-    // IDEMPOTENCY: a retried delivery of the same POS order number
-    // must never create a second SnakZap order.
-    const existing = await this.posRepo.getByPosOrderId(payload.pos_order_id);
+    // The restaurant must be resolved BEFORE the idempotency precheck: the
+    // lookup key is restaurant-scoped, so the same pos_order_id arriving under
+    // a different restaurant is a different order and must not collide.
+    const restaurantId =
+      payload.restaurant_id ?? config.petpooja.defaultRestaurantId;
+
+    // IDEMPOTENCY (fast path): a retried delivery of the same restaurant + POS
+    // order number must never create a second SnakZap order. The DB unique
+    // index is the final authority; this is only the cheap early-out.
+    const existing = await this.posRepo.getByPosOrderId(
+      restaurantId,
+      payload.pos_order_id,
+    );
     if (existing) {
       return {
         processed: false,
@@ -126,7 +136,6 @@ export class PetpoojaPosService {
       };
     }
 
-    const restaurantId = payload.restaurant_id ?? config.petpooja.defaultRestaurantId;
     const restaurant = await this.catalogRepo.getRestaurantById(restaurantId);
     if (!restaurant || !restaurant.is_active) {
       throw new AppError(
@@ -166,18 +175,75 @@ export class PetpoojaPosService {
       });
     }
 
-    const order = await this.orderingService.placeOrder({
-      user_id: customer.id,
-      restaurant_id: restaurantId,
-      items,
-      scheduled_pickup_time: payload.ordered_at,
-    });
+    // ATOMIC IMPORT: the order, ALL of its items, its CONFIRMED status, and
+    // the idempotency mapping commit or roll back as ONE transaction. Postgres
+    // provides a real transaction port over one connection; memory falls back
+    // to a passthrough (no cross-store crash window in a single process).
+    const port =
+      this.posRepo.transactionPort?.(this.orderRepo) ??
+      new MemoryPosImportTransactionPort(this.orderRepo, this.posRepo);
 
-    // Pre-paid POS order -> skip DRAFT/PAYMENT_PENDING, go straight to CONFIRMED.
-    await this.orderRepo.updateStatus(order.id, "CONFIRMED");
+    let order: OrderDTO;
+    try {
+      order = await port.runInTransaction(async ({ orders, pos }) => {
+        // Tx-scoped OrderingService shares the transaction handle so the order
+        // and its items are written on the SAME connection. OrderCreated is
+        // suppressed (emitOrderCreated:false) because emitting before commit
+        // could publish a phantom event for an order that then rolls back.
+        const txOrdering = new OrderingService(
+          orders as unknown as OrderRepository,
+          this.catalogRepo,
+        );
+        const created = await txOrdering.placeOrder(
+          {
+            user_id: customer.id,
+            restaurant_id: restaurantId,
+            items,
+            scheduled_pickup_time: payload.ordered_at,
+          },
+          { emitOrderCreated: false },
+        );
 
-    await this.posRepo.recordOrder(payload.pos_order_id, order.id, restaurantId);
+        // Pre-paid POS order -> skip DRAFT/PAYMENT_PENDING, go to CONFIRMED.
+        await orders.updateStatus(created.id, "CONFIRMED");
+        await pos.recordOrder(restaurantId, payload.pos_order_id, created.id);
+        return created;
+      });
+    } catch (err) {
+      // Lost a concurrent-import race: the winner committed, the DB unique
+      // index rejected our mapping, and our WHOLE transaction rolled back.
+      // Re-read the winner and report idempotent. Only the exact POS-mapping
+      // constraint qualifies; any other 23505 propagates untouched.
+      if (!isPosOrderMappingDuplicate(err)) {
+        throw err;
+      }
+      const winner = await this.posRepo.getByPosOrderId(
+        restaurantId,
+        payload.pos_order_id,
+      );
+      if (!winner) {
+        // Never fabricate success: the duplicate exists but is unreadable.
+        throw new AppError(
+          "POS_IMPORT_CONFLICT_UNRESOLVED",
+          "POS import lost the idempotency race but no winning mapping is readable",
+          500,
+        );
+      }
+      return {
+        processed: false,
+        idempotent: true,
+        order_id: winner.order_id,
+      };
+    }
 
+    // Post-commit events only. Both are best-effort (emit never throws), so a
+    // subscriber failure can never roll back an already-committed import, and
+    // the loser above emits ZERO events.
+    await emit(
+      createEventEnvelope("OrderCreated", order.id, { order }, {
+        correlation_id: randomUUID(),
+      }),
+    );
     await emit(
       createEventEnvelope("PosOrderImported", order.id, {
         order_id: order.id,
