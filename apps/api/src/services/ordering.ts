@@ -8,6 +8,11 @@ import {
   type CreateOrderInput,
   type OrderDTO,
 } from "../repositories/orderRepository";
+import type { OrderCheckoutTransactionPort } from "../repositories/orderCheckoutContracts";
+import {
+  passthroughOrderCheckoutTransactionPort,
+  selectOrderCheckoutTransactionPort,
+} from "../repositories/drizzle/orderCheckoutTransactionPort";
 import {
   calculatePriceBreakdown,
   type CustomizationDelta,
@@ -46,11 +51,23 @@ export class OrderingService {
     private readonly orderRepo: OrderRepository,
     private readonly catalogRepo: CatalogRepository,
     private readonly giftRepo?: GiftRepository,
+    private readonly checkoutTxPort?: OrderCheckoutTransactionPort,
   ) {}
+
+  /**
+   * Resolves the transaction port lazily so the storage-mode decision is made
+   * after the runtime probe, not at module/route construction time.
+   */
+  private getCheckoutPort(): OrderCheckoutTransactionPort {
+    return (
+      this.checkoutTxPort ??
+      selectOrderCheckoutTransactionPort(this.orderRepo, this.giftRepo)
+    );
+  }
 
   async placeOrder(
     request: PlaceOrderRequest,
-    options?: { emitOrderCreated?: boolean },
+    options?: { emitOrderCreated?: boolean; useCheckoutTx?: boolean },
   ): Promise<OrderDTO> {
     const restaurant = await this.catalogRepo.getRestaurantById(
       request.restaurant_id,
@@ -194,34 +211,51 @@ export class OrderingService {
       scheduled_pickup_time: request.scheduled_pickup_time,
     };
 
-    const order = await this.orderRepo.create(input);
+    // Consumer checkout aggregate: the order row, EVERY order item, and each
+    // gift bind execute on one commit boundary. In Postgres the tx handle makes
+    // a lost gift CAS (or any throw) roll the whole aggregate back; the memory
+    // port is an explicit passthrough, so the in-callback compensation keeps the
+    // historical "no leaked DRAFT" behaviour there.
+    const checkoutPort =
+      options?.useCheckoutTx === false
+        ? passthroughOrderCheckoutTransactionPort(this.orderRepo, this.giftRepo)
+        : this.getCheckoutPort();
 
-    // Bind each claimed gift to THIS order (CAS). bindToOrder only succeeds
-    // while the gift is still CLAIMED and unbound, so a gift can never be
-    // redeemed in two orders even under concurrent checkout.
-    const giftIds = [...new Set(orderItems.filter((oi) => oi.gift_id).map((oi) => oi.gift_id!))];
-    const bound: string[] = [];
-    if (giftIds.length > 0) {
-      if (!this.giftRepo) {
-        throw new AppError("GIFT_REPO_MISSING", "Gift repository is not configured", 500);
-      }
-      for (const giftId of giftIds) {
-        const boundGift = await this.giftRepo.bindToOrder(giftId, order.id);
-        if (!boundGift) {
-          // A concurrent order already redeemed this gift (or it was released
-          // mid-checkout). Roll back the binds we already made so the gift is
-          // left consistent, retire the leaked DRAFT order, then reject.
-          for (const b of bound) await this.giftRepo.releaseFromOrder(b, order.id);
-          await this.orderRepo.updateStatus(order.id, "CANCELLED");
-          throw new AppError(
-            "GIFT_ALREADY_REDEEMED",
-            `Gift ${giftId} has already been redeemed in another order`,
-            409,
-          );
+    const order = await checkoutPort.runInTransaction(async ({ orders, gifts }) => {
+      const created = await orders.create(input);
+
+      // Bind each claimed gift to THIS order (CAS). bindToOrder only succeeds
+      // while the gift is still CLAIMED and unbound, so a gift can never be
+      // redeemed in two orders even under concurrent checkout.
+      const giftIds = [
+        ...new Set(orderItems.filter((oi) => oi.gift_id).map((oi) => oi.gift_id!)),
+      ];
+      if (giftIds.length > 0) {
+        if (!this.giftRepo) {
+          throw new AppError("GIFT_REPO_MISSING", "Gift repository is not configured", 500);
         }
-        bound.push(giftId);
+        const bound: string[] = [];
+        for (const giftId of giftIds) {
+          const boundGift = await gifts.bindToOrder(giftId, created.id);
+          if (!boundGift) {
+            // A concurrent order already redeemed this gift. Undo the binds we
+            // already made and retire this checkout order. Under Postgres the
+            // throw rolls all of this back anyway; under memory this is what
+            // prevents a leaked DRAFT order.
+            for (const b of bound) await gifts.releaseFromOrder(b, created.id);
+            await orders.updateStatus(created.id, "CANCELLED");
+            throw new AppError(
+              "GIFT_ALREADY_REDEEMED",
+              `Gift ${giftId} has already been redeemed in another order`,
+              409,
+            );
+          }
+          bound.push(giftId);
+        }
       }
-    }
+
+      return created;
+    });
 
     // `emitOrderCreated` defaults to true so normal checkout/reorder keep the
     // baseline behaviour. Internal importers that must emit AFTER their own

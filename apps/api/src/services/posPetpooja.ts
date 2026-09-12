@@ -187,9 +187,12 @@ export class PetpoojaPosService {
     try {
       order = await port.runInTransaction(async ({ orders, pos }) => {
         // Tx-scoped OrderingService shares the transaction handle so the order
-        // and its items are written on the SAME connection. OrderCreated is
-        // suppressed (emitOrderCreated:false) because emitting before commit
-        // could publish a phantom event for an order that then rolls back.
+        // and its items are written on the SAME connection. The checkout tx port
+        // is disabled (useCheckoutTx:false) because this import already runs
+        // inside its own transaction; wrapping again would open a second,
+        // unrelated transaction. OrderCreated is suppressed
+        // (emitOrderCreated:false) because emitting before commit could publish
+        // a phantom event for an order that then rolls back.
         const txOrdering = new OrderingService(
           orders as unknown as OrderRepository,
           this.catalogRepo,
@@ -201,7 +204,7 @@ export class PetpoojaPosService {
             items,
             scheduled_pickup_time: payload.ordered_at,
           },
-          { emitOrderCreated: false },
+          { emitOrderCreated: false, useCheckoutTx: false },
         );
 
         // Pre-paid POS order -> skip DRAFT/PAYMENT_PENDING, go to CONFIRMED.
