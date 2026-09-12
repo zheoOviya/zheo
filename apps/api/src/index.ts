@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { config } from "./config";
 import { closeDb, probePostgres } from "./lib/db";
 import { getRedis } from "./lib/redis";
+import { shutdownEventSubscriber } from "./lib/eventBus";
 import { logger } from "./lib/logger";
 import { initWebSocketServer } from "./lib/websocket";
 import { assertSecureConfig } from "./env";
@@ -100,6 +101,7 @@ async function main() {
     logger.info({ message: "shutdown_initiated", signal });
     server.close(async () => {
       logger.info({ message: "http_server_closed" });
+      await shutdownEventSubscriber();
       try {
         await getRedis().quit();
         logger.info({ message: "redis_disconnected" });
