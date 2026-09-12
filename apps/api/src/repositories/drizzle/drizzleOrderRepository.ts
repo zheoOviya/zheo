@@ -16,6 +16,15 @@ import type { PriceBreakdown } from "../../services/pricing";
 // Ordering context repository (Drizzle/Postgres)
 // ============================================
 
+/**
+ * Drizzle update chain result exposing `.returning()`. The shared `DrizzleDb`
+ * type only models the awaited form, so the CAS paths cast the chain the same
+ * way `vendorApplicationRepository` does for `.returning()`.
+ */
+type ReturningUpdate = {
+  returning: () => Promise<unknown[]>;
+};
+
 function mapOrderRow(
   row: Record<string, unknown>,
   items: OrderItemDTO[],
@@ -258,6 +267,65 @@ export class DrizzleOrderRepository implements OrderRepository {
       .set({ status, updated_at: new Date() })
       .where(eq(orders.id, orderId));
     return this.getById(orderId);
+  }
+
+  async transitionStatus(
+    orderId: string,
+    fromStatus: OrderStatus,
+    toStatus: OrderStatus,
+  ): Promise<OrderDTO | null> {
+    const rows = (await (this.db
+      .update(orders)
+      .set({ status: toStatus, updated_at: new Date() })
+      .where(
+        and(eq(orders.id, orderId), eq(orders.status, fromStatus)),
+      ) as unknown as ReturningUpdate).returning()) as Record<string, unknown>[];
+    const row = rows[0];
+    if (!row) return null;
+    const items = await this.loadItems(orderId);
+    return mapOrderRow(row, items);
+  }
+
+  async claimPreparingWithOtp(
+    orderId: string,
+    fromStatus: OrderStatus,
+    otp: string,
+    // Accepted for interface parity with Memory. Postgres has no qr_token
+    // column, so the token is intentionally not persisted (F5 held) and no
+    // second UPDATE is issued.
+    _qrToken?: string,
+  ): Promise<OrderDTO | null> {
+    const rows = (await (this.db
+      .update(orders)
+      .set({ status: "PREPARING", pickup_otp: otp, updated_at: new Date() })
+      .where(
+        and(eq(orders.id, orderId), eq(orders.status, fromStatus)),
+      ) as unknown as ReturningUpdate).returning()) as Record<string, unknown>[];
+    const row = rows[0];
+    if (!row) return null;
+    const items = await this.loadItems(orderId);
+    return mapOrderRow(row, items);
+  }
+
+  async consumePickupOtp(
+    orderId: string,
+    fromStatus: OrderStatus,
+    otp: string,
+  ): Promise<OrderDTO | null> {
+    const rows = (await (this.db
+      .update(orders)
+      .set({ status: "PICKED_UP", pickup_otp: null, updated_at: new Date() })
+      .where(
+        and(
+          eq(orders.id, orderId),
+          eq(orders.status, fromStatus),
+          eq(orders.pickup_otp, otp),
+        ),
+      ) as unknown as ReturningUpdate).returning()) as Record<string, unknown>[];
+    const row = rows[0];
+    if (!row) return null;
+    const items = await this.loadItems(orderId);
+    return mapOrderRow(row, items);
   }
 
   async setPickupOtp(

@@ -3,7 +3,12 @@ import { createEventEnvelope, emit } from "../lib/eventBus";
 import { publishStatusUpdate } from "../lib/websocket";
 import { AppError } from "../middleware/envelope";
 import type { OrderDTO, OrderRepository } from "../repositories/orderRepository";
-import type { GiftRepository } from "../repositories/giftRepository";
+import type { GiftDTO, GiftRepository } from "../repositories/giftRepository";
+import type {
+  FulfillmentGiftRepo,
+  FulfillmentTransactionPort,
+} from "../repositories/fulfillmentAtomicityContracts";
+import { getFulfillmentTransactionPort } from "../repositories/drizzle/fulfillmentTransactionPort";
 import type { OrderStatus } from "@snakzap/types";
 
 // ============================================
@@ -39,8 +44,19 @@ const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
 export class FulfillmentService {
   constructor(
     private readonly orderRepo: OrderRepository,
-    private readonly giftRepo?: GiftRepository,
+    _giftRepo?: GiftRepository,
+    private readonly txPort?: FulfillmentTransactionPort,
   ) {}
+
+  /**
+   * Transaction port for atomic status CAS + gift mutations. Injected port is
+   * preferred (tests); otherwise the storage-mode-aware selector is used so the
+   * service never branches on storage mode itself and never constructs a
+   * Drizzle client directly.
+   */
+  private getTransactionPort(): FulfillmentTransactionPort {
+    return this.txPort ?? getFulfillmentTransactionPort();
+  }
 
   /**
    * Vendor cancellation. Allowed only before the order becomes ready for
@@ -61,25 +77,35 @@ export class FulfillmentService {
       throw new AppError("INVALID_TRANSITION", `Order in ${order.status} cannot be cancelled`, 400);
     }
 
-    const updated = await this.orderRepo.updateStatus(orderId, "CANCELLED");
+    // Status CAS is the first mutation; gift unbinds share the same commit
+    // boundary, so a partial cancel (status CANCELLED with gifts still bound,
+    // or vice versa) is not representable in Postgres.
+    const observedStatus = order.status;
+    const updated = await this.getTransactionPort().runInTransaction(
+      async ({ orders, gifts }) => {
+        const cancelled = await orders.transitionStatus(orderId, observedStatus, "CANCELLED");
+        if (!cancelled) return null;
+
+        const giftLines = order.items.filter((i) => i.gift_id);
+        for (const line of giftLines) {
+          // Unbind only when THIS order holds the gift (CAS); a gift already
+          // re-deployed into another order stays put.
+          if (line.gift_id) await gifts.releaseFromOrder(line.gift_id, order.id);
+        }
+        return cancelled;
+      },
+    );
+
     if (!updated) {
-      throw new AppError("UPDATE_FAILED", "Failed to update order status", 500);
+      throw new AppError("INVALID_TRANSITION", "Order is no longer cancellable", 400);
     }
 
     await publishStatusUpdate({
-      order_id: order.id,
-      restaurant_id: order.restaurant_id,
+      order_id: updated.id,
+      restaurant_id: updated.restaurant_id,
       status: "CANCELLED",
     });
 
-    if (this.giftRepo) {
-      const giftLines = order.items.filter((i) => i.gift_id);
-      for (const line of giftLines) {
-        // Unbind only when THIS order holds the gift (CAS); a gift already
-        // re-deployed into another order stays put.
-        if (line.gift_id) await this.giftRepo.releaseFromOrder(line.gift_id, order.id);
-      }
-    }
     return updated;
   }
 
@@ -105,27 +131,26 @@ export class FulfillmentService {
       throw new AppError("INVALID_TRANSITION", "No next state defined", 400);
     }
 
-    const updated = await this.orderRepo.updateStatus(orderId, nextStatus);
-    if (!updated) {
-      throw new AppError("UPDATE_FAILED", "Failed to update order status", 500);
-    }
-
+    // WRITE AUTHORITY = CAS against the observed from-status. PREPARING carries
+    // its OTP in the same single statement (checkout: status + OTP atomically).
+    const observedStatus = order.status;
+    let refreshed: OrderDTO | null;
     if (nextStatus === "PREPARING") {
       const otp = randomInt(1000, 10000).toString().padStart(4, "0");
       const qrToken = randomUUID();
-      await this.orderRepo.setPickupOtp(orderId, otp, qrToken);
+      refreshed = await this.orderRepo.claimPreparingWithOtp(orderId, observedStatus, otp, qrToken);
+    } else {
+      refreshed = await this.orderRepo.transitionStatus(orderId, observedStatus, nextStatus);
     }
-
-    // Re-read to include OTP/QR
-    const refreshed = await this.orderRepo.getById(orderId);
     if (!refreshed) {
-      throw new AppError("UPDATE_FAILED", "Order disappeared after update", 500);
+      // CAS loser: no OTP persisted, no status change, no events.
+      throw await this.advanceConflict(orderId, observedStatus, nextStatus);
     }
 
-    // Emit WebSocket event
+    // Post-commit only (the CAS statement above is the commit boundary).
     await publishStatusUpdate({
-      order_id: order.id,
-      restaurant_id: order.restaurant_id,
+      order_id: refreshed.id,
+      restaurant_id: refreshed.restaurant_id,
       status: nextStatus,
     });
 
@@ -170,6 +195,31 @@ export class FulfillmentService {
     return { order: refreshed, nextStatus, earlyReadyAlerted };
   }
 
+  /** Maps an advance CAS miss to the truthful existing contract where possible. */
+  private async advanceConflict(
+    orderId: string,
+    observedStatus: OrderStatus,
+    nextStatus: string,
+  ): Promise<AppError> {
+    const current = await this.orderRepo.getById(orderId);
+    if (!current) {
+      return new AppError("ORDER_NOT_FOUND", "Order not found", 404);
+    }
+    const allowed = VALID_TRANSITIONS[current.status];
+    if (!allowed || allowed.length === 0) {
+      return new AppError(
+        "INVALID_TRANSITION",
+        `Cannot advance from ${current.status}: terminal state`,
+        400,
+      );
+    }
+    return new AppError(
+      "CONCURRENT_MODIFICATION",
+      `Order status changed from ${observedStatus} while advancing to ${nextStatus}`,
+      409,
+    );
+  }
+
   async checkIn(orderId: string): Promise<OrderDTO> {
     const order = await this.orderRepo.getById(orderId);
     if (!order) {
@@ -202,25 +252,95 @@ export class FulfillmentService {
       throw new AppError("NOT_READY", `Order is ${order.status}, not READY_FOR_PICKUP`, 400);
     }
 
-    // Verify QR token or OTP
+    // Verify QR token or OTP. safeEqual is a cheap early reject only; the
+    // authoritative consumption/transition is the CAS below.
     if (qrToken) {
       const byQr = await this.orderRepo.findByQrToken(qrToken);
       if (!byQr || byQr.id !== orderId) {
         throw new AppError("INVALID_QR", "Invalid QR token", 400);
       }
-    } else if (pickupOtp) {
+
+      // QR resolves the order; the status transition is still a CAS so exactly
+      // one concurrent pickup wins. QR persistence itself is HELD (F5).
+      const result = await this.getTransactionPort().runInTransaction(
+        async ({ orders, gifts }) => {
+          const picked = await orders.transitionStatus(orderId, "READY_FOR_PICKUP", "PICKED_UP");
+          if (!picked) return null;
+          const fulfilled = await this.fulfillGiftsTx(gifts, picked);
+          return { picked, fulfilled };
+        },
+      );
+      if (!result) {
+        throw await this.pickupConflict(orderId);
+      }
+      await this.afterPickup(result.picked, result.fulfilled, order);
+      return result.picked;
+    }
+
+    if (pickupOtp) {
       if (!order.pickup_otp || !safeEqual(order.pickup_otp, pickupOtp)) {
         throw new AppError("INVALID_OTP", "Invalid pickup OTP", 400);
       }
-    } else {
-      throw new AppError("MISSING_VERIFICATION", "Provide either qr_token or pickup_otp", 400);
+
+      // OTP consumption + PICKED_UP + gift fulfillment share ONE PG transaction.
+      const result = await this.getTransactionPort().runInTransaction(
+        async ({ orders, gifts }) => {
+          const picked = await orders.consumePickupOtp(orderId, "READY_FOR_PICKUP", pickupOtp);
+          if (!picked) return null;
+          const fulfilled = await this.fulfillGiftsTx(gifts, picked);
+          return { picked, fulfilled };
+        },
+      );
+      if (!result) {
+        throw await this.pickupConflict(orderId);
+      }
+      await this.afterPickup(result.picked, result.fulfilled, order);
+      return result.picked;
     }
 
-    const updated = await this.orderRepo.updateStatus(orderId, "PICKED_UP");
-    if (!updated) {
-      throw new AppError("PICKUP_FAILED", "Failed to confirm pickup", 500);
-    }
+    throw new AppError("MISSING_VERIFICATION", "Provide either qr_token or pickup_otp", 400);
+  }
 
+  /** Maps a pickup CAS miss to the truthful existing contract. */
+  private async pickupConflict(orderId: string): Promise<AppError> {
+    const current = await this.orderRepo.getById(orderId);
+    if (!current) {
+      return new AppError("ORDER_NOT_FOUND", "Order not found", 404);
+    }
+    if (current.status === "PICKED_UP") {
+      return new AppError("ALREADY_PICKED_UP", "This order has already been picked up", 400);
+    }
+    if (current.status === "READY_FOR_PICKUP") {
+      return new AppError("INVALID_OTP", "Invalid pickup OTP", 400);
+    }
+    return new AppError("NOT_READY", `Order is ${current.status}, not READY_FOR_PICKUP`, 400);
+  }
+
+  /** TX-scoped gift CAS fulfillment; emits nothing (events are post-commit). */
+  private async fulfillGiftsTx(
+    gifts: FulfillmentGiftRepo,
+    order: OrderDTO,
+  ): Promise<GiftDTO[]> {
+    const fulfilled: GiftDTO[] = [];
+    for (const line of order.items) {
+      const giftId = line.gift_id;
+      if (!giftId) continue;
+      // CAS fulfill: only from CLAIMED and only when THIS order is the one the
+      // gift is bound to. A gift bound to another order (or already fulfilled)
+      // returns null, so it is fulfilled and stamped exactly once.
+      const gift = await gifts.markFulfilled(giftId, order.id);
+      if (!gift) continue;
+      fulfilled.push(gift);
+    }
+    return fulfilled;
+  }
+
+  /** Post-commit pickup events/notifications only. */
+  private async afterPickup(
+    order: OrderDTO,
+    fulfilled: GiftDTO[],
+    verificationOrder: OrderDTO,
+  ): Promise<void> {
     await publishStatusUpdate({
       order_id: order.id,
       restaurant_id: order.restaurant_id,
@@ -231,29 +351,14 @@ export class FulfillmentService {
       createEventEnvelope("OrderPickedUp", order.id, {
         order_id: order.id,
         restaurant_id: order.restaurant_id,
-        pickup_otp: order.pickup_otp ?? "000000",
+        pickup_otp: verificationOrder.pickup_otp ?? "000000",
       }),
     );
 
-    await this.fulfillGifts(updated);
-
-    return updated;
-  }
-
-  private async fulfillGifts(order: OrderDTO): Promise<void> {
-    if (!this.giftRepo) return;
-    const giftLines = order.items.filter((i) => i.gift_id);
-    for (const line of giftLines) {
-      const giftId = line.gift_id;
-      if (!giftId) continue;
-      // CAS fulfill: only from CLAIMED and only when THIS order is the one the
-      // gift is bound to. A gift bound to another order (or already fulfilled)
-      // returns null, so it is fulfilled and stamped exactly once.
-      const gift = await this.giftRepo.markFulfilled(giftId, order.id);
-      if (!gift) continue;
+    for (const gift of fulfilled) {
       await emit(
-        createEventEnvelope("GiftFulfilled", giftId, {
-          gift_id: giftId,
+        createEventEnvelope("GiftFulfilled", gift.id, {
+          gift_id: gift.id,
           sender_id: gift.sender_id,
           restaurant_id: gift.restaurant_id,
           order_id: order.id,

@@ -83,6 +83,37 @@ export interface OrderRepository {
     toIso: string,
   ): Promise<OrderDTO[]>;
   updateStatus(orderId: string, status: OrderStatus): Promise<OrderDTO | null>;
+  /**
+   * Atomic compare-and-set status transition. Mutates only while the row is
+   * still in `fromStatus`; returns null on missing row or state mismatch.
+   * The returned row is the transition authority (no blind update+reread).
+   */
+  transitionStatus(
+    orderId: string,
+    fromStatus: OrderStatus,
+    toStatus: OrderStatus,
+  ): Promise<OrderDTO | null>;
+  /**
+   * Atomic CONFIRMED->PREPARING claim that persists the pickup OTP in the same
+   * mutation, so PREPARING can never commit without its OTP. `qrToken` is
+   * carried for Memory parity only; Postgres has no qr_token column (F5 held).
+   */
+  claimPreparingWithOtp(
+    orderId: string,
+    fromStatus: OrderStatus,
+    otp: string,
+    qrToken?: string,
+  ): Promise<OrderDTO | null>;
+  /**
+   * Atomic single-use pickup: consumes the stored OTP and flips the order to
+   * PICKED_UP in one mutation. Returns null when the state no longer matches
+   * or the OTP does not match.
+   */
+  consumePickupOtp(
+    orderId: string,
+    fromStatus: OrderStatus,
+    otp: string,
+  ): Promise<OrderDTO | null>;
   setPickupOtp(orderId: string, otp: string, qrToken: string): Promise<OrderDTO | null>;
   setCheckedIn(orderId: string): Promise<OrderDTO | null>;
   findByQrToken(qrToken: string): Promise<OrderDTO | null>;
@@ -180,6 +211,59 @@ export class MemoryOrderRepository implements OrderRepository {
     const updated: OrderDTO = {
       ...order,
       status,
+      updated_at: new Date().toISOString(),
+    };
+    this.orders.set(orderId, updated);
+    return updated;
+  }
+
+  async transitionStatus(
+    orderId: string,
+    fromStatus: OrderStatus,
+    toStatus: OrderStatus,
+  ): Promise<OrderDTO | null> {
+    const order = this.orders.get(orderId);
+    if (!order || order.status !== fromStatus) return null;
+    const updated: OrderDTO = {
+      ...order,
+      status: toStatus,
+      updated_at: new Date().toISOString(),
+    };
+    this.orders.set(orderId, updated);
+    return updated;
+  }
+
+  async claimPreparingWithOtp(
+    orderId: string,
+    fromStatus: OrderStatus,
+    otp: string,
+    qrToken?: string,
+  ): Promise<OrderDTO | null> {
+    const order = this.orders.get(orderId);
+    if (!order || order.status !== fromStatus) return null;
+    const updated: OrderDTO = {
+      ...order,
+      status: "PREPARING",
+      pickup_otp: otp,
+      qr_token: qrToken ?? null,
+      updated_at: new Date().toISOString(),
+    };
+    this.orders.set(orderId, updated);
+    return updated;
+  }
+
+  async consumePickupOtp(
+    orderId: string,
+    fromStatus: OrderStatus,
+    otp: string,
+  ): Promise<OrderDTO | null> {
+    const order = this.orders.get(orderId);
+    if (!order || order.status !== fromStatus) return null;
+    if (!order.pickup_otp || order.pickup_otp !== otp) return null;
+    const updated: OrderDTO = {
+      ...order,
+      status: "PICKED_UP",
+      pickup_otp: null,
       updated_at: new Date().toISOString(),
     };
     this.orders.set(orderId, updated);
