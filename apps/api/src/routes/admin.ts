@@ -21,6 +21,7 @@ import { getRedis } from "../lib/redis";
 import { config } from "../config";
 import { emit, createEventEnvelope } from "../lib/eventBus";
 import { getCatalogRepository } from "./catalog";
+import { getVendorApprovalTransactionPort } from "../repositories/drizzle/vendorApprovalTransactionPort";
 import type { RestaurantDTO } from "../repositories/catalogRepository";
 import type { KillSwitchDTO } from "../repositories/killSwitchRepository";
 import type { OrderDTO } from "../repositories/orderRepository";
@@ -513,97 +514,130 @@ adminRouter.put(
   asyncHandler(async (req, res) => {
     const id = req.params.id as string;
     const actorId = res.locals.userId as string;
-    const app = await sharedVendorApplicationRepo.getById(id);
-    if (!app) {
-      throw new AppError("NOT_FOUND", "Application not found", 404);
-    }
-    if (app.status !== "PENDING") {
-      throw new AppError("CONFLICT", `Application is already ${app.status.toLowerCase()}`, 409);
-    }
-    const repo = getCatalogRepository();
+    const txPort = getVendorApprovalTransactionPort();
 
-    let restaurant: RestaurantDTO;
-    let chainId: string | null = null;
-    let outletIds: string[] = [];
+    const result = await txPort.runInTransaction(async (repos) => {
+      // Atomic CAS claim: FIRST mutation inside the transaction and the ONLY
+      // APPROVED status write. Rolls back with the transaction on failure.
+      const claimed = await repos.vendorApplication.transitionStatus(
+        id,
+        "PENDING",
+        "APPROVED",
+        actorId,
+      );
+      if (!claimed) {
+        const current = await repos.vendorApplication.getById(id);
+        return { ok: false as const, current };
+      }
 
-    if (app.type === "CHAIN") {
-      const chain = await sharedChainRepo.create(app.name, app.applicant_id);
-      chainId = chain.id;
-      const count = Math.max(1, app.outlet_count);
-      restaurant = await repo.createRestaurant({
-        name: count > 1 ? `${app.name} — Outlet 1` : app.name,
-        gst_number: app.gst_number,
-        fssai_license: app.fssai_license,
-        owner_id: app.applicant_id,
-        commission_rate: app.commission_rate,
-        lat: app.lat,
-        lng: app.lng,
-        pickup_eta_min: 20,
-        chain_id: chain.id,
-      });
-      outletIds.push(restaurant.id);
-      for (let i = 2; i <= count; i += 1) {
-        const outlet = await repo.createRestaurant({
-          name: `${app.name} — Outlet ${i}`,
-          gst_number: app.gst_number,
-          fssai_license: app.fssai_license,
-          owner_id: app.applicant_id,
-          commission_rate: app.commission_rate,
-          lat: app.lat,
-          lng: app.lng,
+      let restaurant: RestaurantDTO;
+      let chainId: string | null = null;
+      const outletIds: string[] = [];
+
+      if (claimed.type === "CHAIN") {
+        const chain = await repos.chain.create(claimed.name, claimed.applicant_id);
+        chainId = chain.id;
+        const count = Math.max(1, claimed.outlet_count);
+        restaurant = await repos.catalog.createRestaurant({
+          name: count > 1 ? `${claimed.name} — Outlet 1` : claimed.name,
+          gst_number: claimed.gst_number,
+          fssai_license: claimed.fssai_license,
+          owner_id: claimed.applicant_id,
+          commission_rate: claimed.commission_rate,
+          lat: claimed.lat,
+          lng: claimed.lng,
           pickup_eta_min: 20,
           chain_id: chain.id,
         });
-        outletIds.push(outlet.id);
+        outletIds.push(restaurant.id);
+        for (let i = 2; i <= count; i += 1) {
+          const outlet = await repos.catalog.createRestaurant({
+            name: `${claimed.name} — Outlet ${i}`,
+            gst_number: claimed.gst_number,
+            fssai_license: claimed.fssai_license,
+            owner_id: claimed.applicant_id,
+            commission_rate: claimed.commission_rate,
+            lat: claimed.lat,
+            lng: claimed.lng,
+            pickup_eta_min: 20,
+            chain_id: chain.id,
+          });
+          outletIds.push(outlet.id);
+        }
+      } else {
+        restaurant = await repos.catalog.createRestaurant({
+          name: claimed.name,
+          gst_number: claimed.gst_number,
+          fssai_license: claimed.fssai_license,
+          owner_id: claimed.applicant_id,
+          commission_rate: claimed.commission_rate,
+          lat: claimed.lat,
+          lng: claimed.lng,
+          pickup_eta_min: 20,
+        });
       }
-    } else {
-      restaurant = await repo.createRestaurant({
-        name: app.name,
-        gst_number: app.gst_number,
-        fssai_license: app.fssai_license,
-        owner_id: app.applicant_id,
-        commission_rate: app.commission_rate,
-        lat: app.lat,
-        lng: app.lng,
-        pickup_eta_min: 20,
+
+      await repos.identity.updateRole(claimed.applicant_id, "VENDOR_OWNER");
+      if (chainId) {
+        await repos.userRole.assign({
+          user_id: claimed.applicant_id,
+          scope_type: "chain",
+          scope_id: chainId,
+          role: "VENDOR_OWNER",
+        });
+      } else {
+        await repos.userRole.assign({
+          user_id: claimed.applicant_id,
+          scope_type: "restaurant",
+          scope_id: restaurant.id,
+          role: "VENDOR_OWNER",
+        });
+      }
+
+      await repos.audit.log(actorId, "vendor_application_approved", {
+        application_id: id,
+        vendor_id: chainId ?? restaurant.id,
+        vendor_name: claimed.name,
+        applicant_id: claimed.applicant_id,
+        type: claimed.type,
+        outlet_count: chainId ? outletIds.length : 1,
       });
+
+      return {
+        ok: true as const,
+        application: claimed,
+        restaurant,
+        chainId,
+        outletIds,
+      };
+    });
+
+    if (!result.ok) {
+      if (!result.current) {
+        throw new AppError("NOT_FOUND", "Application not found", 404);
+      }
+      throw new AppError(
+        "CONFLICT",
+        `Application is already ${result.current.status.toLowerCase()}`,
+        409,
+      );
     }
 
-    await sharedIdentityRepo.updateRole(app.applicant_id, "VENDOR_OWNER");
-    if (chainId) {
-      await sharedUserRoleRepo.assign({
-        user_id: app.applicant_id,
-        scope_type: "chain",
-        scope_id: chainId,
-        role: "VENDOR_OWNER",
-      });
-    } else {
-      await sharedUserRoleRepo.assign({
-        user_id: app.applicant_id,
-        scope_type: "restaurant",
-        scope_id: restaurant.id,
-        role: "VENDOR_OWNER",
-      });
-    }
-    const updated = await sharedVendorApplicationRepo.updateStatus(id, "APPROVED", actorId);
-    await sharedAuditRepo.log(actorId, "vendor_application_approved", {
-      application_id: id,
-      vendor_id: chainId ?? restaurant.id,
-      vendor_name: app.name,
-      applicant_id: app.applicant_id,
-      type: app.type,
-      outlet_count: chainId ? outletIds.length : 1,
-    });
     await emit(
       createEventEnvelope("VendorApplicationApproved", id, {
-        applicant_id: app.applicant_id,
-        name: app.name,
-        phone: app.phone,
-        contact_email: app.contact_email ?? null,
-        vendor_id: chainId ?? restaurant.id,
+        applicant_id: result.application.applicant_id,
+        name: result.application.name,
+        phone: result.application.phone,
+        contact_email: result.application.contact_email ?? null,
+        vendor_id: result.chainId ?? result.restaurant.id,
       }),
     );
-    ok(res, { application: updated, restaurant, chain_id: chainId, outlet_ids: outletIds });
+    ok(res, {
+      application: result.application,
+      restaurant: result.restaurant,
+      chain_id: result.chainId,
+      outlet_ids: result.outletIds,
+    });
   }),
 );
 
@@ -615,30 +649,53 @@ adminRouter.put(
     const actorId = res.locals.userId as string;
     const body = RejectApplicationSchema.safeParse(req.body ?? {});
     const reason = body.success ? body.data.reason ?? null : null;
-    const app = await sharedVendorApplicationRepo.getById(id);
-    if (!app) {
-      throw new AppError("NOT_FOUND", "Application not found", 404);
-    }
-    if (app.status !== "PENDING") {
-      throw new AppError("CONFLICT", `Application is already ${app.status.toLowerCase()}`, 409);
-    }
-    const updated = await sharedVendorApplicationRepo.updateStatus(id, "REJECTED", actorId, reason);
-    await sharedAuditRepo.log(actorId, "vendor_application_rejected", {
-      application_id: id,
-      vendor_name: app.name,
-      applicant_id: app.applicant_id,
-      ...(reason ? { reason } : {}),
+    const txPort = getVendorApprovalTransactionPort();
+
+    const result = await txPort.runInTransaction(async (repos) => {
+      // Atomic CAS claim: FIRST mutation and the ONLY REJECTED status write.
+      const claimed = await repos.vendorApplication.transitionStatus(
+        id,
+        "PENDING",
+        "REJECTED",
+        actorId,
+        reason,
+      );
+      if (!claimed) {
+        const current = await repos.vendorApplication.getById(id);
+        return { ok: false as const, current };
+      }
+
+      await repos.audit.log(actorId, "vendor_application_rejected", {
+        application_id: id,
+        vendor_name: claimed.name,
+        applicant_id: claimed.applicant_id,
+        ...(reason ? { reason } : {}),
+      });
+
+      return { ok: true as const, application: claimed };
     });
+
+    if (!result.ok) {
+      if (!result.current) {
+        throw new AppError("NOT_FOUND", "Application not found", 404);
+      }
+      throw new AppError(
+        "CONFLICT",
+        `Application is already ${result.current.status.toLowerCase()}`,
+        409,
+      );
+    }
+
     await emit(
       createEventEnvelope("VendorApplicationRejected", id, {
-        applicant_id: app.applicant_id,
-        name: app.name,
-        phone: app.phone,
-        contact_email: app.contact_email ?? null,
+        applicant_id: result.application.applicant_id,
+        name: result.application.name,
+        phone: result.application.phone,
+        contact_email: result.application.contact_email ?? null,
         reason: reason ?? null,
       }),
     );
-    ok(res, updated);
+    ok(res, result.application);
   }),
 );
 

@@ -1,7 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { vendor_applications } from "@snakzap/db";
 import type { DrizzleDb } from "../lib/dbType";
+
+/**
+ * Drizzle update chain result exposing `.returning()`. The shared `DrizzleDb`
+ * type only models the awaited form, so correctness paths cast the chain the
+ * same way `drizzleRoleRepository` does for `.returning()` on deletes.
+ */
+type ReturningUpdate = {
+  returning: () => Promise<unknown[]>;
+};
 
 // ============================================
 // Vendor onboarding applications (marketplace)
@@ -74,6 +83,19 @@ export interface VendorApplicationRepository {
   updateStatus(
     id: string,
     status: VendorApplicationStatus,
+    reviewerId: string,
+    rejectionReason?: string | null,
+  ): Promise<VendorApplicationDTO | null>;
+  /**
+   * Atomic compare-and-swap transition (vendor-approval correctness path).
+   * Returns the updated DTO only when the row currently has `fromStatus`,
+   * otherwise `null` (missing row or status mismatch). Distinguishable
+   * zero-row result; no blind update + reread.
+   */
+  transitionStatus(
+    id: string,
+    fromStatus: VendorApplicationStatus,
+    toStatus: VendorApplicationStatus,
     reviewerId: string,
     rejectionReason?: string | null,
   ): Promise<VendorApplicationDTO | null>;
@@ -188,6 +210,27 @@ export class MemoryVendorApplicationRepository implements VendorApplicationRepos
     return updated;
   }
 
+  async transitionStatus(
+    id: string,
+    fromStatus: VendorApplicationStatus,
+    toStatus: VendorApplicationStatus,
+    reviewerId: string,
+    rejectionReason?: string | null,
+  ): Promise<VendorApplicationDTO | null> {
+    const app = this.applications.get(id);
+    if (!app) return null;
+    if (app.status !== fromStatus) return null;
+    const updated: VendorApplicationDTO = {
+      ...app,
+      status: toStatus,
+      reviewer_id: reviewerId,
+      reviewed_at: new Date().toISOString(),
+      rejection_reason: toStatus === "REJECTED" ? rejectionReason ?? null : null,
+    };
+    this.applications.set(id, updated);
+    return updated;
+  }
+
   _seed(app: VendorApplicationDTO): void {
     this.applications.set(app.id, app);
   }
@@ -297,6 +340,33 @@ export class DrizzleVendorApplicationRepository implements VendorApplicationRepo
       })
       .where(eq(vendor_applications.id, id));
     return this.getById(id);
+  }
+
+  async transitionStatus(
+    id: string,
+    fromStatus: VendorApplicationStatus,
+    toStatus: VendorApplicationStatus,
+    reviewerId: string,
+    rejectionReason?: string | null,
+  ): Promise<VendorApplicationDTO | null> {
+    const rows = (await (
+      this.db
+        .update(vendor_applications)
+        .set({
+          status: toStatus,
+          reviewer_id: reviewerId,
+          reviewed_at: new Date(),
+          rejection_reason: toStatus === "REJECTED" ? rejectionReason ?? null : null,
+        })
+        .where(
+          and(
+            eq(vendor_applications.id, id),
+            eq(vendor_applications.status, fromStatus),
+          ),
+        ) as unknown as ReturningUpdate
+    ).returning()) as Record<string, unknown>[];
+    const row = rows[0];
+    return row ? this.mapRow(row) : null;
   }
 
   _seed(_app: VendorApplicationDTO): void {}
