@@ -1,10 +1,11 @@
 import type { Express } from "express";
 import request from "supertest";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { jwtService } from "../services/jwt";
-import { sharedKillSwitchRepo, sharedIdentityRepo, sharedSupportRepo, sharedRoleRepo, sharedOrderRepo, sharedPaymentRepo, sharedLoyaltyRepo } from "../repositories/shared";
+import { sharedKillSwitchRepo, sharedIdentityRepo, sharedSupportRepo, sharedRoleRepo, sharedOrderRepo, sharedPaymentRepo, sharedLoyaltyRepo, sharedAuditRepo } from "../repositories/shared";
 import type { OrderDTO } from "../repositories/orderRepository";
+import type { OrderStatus } from "@snakzap/types";
 import { resetRedisForTests } from "../lib/redis";
 
 function adminToken(role: string) {
@@ -652,6 +653,43 @@ describe("Admin RBAC (A-01, A-11)", () => {
   // ============================================
 
   describe("Order Detail & Override (A-08)", () => {
+    const ORDER_PREFIX = "admin-override-00000000000";
+
+    function seedOrder(id: string, status: OrderStatus): OrderDTO {
+      const now = new Date().toISOString();
+      return sharedOrderRepo._seed({
+        id,
+        user_id: "u-admin-override-0000000001",
+        restaurant_id: "r-admin-override-0000000001",
+        restaurant_name: "Override Cafe",
+        items: [],
+        total_amount: 100,
+        status,
+        commission_rate: 0.1,
+        commission_amount: 10,
+        is_catering: false,
+        headcount: null,
+        pickup_otp: null,
+        qr_token: null,
+        checked_in: false,
+        scheduled_pickup_time: null,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+
+    function override(orderId: string, role: string, payload: Record<string, unknown>) {
+      return request(app)
+        .post(`/api/v1/admin/orders/${orderId}/override-status`)
+        .set("Authorization", adminToken(role))
+        .send(payload);
+    }
+
+    beforeEach(() => {
+      sharedOrderRepo._reset();
+      sharedAuditRepo._reset();
+    });
+
     it("GET /admin/orders/:id returns 404 for unknown order", async () => {
       const res = await request(app)
         .get("/api/v1/admin/orders/nonexistent-order-id")
@@ -660,35 +698,180 @@ describe("Admin RBAC (A-01, A-11)", () => {
     });
 
     it("POST /admin/orders/:id/override-status blocked for ADMIN (not SUPER_ADMIN)", async () => {
-      const res = await request(app)
-        .post("/api/v1/admin/orders/test-order-id/override-status")
-        .set("Authorization", adminToken("ADMIN"))
-        .send({ status: "CANCELLED" });
+      const o = seedOrder(`${ORDER_PREFIX}1`, "CONFIRMED");
+      const res = await override(o.id, "ADMIN", { status: "PREPARING", from_status: "CONFIRMED" });
       expect(res.status).toBe(403);
     });
 
     it("POST /admin/orders/:id/override-status blocked for OPS_AGENT", async () => {
-      const res = await request(app)
-        .post("/api/v1/admin/orders/test-order-id/override-status")
-        .set("Authorization", adminToken("OPS_AGENT"))
-        .send({ status: "CANCELLED" });
+      const o = seedOrder(`${ORDER_PREFIX}2`, "CONFIRMED");
+      const res = await override(o.id, "OPS_AGENT", { status: "PREPARING", from_status: "CONFIRMED" });
       expect(res.status).toBe(403);
     });
 
     it("POST /admin/orders/:id/override-status returns 404 for unknown order (SUPER_ADMIN)", async () => {
-      const res = await request(app)
-        .post("/api/v1/admin/orders/nonexistent-order-id/override-status")
-        .set("Authorization", adminToken("SUPER_ADMIN"))
-        .send({ status: "CANCELLED" });
+      const res = await override("nonexistent-order-id", "SUPER_ADMIN", {
+        status: "CANCELLED",
+        from_status: "CONFIRMED",
+      });
       expect(res.status).toBe(404);
     });
 
     it("POST /admin/orders/:id/override-status returns 400 for invalid status", async () => {
-      const res = await request(app)
-        .post("/api/v1/admin/orders/test-order-id/override-status")
-        .set("Authorization", adminToken("SUPER_ADMIN"))
-        .send({ status: "INVALID" });
+      const o = seedOrder(`${ORDER_PREFIX}3`, "CONFIRMED");
+      const res = await override(o.id, "SUPER_ADMIN", { status: "INVALID", from_status: "CONFIRMED" });
       expect(res.status).toBe(400);
+    });
+
+    // U1 — normal CAS success CONFIRMED -> PREPARING
+    it("U1 default CAS transition succeeds (CONFIRMED -> PREPARING)", async () => {
+      const o = seedOrder(`${ORDER_PREFIX}4`, "CONFIRMED");
+      const res = await override(o.id, "SUPER_ADMIN", { status: "PREPARING", from_status: "CONFIRMED" });
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe("PREPARING");
+      expect((await sharedOrderRepo.getById(o.id))!.status).toBe("PREPARING");
+    });
+
+    // U2 — stale from_status -> 409, no overwrite
+    it("U2 stale from_status is rejected with 409 and no overwrite", async () => {
+      const o = seedOrder(`${ORDER_PREFIX}5`, "CONFIRMED");
+      const res = await override(o.id, "SUPER_ADMIN", { status: "ALMOST_READY", from_status: "PREPARING" });
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe("CONCURRENT_MODIFICATION");
+      expect((await sharedOrderRepo.getById(o.id))!.status).toBe("CONFIRMED");
+    });
+
+    // U3 — simulated concurrent fulfillment wins: CAS null -> 409, no blind fallback
+    it("U3 lost CAS race returns 409 without any blind fallback write", async () => {
+      const o = seedOrder(`${ORDER_PREFIX}6`, "CONFIRMED");
+      const repoHack = sharedOrderRepo as unknown as Record<string, unknown>;
+      const realTransition = sharedOrderRepo.transitionStatus;
+      const realUpdate = sharedOrderRepo.updateStatus;
+      const casMock = vi.fn().mockResolvedValue(null);
+      const blindMock = vi.fn().mockResolvedValue(null);
+      repoHack.transitionStatus = casMock;
+      repoHack.updateStatus = blindMock;
+      try {
+        const res = await override(o.id, "SUPER_ADMIN", { status: "PREPARING", from_status: "CONFIRMED" });
+        expect(res.status).toBe(409);
+        expect(res.body.error.code).toBe("CONCURRENT_MODIFICATION");
+        expect(casMock).toHaveBeenCalledTimes(1);
+        expect(blindMock).not.toHaveBeenCalled();
+      } finally {
+        repoHack.transitionStatus = realTransition;
+        repoHack.updateStatus = realUpdate;
+      }
+      expect((await sharedOrderRepo.getById(o.id))!.status).toBe("CONFIRMED");
+    });
+
+    // U4 — terminal regression rejected (force) and default regression rejected
+    it("U4 terminal regression is rejected even with force", async () => {
+      const o = seedOrder(`${ORDER_PREFIX}7`, "PICKED_UP");
+      const res = await override(o.id, "SUPER_ADMIN", {
+        status: "CONFIRMED",
+        from_status: "PICKED_UP",
+        force: true,
+        reason: "customer complaint",
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("INVALID_TRANSITION");
+      expect((await sharedOrderRepo.getById(o.id))!.status).toBe("PICKED_UP");
+    });
+
+    it("U4b regressive default transition is rejected without force", async () => {
+      const o = seedOrder(`${ORDER_PREFIX}8`, "ALMOST_READY");
+      const res = await override(o.id, "SUPER_ADMIN", { status: "PREPARING", from_status: "ALMOST_READY" });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("INVALID_TRANSITION");
+      expect((await sharedOrderRepo.getById(o.id))!.status).toBe("ALMOST_READY");
+    });
+
+    // U5 — allowed force + reason succeeds
+    it("U5 explicit force with reason permits an out-of-machine transition", async () => {
+      const o = seedOrder(`${ORDER_PREFIX}9`, "CONFIRMED");
+      const res = await override(o.id, "SUPER_ADMIN", {
+        status: "READY_FOR_PICKUP",
+        from_status: "CONFIRMED",
+        force: true,
+        reason: "kitchen expedite",
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe("READY_FOR_PICKUP");
+      expect((await sharedOrderRepo.getById(o.id))!.status).toBe("READY_FOR_PICKUP");
+    });
+
+    // U6 — force without reason -> 400
+    it("U6 force without a reason is rejected with 400", async () => {
+      const o = seedOrder(`${ORDER_PREFIX}a`, "CONFIRMED");
+      const res = await override(o.id, "SUPER_ADMIN", {
+        status: "READY_FOR_PICKUP",
+        from_status: "CONFIRMED",
+        force: true,
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("VALIDATION_ERROR");
+      expect((await sharedOrderRepo.getById(o.id))!.status).toBe("CONFIRMED");
+    });
+
+    // U7 — SETTLED/payment-coupled source/target blocked even with force
+    it("U7 payment-coupled target SETTLED is rejected even with force", async () => {
+      const o = seedOrder(`${ORDER_PREFIX}b`, "CONFIRMED");
+      const res = await override(o.id, "SUPER_ADMIN", {
+        status: "SETTLED",
+        from_status: "CONFIRMED",
+        force: true,
+        reason: "settle early",
+      });
+      expect(res.status).toBe(400);
+      expect((await sharedOrderRepo.getById(o.id))!.status).toBe("CONFIRMED");
+    });
+
+    it("U7b payment-coupled source is rejected even with force", async () => {
+      const o = seedOrder(`${ORDER_PREFIX}c`, "PAYMENT_PENDING");
+      const res = await override(o.id, "SUPER_ADMIN", {
+        status: "CONFIRMED",
+        from_status: "PAYMENT_PENDING",
+        force: true,
+        reason: "skip payment",
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("INVALID_TRANSITION");
+      expect((await sharedOrderRepo.getById(o.id))!.status).toBe("PAYMENT_PENDING");
+    });
+
+    // U8 — audit on success includes fields; CAS miss writes no success audit
+    it("U8 success audit records previous/new/from/force/reason", async () => {
+      const o = seedOrder(`${ORDER_PREFIX}d`, "CONFIRMED");
+      const res = await override(o.id, "SUPER_ADMIN", {
+        status: "ALMOST_READY",
+        from_status: "CONFIRMED",
+        force: true,
+        reason: "manual push",
+      });
+      expect(res.status).toBe(200);
+      const entry = (await sharedAuditRepo.all()).find((e) => e.action === "order_status_overridden");
+      expect(entry).toBeTruthy();
+      expect(entry!.actor_id).toBe("admin-test-id");
+      expect(entry!.metadata).toMatchObject({
+        order_id: o.id,
+        previous_status: "CONFIRMED",
+        from_status: "CONFIRMED",
+        new_status: "ALMOST_READY",
+        force: true,
+        reason: "manual push",
+      });
+    });
+
+    it("U8b CAS miss writes no success override audit", async () => {
+      const o = seedOrder(`${ORDER_PREFIX}e`, "CONFIRMED");
+      const before = (await sharedAuditRepo.all()).length;
+      const res = await override(o.id, "SUPER_ADMIN", {
+        status: "PREPARING",
+        from_status: "ALMOST_READY",
+      });
+      expect(res.status).toBe(409);
+      const after = (await sharedAuditRepo.all()).length;
+      expect(after).toBe(before);
     });
   });
 

@@ -248,10 +248,16 @@ export function fetchOrderDetail(orderId: string): Promise<OrderDetailDTO> {
   return adminFetch<OrderDetailDTO>(`/orders/${orderId}`);
 }
 
-export function overrideOrderStatus(orderId: string, status: string, reason?: string): Promise<OrderDTO> {
+export function overrideOrderStatus(
+  orderId: string,
+  status: string,
+  fromStatus: string,
+  reason?: string,
+  force = false,
+): Promise<OrderDTO> {
   return adminFetch<OrderDTO>(`/orders/${orderId}/override-status`, {
     method: "POST",
-    body: JSON.stringify({ status, reason }),
+    body: JSON.stringify({ status, from_status: fromStatus, force, reason }),
   });
 }
 

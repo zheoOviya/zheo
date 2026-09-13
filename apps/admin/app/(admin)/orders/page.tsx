@@ -35,6 +35,7 @@ export default function OrdersPage() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [overrideStatus, setOverrideStatusState] = useState("");
   const [overrideReason, setOverrideReason] = useState("");
+  const [overrideForce, setOverrideForce] = useState(false);
   const [overriding, setOverriding] = useState(false);
 
   const load = useCallback(() => {
@@ -68,13 +69,21 @@ export default function OrdersPage() {
     }
   }
 
-  async function handleOverride(orderId: string) {
+  async function handleOverride(orderId: string, currentStatus: string) {
     if (!overrideStatus) return;
+    if (overrideForce && !overrideReason) return;
     setOverriding(true);
     try {
-      await overrideOrderStatus(orderId, overrideStatus, overrideReason || undefined);
+      await overrideOrderStatus(
+        orderId,
+        overrideStatus,
+        currentStatus,
+        overrideReason || undefined,
+        overrideForce,
+      );
       setOverrideStatusState("");
       setOverrideReason("");
+      setOverrideForce(false);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Override failed");
@@ -250,7 +259,7 @@ export default function OrdersPage() {
                                 className="rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 outline-none"
                               >
                                 <option value="">-- select --</option>
-                                {["CONFIRMED", "PREPARING", "ALMOST_READY", "READY_FOR_PICKUP", "PICKED_UP", "SETTLED", "CANCELLED"].map((s) => (
+                                {["CONFIRMED", "PREPARING", "ALMOST_READY", "READY_FOR_PICKUP", "PICKED_UP", "CANCELLED"].map((s) => (
                                   <option key={s} value={s}>{s}</option>
                                 ))}
                               </select>
@@ -261,9 +270,17 @@ export default function OrdersPage() {
                                 onChange={(e) => setOverrideReason(e.target.value)}
                                 className="rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 outline-none"
                               />
+                              <label className="flex items-center gap-1 text-xs text-neutral-500">
+                                <input
+                                  type="checkbox"
+                                  checked={overrideForce}
+                                  onChange={(e) => setOverrideForce(e.target.checked)}
+                                />
+                                Force
+                              </label>
                               <button
-                                onClick={() => handleOverride(o.id)}
-                                disabled={!overrideStatus || overriding}
+                                onClick={() => handleOverride(o.id, o.status)}
+                                disabled={!overrideStatus || overriding || (overrideForce && !overrideReason)}
                                 className="rounded-lg bg-accent-500 hover:bg-accent-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors disabled:opacity-50"
                               >
                                 {overriding ? "..." : "Override"}

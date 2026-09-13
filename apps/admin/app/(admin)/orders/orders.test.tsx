@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import OrdersPage from "./page";
 
 afterEach(() => {
@@ -117,5 +117,77 @@ describe("Admin orders page", () => {
 
     fireEvent.click(screen.getByText("Hide"));
     expect(screen.queryByText("Customer:")).toBeNull();
+  });
+
+  async function expandFirstOrder() {
+    render(<OrdersPage />);
+    await screen.findByText("PREPARING");
+    fireEvent.click(screen.getByText("Detail"));
+    await screen.findByText("Customer:");
+  }
+
+  it("F1 does not offer SETTLED as an override target", async () => {
+    await expandFirstOrder();
+    expect(screen.queryByRole("option", { name: "SETTLED" })).toBeNull();
+  });
+
+  it("F2 sends the current order status as from_status", async () => {
+    await expandFirstOrder();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "ALMOST_READY" } });
+    fireEvent.click(screen.getByRole("button", { name: "Override" }));
+    await waitFor(() =>
+      expect(mocks.overrideOrderStatus).toHaveBeenCalledWith(
+        LIVE_ORDERS.orders[0]!.id,
+        "ALMOST_READY",
+        "PREPARING",
+        undefined,
+        false,
+      ),
+    );
+  });
+
+  it("F3 sends force=true when the force control is set", async () => {
+    await expandFirstOrder();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "ALMOST_READY" } });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.change(screen.getByPlaceholderText("Reason..."), { target: { value: "expedite" } });
+    fireEvent.click(screen.getByRole("button", { name: "Override" }));
+    await waitFor(() =>
+      expect(mocks.overrideOrderStatus).toHaveBeenCalledWith(
+        LIVE_ORDERS.orders[0]!.id,
+        "ALMOST_READY",
+        "PREPARING",
+        "expedite",
+        true,
+      ),
+    );
+  });
+
+  it("F4 blocks a force override without a reason", async () => {
+    await expandFirstOrder();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "ALMOST_READY" } });
+    fireEvent.click(screen.getByRole("checkbox"));
+    const btn = screen.getByRole("button", { name: "Override" }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    fireEvent.click(btn);
+    expect(mocks.overrideOrderStatus).not.toHaveBeenCalled();
+  });
+
+  it("F5 surfaces a 409 stale-write error", async () => {
+    mocks.overrideOrderStatus.mockRejectedValueOnce(
+      new Error("Order status has changed; re-read and retry"),
+    );
+    await expandFirstOrder();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "ALMOST_READY" } });
+    fireEvent.click(screen.getByRole("button", { name: "Override" }));
+    expect(await screen.findByText("Order status has changed; re-read and retry")).toBeTruthy();
+  });
+
+  it("F6 normal non-force override keeps force=false", async () => {
+    await expandFirstOrder();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "ALMOST_READY" } });
+    fireEvent.click(screen.getByRole("button", { name: "Override" }));
+    await waitFor(() => expect(mocks.overrideOrderStatus).toHaveBeenCalledTimes(1));
+    expect(mocks.overrideOrderStatus.mock.calls[0]![4]).toBe(false);
   });
 });

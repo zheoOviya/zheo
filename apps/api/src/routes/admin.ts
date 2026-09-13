@@ -27,6 +27,11 @@ import type { KillSwitchDTO } from "../repositories/killSwitchRepository";
 import type { OrderDTO } from "../repositories/orderRepository";
 import { VipSupportService } from "../services/vipSupport";
 import { computeAdminMetrics, istDateKeys, istDayKey } from "../services/adminMetricsReadService";
+import { OrderStatusSchema } from "@snakzap/types";
+import {
+  ADMIN_OVERRIDE_TARGET_STATUSES,
+  evaluateOverridePolicy,
+} from "./adminOrderOverridePolicy";
 
 const adminRouter: Router = Router();
 
@@ -336,20 +341,17 @@ adminRouter.get(
   }),
 );
 
-const VALID_ORDER_STATUSES = [
-  "CONFIRMED",
-  "PREPARING",
-  "ALMOST_READY",
-  "READY_FOR_PICKUP",
-  "PICKED_UP",
-  "SETTLED",
-  "CANCELLED",
-] as const;
-
-const OverrideOrderSchema = z.object({
-  status: z.enum(VALID_ORDER_STATUSES),
-  reason: z.string().min(1).optional(),
-});
+const OverrideOrderSchema = z
+  .object({
+    status: z.enum(ADMIN_OVERRIDE_TARGET_STATUSES),
+    from_status: OrderStatusSchema,
+    force: z.boolean().optional().default(false),
+    reason: z.string().min(1).optional(),
+  })
+  .refine((v) => !v.force || v.reason !== undefined, {
+    message: "reason is required when force is true",
+    path: ["reason"],
+  });
 
 adminRouter.post(
   "/orders/:id/override-status",
@@ -364,20 +366,48 @@ adminRouter.post(
     if (!body.success) {
       throw new AppError("VALIDATION_ERROR", "Invalid override payload", 400, body.error.flatten());
     }
+    const { status, from_status, force } = body.data;
+    const reason = body.data.reason ?? null;
+
     const order = await sharedOrderRepo.getById(id);
     if (!order) {
       throw new AppError("NOT_FOUND", "Order not found", 404);
     }
-    const updated = await sharedOrderRepo.updateStatus(id, body.data.status);
-    if (!updated) {
-      throw new AppError("NOT_FOUND", "Order not found", 404);
+
+    // Optimistic concurrency precondition: the client asserts the state it saw.
+    // A mismatch is a stale write — reject before any mutation or audit.
+    if (order.status !== from_status) {
+      throw new AppError(
+        "CONCURRENT_MODIFICATION",
+        "Order status has changed; re-read and retry",
+        409,
+      );
     }
+
+    const rejection = evaluateOverridePolicy({ from: from_status, to: status, force });
+    if (rejection) {
+      throw new AppError("INVALID_TRANSITION", `Override rejected: ${rejection}`, 400);
+    }
+
+    // Single authoritative CAS write against the precondition. No blind
+    // fallback and no retry: null means a concurrent writer won the race.
+    const updated = await sharedOrderRepo.transitionStatus(id, from_status, status);
+    if (!updated) {
+      throw new AppError(
+        "CONCURRENT_MODIFICATION",
+        "Order status has changed; re-read and retry",
+        409,
+      );
+    }
+
     const actorId = res.locals.userId as string;
     await sharedAuditRepo.log(actorId, "order_status_overridden", {
       order_id: id,
-      previous_status: order.status,
-      new_status: body.data.status,
-      reason: body.data.reason ?? null,
+      previous_status: from_status,
+      from_status,
+      new_status: status,
+      force,
+      reason,
     });
     ok(res, updated);
   }),
