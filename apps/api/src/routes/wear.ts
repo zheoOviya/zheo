@@ -49,7 +49,7 @@ wearRouter.get(
       const restaurant = await catalog.getRestaurantById(o.restaurant_id);
       active.push({
         order_id: o.id,
-        restaurant_name: restaurant?.name ?? "Restaurant",
+        restaurant_name: restaurant?.name ?? null,
         status: o.status,
         pickup_time: o.scheduled_pickup_time ?? null,
       });

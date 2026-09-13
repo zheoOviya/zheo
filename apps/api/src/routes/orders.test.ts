@@ -5,6 +5,8 @@ import { ApiEnvelopeSchema } from "@snakzap/types";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
+import type { OrderDTO } from "../repositories/orderRepository";
+import { SEED_RESTAURANTS } from "../seed/catalogData";
 import { orderRepo } from "./orders";
 
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
@@ -12,6 +14,45 @@ const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001"; // Chicken Biryani R
 const MENU_ITEM_2 = "b0000000-0000-4000-8000-000000000002"; // Veg Biryani Rs 180
 
 const TEST_USER_ID = "u00000000-0000-4000-8000-000000000001";
+
+// A syntactically valid restaurant id that is NOT present in SEED_RESTAURANTS,
+// so the memory catalog lookup misses without weakening the production FK.
+const MISSING_RESTAURANT_ID = "a0000000-0000-4000-8000-0000000000ff";
+
+function seedOrder(
+  id: string,
+  userId: string,
+  restaurantId: string,
+): OrderDTO {
+  return orderRepo._seed({
+    id,
+    user_id: userId,
+    restaurant_id: restaurantId,
+    items: [
+      {
+        id: `itm-${id}`,
+        menu_item_id: MENU_ITEM_1,
+        name: "Chicken Biryani",
+        base_price: 220,
+        quantity: 1,
+        customizations: [],
+        customization_total: 0,
+        item_subtotal: 220,
+        gift_id: null,
+      },
+    ],
+    total_amount: 220,
+    status: "CONFIRMED",
+    commission_rate: 0.08,
+    commission_amount: 0,
+    pickup_otp: null,
+    qr_token: null,
+    checked_in: false,
+    scheduled_pickup_time: null,
+    created_at: "2026-08-01T10:00:00.000Z",
+    updated_at: "2026-08-01T10:00:00.000Z",
+  });
+}
 
 function authToken(userId = TEST_USER_ID): string {
   return jwtService.signAccessToken({
@@ -304,6 +345,51 @@ describe("Ordering routes", () => {
       (o: { created_at: string }) => new Date(o.created_at).getTime(),
     );
     expect(dates[0]).toBeGreaterThanOrEqual(dates[1]);
+  });
+
+  // RESTAURANT-NAME-NULLABLE-A2: truthful enrichment. On a catalog lookup miss
+  // the API must return the key with a null value, never a synthetic identity.
+  it("GET /orders returns null restaurant_name when the restaurant cannot be resolved", async () => {
+    seedOrder("miss-1", TEST_USER_ID, MISSING_RESTAURANT_ID);
+
+    const res = await request(app)
+      .get("/api/v1/orders")
+      .set(authHeaders())
+      .expect(200);
+
+    const order = res.body.data.orders[0];
+    expect(Object.prototype.hasOwnProperty.call(order, "restaurant_name")).toBe(true);
+    expect(order.restaurant_name).toBeNull();
+    expect(order.restaurant_name).not.toBe("Restaurant");
+  });
+
+  it("GET /orders never emits a synthetic 'Restaurant' name", async () => {
+    seedOrder("miss-2", TEST_USER_ID, MISSING_RESTAURANT_ID);
+
+    const res = await request(app)
+      .get("/api/v1/orders")
+      .set(authHeaders())
+      .expect(200);
+
+    expect(JSON.stringify(res.body.data)).not.toContain('"Restaurant"');
+    expect(res.body.data.orders[0].restaurant_name).not.toBe("Restaurant");
+  });
+
+  it("GET /orders returns the current restaurant name (rename semantics)", async () => {
+    const originalName = SEED_RESTAURANTS[0]!.name;
+    try {
+      SEED_RESTAURANTS[0]!.name = "Biryani House Renamed";
+      seedOrder("ren-1", TEST_USER_ID, REST_ID);
+
+      const res = await request(app)
+        .get("/api/v1/orders")
+        .set(authHeaders())
+        .expect(200);
+
+      expect(res.body.data.orders[0].restaurant_name).toBe("Biryani House Renamed");
+    } finally {
+      SEED_RESTAURANTS[0]!.name = originalName;
+    }
   });
 
   it("GET /orders pages forward with cursor", async () => {

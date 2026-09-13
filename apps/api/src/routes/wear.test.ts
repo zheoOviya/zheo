@@ -17,6 +17,9 @@ const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const CHICKEN_BIRYANI = "b0000000-0000-4000-8000-000000000001";
 const USER = "00000000-0000-4000-8000-0000000000f1";
 
+// Not present in SEED_RESTAURANTS -> memory catalog lookup miss.
+const MISSING_RESTAURANT_ID = "a0000000-0000-4000-8000-0000000000ff";
+
 function auth(userId: string) {
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
@@ -32,11 +35,12 @@ function seedOrder(
   id: string,
   status: OrderDTO["status"] = "CONFIRMED",
   scheduledPickupTime: string | null = "2026-08-06T12:30:00+05:30",
+  restaurantId: string = REST_ID,
 ): OrderDTO {
   return sharedOrderRepo._seed({
     id,
     user_id: USER,
-    restaurant_id: REST_ID,
+    restaurant_id: restaurantId,
     items: [
       {
         id: `itm-${id}`,
@@ -110,6 +114,27 @@ describe("W14 Smart Watch API", () => {
       expect(order.pickup_time).toBe("2026-08-06T12:30:00+05:30");
 
       expect(JSON.stringify(d).length).toBeLessThan(500);
+    });
+
+    // RESTAURANT-NAME-NULLABLE-A2: truthful enrichment; lookup miss => null.
+    it("returns null restaurant_name when the restaurant cannot be resolved", async () => {
+      seedOrder(
+        "w-miss",
+        "READY_FOR_PICKUP",
+        "2026-08-06T12:30:00+05:30",
+        MISSING_RESTAURANT_ID,
+      );
+
+      const res = await request(app)
+        .get("/api/v1/wear/orders/active")
+        .set(auth(USER))
+        .expect(200);
+
+      const order = res.body.data.active_orders[0];
+      expect(Object.prototype.hasOwnProperty.call(order, "restaurant_name")).toBe(true);
+      expect(order.restaurant_name).toBeNull();
+      expect(order.restaurant_name).not.toBe("Restaurant");
+      expect(JSON.stringify(res.body.data)).not.toContain('"Restaurant"');
     });
 
     it("excludes terminal orders", async () => {

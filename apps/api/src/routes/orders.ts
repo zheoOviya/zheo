@@ -123,7 +123,7 @@ ordersRouter.get(
           id: o.id,
           user_id: o.user_id,
           restaurant_id: o.restaurant_id,
-          restaurant_name: restaurant?.name ?? "Restaurant",
+          restaurant_name: restaurant?.name ?? null,
           status: o.status,
           total_amount: o.total_amount,
           items: o.items.map((i) => ({
