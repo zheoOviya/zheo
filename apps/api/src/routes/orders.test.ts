@@ -26,6 +26,13 @@ function authHeaders(userId?: string) {
   return { Authorization: `Bearer ${authToken(userId)}` };
 }
 
+// CONSUMER-COMMISSION-EXPOSURE-A2: internal settlement fields must be absent
+// from every consumer order response (not merely null/undefined).
+function expectNoCommissionFields(order: Record<string, unknown>): void {
+  expect(Object.prototype.hasOwnProperty.call(order, "commission_rate")).toBe(false);
+  expect(Object.prototype.hasOwnProperty.call(order, "commission_amount")).toBe(false);
+}
+
 describe("Ordering routes", () => {
   let app: Express;
 
@@ -60,8 +67,7 @@ describe("Ordering routes", () => {
     expect(order.items[0].name).toBe("Chicken Biryani");
     expect(order.items[0].base_price).toBe(220);
     expect(order.total_amount).toBe(242.8);
-    expect(order.commission_rate).toBe(0.08);
-    expect(order.commission_amount).toBe(19.42);
+    expectNoCommissionFields(order);
     expect(order.pickup_otp).toBeNull();
   });
 
@@ -106,7 +112,7 @@ describe("Ordering routes", () => {
     const order = res.body.data;
     expect(order.items[0].customizations[0].price_delta).toBe(25);
     expect(order.total_amount).toBe(454.1);
-    expect(order.commission_rate).toBe(0.08);
+    expectNoCommissionFields(order);
   });
 
   it("POST /orders rejects inactive restaurant", async () => {
@@ -204,7 +210,7 @@ describe("Ordering routes", () => {
     expect(event.payload).toBeTruthy();
   });
 
-  it("low-value order returns commission 0% and total under threshold", async () => {
+  it("low-value order omits commission fields and keeps total under threshold", async () => {
     const GREEN_BOWL = "a0000000-0000-4000-8000-000000000002";
     const PANEER = "b0000000-0000-4000-8000-000000000003";
 
@@ -219,8 +225,7 @@ describe("Ordering routes", () => {
 
     const order = res.body.data;
     expect(order.total_amount).toBe(179.8);
-    expect(order.commission_rate).toBe(0);
-    expect(order.commission_amount).toBe(0);
+    expectNoCommissionFields(order);
   });
 
   it("GET /orders/:id returns the order for the owning user", async () => {
@@ -429,8 +434,84 @@ describe("Ordering routes", () => {
 
     it("still rejects malformed datetime syntax with VALIDATION_ERROR", async () => {
       const res = await placeOrder("not-a-date").expect(400);
-      expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  describe("consumer commission exposure (CONSUMER-COMMISSION-EXPOSURE-A2)", () => {
+    const orderPayload = {
+      restaurant_id: REST_ID,
+      items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+    };
+
+    it("U2 idempotent replay returns 200 with the same order and omits commission fields", async () => {
+      const key = `cc-a2-replay-${Date.now()}`;
+
+      const first = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .set("Idempotency-Key", key)
+        .send(orderPayload)
+        .expect(201);
+      expectNoCommissionFields(first.body.data);
+
+      const replay = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .set("Idempotency-Key", key)
+        .send(orderPayload)
+        .expect(200);
+
+      expect(replay.body.data.id).toBe(first.body.data.id);
+      expectNoCommissionFields(replay.body.data);
     });
+
+    it("U3 GET /orders/:id omits commission fields", async () => {
+      const create = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send(orderPayload)
+        .expect(201);
+
+      const res = await request(app)
+        .get(`/api/v1/orders/${create.body.data.id}`)
+        .set(authHeaders())
+        .expect(200);
+
+      expect(res.body.data.id).toBe(create.body.data.id);
+      expectNoCommissionFields(res.body.data);
+    });
+
+    it("U4 GET /orders list omits commission fields", async () => {
+      await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send(orderPayload)
+        .expect(201);
+
+      const res = await request(app).get("/api/v1/orders").set(authHeaders()).expect(200);
+      expect(res.body.data.orders.length).toBeGreaterThan(0);
+      for (const order of res.body.data.orders as Record<string, unknown>[]) {
+        expectNoCommissionFields(order);
+      }
+    });
+
+    it("U5 POST /orders/reorder omits commission fields", async () => {
+      const create = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send(orderPayload)
+        .expect(201);
+
+      const res = await request(app)
+        .post("/api/v1/orders/reorder")
+        .set(authHeaders())
+        .send({ old_order_id: create.body.data.id })
+        .expect(201);
+
+      expectNoCommissionFields(res.body.data);
+    });
+  });
+
 
     it("keeps ASAP (no schedule) valid", async () => {
       const res = await placeOrder().expect(201);

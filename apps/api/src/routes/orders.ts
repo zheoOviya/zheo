@@ -13,6 +13,28 @@ import {
   OrderingService,
   normalizeIdempotencyKey,
 } from "../services/ordering";
+import type { OrderDTO } from "../repositories/orderRepository";
+
+// ============================================
+// Consumer order response projection
+// (CONSUMER-COMMISSION-EXPOSURE-A2).
+//
+// commission_rate / commission_amount are internal settlement economics
+// (see services/pricing.ts) and must never reach a consumer response. They
+// remain on the domain OrderDTO for vendor/admin/settlement use; the consumer
+// route strips them at the boundary without mutating the source object.
+// ============================================
+export type ConsumerOrderDTO = Omit<
+  OrderDTO,
+  "commission_rate" | "commission_amount"
+>;
+
+export function toConsumerOrder(order: OrderDTO): ConsumerOrderDTO {
+  const safe = { ...order };
+  delete (safe as Partial<OrderDTO>).commission_rate;
+  delete (safe as Partial<OrderDTO>).commission_amount;
+  return safe as ConsumerOrderDTO;
+}
 
 // ============================================
 // Ordering context routes - /api/v1/orders
@@ -136,7 +158,7 @@ ordersRouter.get(
       throw new AppError("FORBIDDEN", "You do not have access to this order", 403);
     }
 
-    ok(res, order);
+    ok(res, toConsumerOrder(order));
   }),
 );
 
@@ -177,7 +199,7 @@ ordersRouter.post(
       idempotencyKey,
     );
 
-    ok(res, order, replayed ? 200 : 201);
+    ok(res, toConsumerOrder(order), replayed ? 200 : 201);
   }),
 );
 
@@ -202,7 +224,7 @@ ordersRouter.post(
 
     const order = await orderingService.reorder(userId, body.data.old_order_id);
 
-    ok(res, order, 201);
+    ok(res, toConsumerOrder(order), 201);
   }),
 );
 

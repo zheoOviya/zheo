@@ -293,8 +293,6 @@ export interface OrderHistoryEntry {
   restaurant_name: string | null;
   status: string;
   total_amount: number;
-  commission_rate: number;
-  commission_amount: number;
   pickup_otp: string | null;
   qr_token: string | null;
   checked_in: boolean;

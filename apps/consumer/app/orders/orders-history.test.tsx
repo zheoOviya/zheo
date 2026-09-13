@@ -59,8 +59,6 @@ const ORDER: OrderHistoryEntry = {
   restaurant_name: "Biryani House",
   status: "CONFIRMED",
   total_amount: 450,
-  commission_rate: 0.1,
-  commission_amount: 45,
   pickup_otp: null,
   qr_token: null,
   checked_in: false,
