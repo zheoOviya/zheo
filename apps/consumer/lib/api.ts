@@ -1,9 +1,11 @@
 import { cached, invalidateByPrefix } from "./cache";
-import type { Restaurant, MenuItem } from "@snakzap/types";
+import type { PublicRestaurant, MenuItem } from "@snakzap/types";
 
 // Catalog entities are defined once in @snakzap/types and re-exported here so
-// existing `@/lib/api` imports keep working unchanged.
-export type { Restaurant, MenuItem };
+// existing `@/lib/api` imports keep working unchanged. PUBLIC-RESTAURANT-DTO-A2:
+// `Restaurant` now aliases the public-safe shape (no internal `commission_rate`).
+export type Restaurant = PublicRestaurant;
+export type { PublicRestaurant, MenuItem };
 
 export interface SearchResult {
   type: "restaurant" | "dish";

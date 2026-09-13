@@ -83,6 +83,31 @@ describe("Discovery routes", () => {
       );
     });
 
+    // PUBLIC-RESTAURANT-DTO-A2 (U2): every embedded restaurant (top picks and
+    // the surprise) must omit the internal `commission_rate` config.
+    it("omits commission_rate from every embedded restaurant", async () => {
+      const res = await request(app)
+        .get("/api/v1/discovery/personalized-homepage")
+        .expect(200);
+
+      const embedded = [
+        ...res.body.data.personalized_restaurants.map(
+          (p: { restaurant: Record<string, unknown> }) => p.restaurant,
+        ),
+        res.body.data.surprise_restaurant.restaurant,
+      ];
+      expect(embedded.length).toBeGreaterThan(0);
+      for (const restaurant of embedded) {
+        expect(
+          Object.prototype.hasOwnProperty.call(restaurant, "commission_rate"),
+        ).toBe(false);
+        expect(
+          Object.prototype.hasOwnProperty.call(restaurant, "commission_amount"),
+        ).toBe(false);
+      }
+      expect(JSON.stringify(res.body)).not.toContain("commission_rate");
+    });
+
     it("a user with 1-2 past orders stays in the rule-based tier", async () => {
       await placeConfirmedOrder(app, EARLY_USER, GREEN_BOWL, SHAWARMA);
 

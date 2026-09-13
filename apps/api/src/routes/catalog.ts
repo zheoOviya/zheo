@@ -1,6 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
-import { RestaurantSchema, MenuItemSchema } from "@snakzap/types";
+import {
+  PublicRestaurantSchema,
+  MenuItemSchema,
+  type PublicRestaurant,
+} from "@snakzap/types";
 import { config } from "../config";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import {
@@ -68,7 +72,9 @@ async function effectiveSpiceToleranceOf(req: {
 }
 
 // Public catalog shapes live in @snakzap/types (single source of truth).
-const RestaurantResponseSchema = RestaurantSchema;
+// PUBLIC-RESTAURANT-DTO-A2: the public restaurant shape omits the internal
+// `commission_rate` config field; it is never serialized to a public response.
+const RestaurantResponseSchema = PublicRestaurantSchema;
 const MenuItemResponseSchema = MenuItemSchema;
 const SearchResultResponseSchema = z.object({
   type: z.enum(["restaurant", "dish"]),
@@ -81,6 +87,28 @@ const RestaurantsResponseSchema = z.array(RestaurantResponseSchema);
 const MenuResponseSchema = z.array(MenuItemResponseSchema);
 const SearchResponseSchema = z.array(SearchResultResponseSchema);
 const FilterResponseSchema = z.array(MenuItemResponseSchema);
+
+/**
+ * PUBLIC-RESTAURANT-DTO-A2: project an internal RestaurantDTO down to the
+ * public restaurant shape. The internal DTO carries `commission_rate`
+ * (non-authoritative vendor config); the public boundary must physically drop
+ * it. Non-mutating, and validated by PublicRestaurantSchema so the internal
+ * field can never ride along.
+ */
+export function toPublicRestaurant(r: RestaurantDTO): PublicRestaurant {
+  return PublicRestaurantSchema.parse({
+    id: r.id,
+    name: r.name,
+    is_active: r.is_active,
+    lat: r.lat,
+    lng: r.lng,
+    pickup_eta_min: r.pickup_eta_min,
+    rating: r.rating,
+    cuisines: r.cuisines,
+    price_for_one: r.price_for_one,
+    cover_image: r.cover_image,
+  });
+}
 
 // Seeded fixture data for the offline/memory repository.
 // Defined once in ../seed/catalogData (shared with the Postgres seed) so the
@@ -120,8 +148,9 @@ catalogRouter.get(
       config.catalog.cacheTtlRestaurants,
       () => repo.getActiveRestaurants(),
     );
-    RestaurantsResponseSchema.parse(data);
-    ok(res, data);
+    const publicData = data.map(toPublicRestaurant);
+    RestaurantsResponseSchema.parse(publicData);
+    ok(res, publicData);
   }),
 );
 

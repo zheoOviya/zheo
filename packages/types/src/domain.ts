@@ -55,6 +55,15 @@ export const RestaurantSchema = z.object({
 });
 export type Restaurant = z.infer<typeof RestaurantSchema>;
 
+// Public-safe restaurant shape returned by unauthenticated catalog/discovery
+// responses (PUBLIC-RESTAURANT-DTO-A2). Additive to RestaurantSchema so the
+// internal config shape (and `commission_rate`) keeps working for
+// vendor/admin/repository use; public responses never serialize commission_rate.
+export const PublicRestaurantSchema = RestaurantSchema.omit({
+  commission_rate: true,
+});
+export type PublicRestaurant = z.infer<typeof PublicRestaurantSchema>;
+
 export const DietaryTagsSchema = z.record(z.boolean());
 export type DietaryTags = z.infer<typeof DietaryTagsSchema>;
 

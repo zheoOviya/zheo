@@ -30,6 +30,18 @@ describe("Catalog context routes", () => {
     expect(names).not.toContain("Closed Kitchen");
   });
 
+  // PUBLIC-RESTAURANT-DTO-A2 (U1): the public list must never serialize the
+  // internal, non-authoritative `commission_rate` config.
+  it("GET /restaurants omits commission_rate from every restaurant", async () => {
+    const res = await request(app).get("/api/v1/restaurants").expect(200);
+    expect(res.body.data.length).toBeGreaterThan(0);
+    for (const r of res.body.data as Record<string, unknown>[]) {
+      expect(Object.prototype.hasOwnProperty.call(r, "commission_rate")).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(r, "commission_amount")).toBe(false);
+    }
+    expect(JSON.stringify(res.body)).not.toContain("commission_rate");
+  });
+
   it("GET /restaurants/:id/menu returns available menu items", async () => {
     const res = await request(app)
       .get(`/api/v1/restaurants/${REST_ID}/menu`)

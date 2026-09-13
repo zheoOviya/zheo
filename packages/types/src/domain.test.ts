@@ -4,6 +4,7 @@ import {
   OrderItemSchema,
   OrderSchema,
   OrderStatusSchema,
+  PublicRestaurantSchema,
   RestaurantSchema,
   UserRoleSchema,
   UserSchema,
@@ -174,6 +175,34 @@ describe("RestaurantSchema", () => {
     expect(r.cuisines).toEqual(["North Indian", "Biryani"]);
     expect(r.rating).toBe(4.5);
     expect(r.cover_image).toBe("https://example.com/cover.jpg");
+  });
+});
+
+describe("PublicRestaurantSchema", () => {
+  const base = {
+    id: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+    name: "Test",
+    is_active: true,
+    lat: 19.076,
+    lng: 72.8777,
+    pickup_eta_min: 25,
+    rating: 4.5,
+    cuisines: ["North Indian", "Biryani"],
+    price_for_one: 300,
+    cover_image: "https://example.com/cover.jpg",
+  };
+
+  it("accepts the public shape and drops commission_rate on parse", () => {
+    const r = PublicRestaurantSchema.parse({ ...base, commission_rate: 0.08 });
+    expect(r).not.toHaveProperty("commission_rate");
+    expect(PublicRestaurantSchema.safeParse(base).success).toBe(true);
+  });
+
+  it("keeps the internal Restaurant schema supporting commission_rate", () => {
+    expect(
+      RestaurantSchema.safeParse({ ...base, commission_rate: 0.08 }).success,
+    ).toBe(true);
+    expect(RestaurantSchema.safeParse(base).success).toBe(false);
   });
 });
 

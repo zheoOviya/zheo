@@ -1,14 +1,17 @@
 import { Router } from "express";
 import { z } from "zod";
+import type { PublicRestaurant } from "@snakzap/types";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { jwtService } from "../services/jwt";
-import { getCatalogRepository } from "./catalog";
+import { getCatalogRepository, toPublicRestaurant } from "./catalog";
 import { sharedOrderRepo } from "../repositories/shared";
 import {
   COLD_START_THRESHOLD,
   DEFAULT_CONSUMER_LOCATION,
   DEFAULT_HEATMAP_MINUTES,
   DiscoveryService,
+  type PersonalizedHomepage,
+  type PersonalizedRestaurant,
 } from "../services/discovery";
 
 // ============================================
@@ -49,6 +52,35 @@ function optionalUserIdOf(req: {
   }
 }
 
+// PUBLIC-RESTAURANT-DTO-A2: every restaurant embedded in the personalized feed
+// (top picks + surprise) is projected to the public shape, dropping the
+// internal `commission_rate` config. Ranking/personalization is untouched.
+type PublicPersonalizedRestaurant = Omit<PersonalizedRestaurant, "restaurant"> & {
+  restaurant: PublicRestaurant;
+};
+
+function toPublicPersonalizedRestaurant(
+  entry: PersonalizedRestaurant,
+): PublicPersonalizedRestaurant {
+  return { ...entry, restaurant: toPublicRestaurant(entry.restaurant) };
+}
+
+function toPublicHomepage(feed: PersonalizedHomepage): {
+  user_profile: PersonalizedHomepage["user_profile"];
+  personalized_restaurants: PublicPersonalizedRestaurant[];
+  surprise_restaurant: PublicPersonalizedRestaurant | null;
+} {
+  return {
+    user_profile: feed.user_profile,
+    personalized_restaurants: feed.personalized_restaurants.map(
+      toPublicPersonalizedRestaurant,
+    ),
+    surprise_restaurant: feed.surprise_restaurant
+      ? toPublicPersonalizedRestaurant(feed.surprise_restaurant)
+      : null,
+  };
+}
+
 export const discoveryRouter: Router = Router();
 
 discoveryRouter.get(
@@ -57,7 +89,7 @@ discoveryRouter.get(
     PersonalizedQuerySchema.safeParse(req.query);
     const userId = optionalUserIdOf(req);
     const feed = await discoveryService.getPersonalizedHomepage(userId);
-    ok(res, feed);
+    ok(res, toPublicHomepage(feed));
   }),
 );
 
