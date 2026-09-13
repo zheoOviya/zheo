@@ -3,6 +3,7 @@ import { getDb } from "../../lib/db";
 import {
   MemoryOrderCheckoutTransactionPort,
   type OrderCheckoutGiftRepo,
+  type OrderCheckoutIdempotencyRepo,
   type OrderCheckoutOrderRepo,
   type OrderCheckoutTransactionPort,
   type OrderCheckoutTxRepos,
@@ -10,6 +11,7 @@ import {
 import { getStorageMode } from "../shared";
 import { DrizzleOrderRepository } from "./drizzleOrderRepository";
 import { DrizzleGiftRepository } from "./drizzleGiftRepository";
+import { DrizzleCheckoutIdempotencyRepository } from "./drizzleCheckoutIdempotencyRepository";
 
 // ============================================
 // Drizzle consumer-checkout transaction port (ORDER-AGGREGATE-IDEMPOTENCY-A3).
@@ -23,6 +25,7 @@ export function buildOrderCheckoutTxRepos(tx: DrizzleDb): OrderCheckoutTxRepos {
   return {
     orders: new DrizzleOrderRepository(tx),
     gifts: new DrizzleGiftRepository(tx),
+    idempotency: new DrizzleCheckoutIdempotencyRepository(tx),
   };
 }
 
@@ -75,19 +78,22 @@ const UNCONFIGURED_GIFT_REPO: OrderCheckoutGiftRepo = {
 export function passthroughOrderCheckoutTransactionPort(
   orders: OrderCheckoutOrderRepo,
   gifts?: OrderCheckoutGiftRepo,
+  idempotency?: OrderCheckoutIdempotencyRepo,
 ): OrderCheckoutTransactionPort {
   return new MemoryOrderCheckoutTransactionPort(() => ({
     orders,
     gifts: gifts ?? UNCONFIGURED_GIFT_REPO,
+    ...(idempotency ? { idempotency } : {}),
   }));
 }
 
 export function selectOrderCheckoutTransactionPort(
   orders: OrderCheckoutOrderRepo,
   gifts?: OrderCheckoutGiftRepo,
+  idempotency?: OrderCheckoutIdempotencyRepo,
 ): OrderCheckoutTransactionPort {
   if (getStorageMode() === "postgres") {
     return new DrizzleOrderCheckoutTransactionPort(getDb());
   }
-  return passthroughOrderCheckoutTransactionPort(orders, gifts);
+  return passthroughOrderCheckoutTransactionPort(orders, gifts, idempotency);
 }

@@ -1,6 +1,10 @@
 import type { OrderStatus } from "@snakzap/types";
 import type { CreateOrderInput, OrderDTO } from "./orderRepository";
 import type { GiftDTO } from "./giftRepository";
+import type {
+  CheckoutIdempotencyClaim,
+  ClaimCheckoutIdempotencyInput,
+} from "./checkoutIdempotencyRepository";
 
 // ============================================
 // Consumer checkout transaction contracts (ORDER-AGGREGATE-IDEMPOTENCY-A3).
@@ -14,6 +18,8 @@ import type { GiftDTO } from "./giftRepository";
 
 export interface OrderCheckoutOrderRepo {
   create(input: CreateOrderInput): Promise<OrderDTO>;
+  /** Replay read of a previously committed order for a replayed claim. */
+  getById(orderId: string): Promise<OrderDTO | null>;
   /**
    * Best-effort retirement of a checkout order whose gift bind lost the CAS.
    * Under Postgres this runs inside the transaction and is undone by the
@@ -21,6 +27,12 @@ export interface OrderCheckoutOrderRepo {
    * leaked DRAFT row, matching the historical compensation behaviour.
    */
   updateStatus(orderId: string, status: OrderStatus): Promise<OrderDTO | null>;
+}
+
+export interface OrderCheckoutIdempotencyRepo {
+  claim(input: ClaimCheckoutIdempotencyInput): Promise<CheckoutIdempotencyClaim>;
+  attachOrder(claimId: string, orderId: string): Promise<void>;
+  releaseClaim(claimId: string): Promise<void>;
 }
 
 export interface OrderCheckoutGiftRepo {
@@ -33,6 +45,11 @@ export interface OrderCheckoutGiftRepo {
 export interface OrderCheckoutTxRepos {
   orders: OrderCheckoutOrderRepo;
   gifts: OrderCheckoutGiftRepo;
+  /**
+   * Optional so legacy callers/tests that never pass an Idempotency-Key keep
+   * working unchanged. Required only when a checkout carries a key.
+   */
+  idempotency?: OrderCheckoutIdempotencyRepo;
 }
 
 export interface OrderCheckoutTransactionPort {

@@ -27,6 +27,7 @@ export {
 export { custom_roles } from "./src/schema/customRoles";
 export { promotions } from "./src/schema/promotions";
 export { pos_order_mappings } from "./src/schema/posOrderMappings";
+export { checkout_idempotency } from "./src/schema/checkoutIdempotency";
 export type { GroupCartContributionItem } from "./src/schema/groupCarts";
 export {
   diningSessionStatusEnum,

@@ -3,8 +3,16 @@ import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
 import { getCatalogRepository } from "./catalog";
-import { sharedOrderRepo, sharedGiftRepo } from "../repositories/shared";
-import { OrderingService } from "../services/ordering";
+import {
+  sharedOrderRepo,
+  sharedGiftRepo,
+  sharedCheckoutIdempotencyRepo,
+} from "../repositories/shared";
+import {
+  IDEMPOTENCY_KEY_HEADER,
+  OrderingService,
+  normalizeIdempotencyKey,
+} from "../services/ordering";
 
 // ============================================
 // Ordering context routes - /api/v1/orders
@@ -37,7 +45,13 @@ const ReorderSchema = z.object({
   old_order_id: z.string().uuid(),
 });
 
-const orderingService = new OrderingService(sharedOrderRepo, getCatalogRepository(), sharedGiftRepo);
+const orderingService = new OrderingService(
+  sharedOrderRepo,
+  getCatalogRepository(),
+  sharedGiftRepo,
+  undefined,
+  sharedCheckoutIdempotencyRepo,
+);
 
 export const ordersRouter: Router = Router();
 
@@ -145,15 +159,25 @@ ordersRouter.post(
       throw new AppError("UNAUTHORIZED", "User identity missing from token", 401);
     }
 
-    const order = await orderingService.placeOrder({
-      user_id: userId,
-      restaurant_id: body.data.restaurant_id,
-      items: body.data.items,
-      scheduled_pickup_time: body.data.scheduled_pickup_time,
-      scheduling_policy: "pickup-slot",
-    });
+    // Consumer checkout only: an optional opaque Idempotency-Key makes the
+    // create durable. Missing header preserves legacy behavior; a replayed key
+    // returns the original order (HTTP 200) instead of creating a duplicate.
+    const idempotencyKey = normalizeIdempotencyKey(
+      req.header(IDEMPOTENCY_KEY_HEADER) ?? undefined,
+    );
 
-    ok(res, order, 201);
+    const { order, replayed } = await orderingService.placeOrderIdempotent(
+      {
+        user_id: userId,
+        restaurant_id: body.data.restaurant_id,
+        items: body.data.items,
+        scheduled_pickup_time: body.data.scheduled_pickup_time,
+        scheduling_policy: "pickup-slot",
+      },
+      idempotencyKey,
+    );
+
+    ok(res, order, replayed ? 200 : 201);
   }),
 );
 

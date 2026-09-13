@@ -14,6 +14,7 @@ import type { VendorApplicationRepository } from "./vendorApplicationRepository"
 import type { NotificationRepository } from "./notificationRepository";
 import type { UserRoleRepository } from "./userRoleRepository";
 import type { GiftRepository } from "./giftRepository";
+import type { CheckoutIdempotencyRepository } from "./checkoutIdempotencyRepository";
 
 import { MemoryOrderRepository } from "./orderRepository";
 import { MemoryPaymentRepository } from "./paymentRepository";
@@ -31,6 +32,7 @@ import { MemoryVendorApplicationRepository } from "./vendorApplicationRepository
 import { MemoryNotificationRepository } from "./notificationRepository";
 import { MemoryUserRoleRepository } from "./userRoleRepository";
 import { MemoryGiftRepository } from "./giftRepository";
+import { MemoryCheckoutIdempotencyRepository } from "./checkoutIdempotencyRepository";
 
 import { DrizzleOrderRepository } from "./drizzle/drizzleOrderRepository";
 import { DrizzlePaymentRepository } from "./drizzle/drizzlePaymentRepository";
@@ -47,6 +49,7 @@ import { DrizzleGroupCartRepository } from "./drizzle/drizzleGroupCartRepository
 import { DrizzleRoleRepository } from "./drizzle/drizzleRoleRepository";
 import { DrizzlePromotionRepository } from "./drizzle/drizzlePromotionRepository";
 import { DrizzlePosOrderRepository } from "./drizzle/drizzlePosOrderRepository";
+import { DrizzleCheckoutIdempotencyRepository } from "./drizzle/drizzleCheckoutIdempotencyRepository";
 
 import { getDb } from "../lib/db";
 
@@ -96,6 +99,7 @@ interface RepoSet {
   sharedNotificationRepo: NotificationRepository & { _reset(): void };
   sharedUserRoleRepo: UserRoleRepository & { _reset(): void; _seed(dto: unknown): void };
   sharedGiftRepo: GiftRepository & { _reset(): void };
+  sharedCheckoutIdempotencyRepo: CheckoutIdempotencyRepository;
 }
 
 let _repos: RepoSet | null = null;
@@ -132,6 +136,7 @@ function getRepos(): RepoSet {
       sharedNotificationRepo: new MemoryNotificationRepository(),
       sharedUserRoleRepo: new MemoryUserRoleRepository(),
       sharedGiftRepo: new MemoryGiftRepository(),
+      sharedCheckoutIdempotencyRepo: new MemoryCheckoutIdempotencyRepository(),
     };
   } else {
     const db = getDb();
@@ -153,6 +158,7 @@ function getRepos(): RepoSet {
         sharedNotificationRepo: new DrizzleNotificationRepository(db) as unknown as RepoSet["sharedNotificationRepo"],
         sharedUserRoleRepo: new DrizzleUserRoleRepository(db) as unknown as RepoSet["sharedUserRoleRepo"],
         sharedGiftRepo: new DrizzleGiftRepository(db) as unknown as RepoSet["sharedGiftRepo"],
+        sharedCheckoutIdempotencyRepo: new DrizzleCheckoutIdempotencyRepository(db),
       };
     } catch {
       _repos = {
@@ -172,6 +178,7 @@ function getRepos(): RepoSet {
         sharedNotificationRepo: new MemoryNotificationRepository(),
         sharedUserRoleRepo: new MemoryUserRoleRepository(),
         sharedGiftRepo: new MemoryGiftRepository(),
+        sharedCheckoutIdempotencyRepo: new MemoryCheckoutIdempotencyRepository(),
       };
     }
   }
@@ -239,3 +246,6 @@ export const sharedVendorApplicationRepo = createLazyRepo("sharedVendorApplicati
 export const sharedNotificationRepo = createLazyRepo("sharedNotificationRepo");
 export const sharedUserRoleRepo = createLazyRepo("sharedUserRoleRepo");
 export const sharedGiftRepo = createLazyRepo("sharedGiftRepo");
+export const sharedCheckoutIdempotencyRepo = createLazyRepo(
+  "sharedCheckoutIdempotencyRepo",
+);
