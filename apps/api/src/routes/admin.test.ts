@@ -7,6 +7,7 @@ import { sharedKillSwitchRepo, sharedIdentityRepo, sharedSupportRepo, sharedRole
 import type { OrderDTO } from "../repositories/orderRepository";
 import type { OrderStatus } from "@snakzap/types";
 import { resetRedisForTests } from "../lib/redis";
+import { computeSettlementLine } from "../services/settlement";
 
 function adminToken(role: string) {
   return `Bearer ${jwtService.signAccessToken({
@@ -1315,6 +1316,65 @@ describe("Admin RBAC (A-01, A-11)", () => {
       expect(d.restaurant.name).toBe("Biryani House");
       expect(d.items[0].name).toBe("Burger");
       expect(d.commission_amount).toBe(20);
+    });
+  });
+
+  // ============================================
+  // COMMISSION-SNAPSHOT-MIGRATION-A3: U7
+  // Admin commission must equal settlement commission for the same order,
+  // both sourced from the persisted snapshot (a non-canonical value proves
+  // neither recomputes).
+  // ============================================
+
+  describe("Commission truth (COMMISSION-SNAPSHOT-MIGRATION-A3)", () => {
+    const ORDER_ID = "cs-a3-0000000000000000001";
+    const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
+
+    beforeAll(async () => {
+      sharedOrderRepo._reset();
+      const created = new Date().toISOString();
+      sharedOrderRepo._seed({
+        id: ORDER_ID,
+        user_id: "cs-a3-user-000000000001",
+        restaurant_id: RESTAURANT_ID,
+        restaurant_name: "Test Cafe",
+        items: [],
+        total_amount: 500,
+        status: "SETTLED",
+        // Deliberately non-canonical snapshot: canonical would be 0.08 / 40.
+        commission_rate: 0.05,
+        commission_amount: 20,
+        is_catering: false,
+        headcount: null,
+        pickup_otp: null,
+        qr_token: null,
+        checked_in: false,
+        scheduled_pickup_time: null,
+        created_at: created,
+        updated_at: created,
+      });
+    });
+
+    it("U7: admin revenue + vendor metrics commission equal settlement commission", async () => {
+      const revenueRes = await request(app)
+        .get("/api/v1/admin/revenue")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(revenueRes.status).toBe(200);
+
+      const vendorRes = await request(app)
+        .get("/api/v1/admin/vendors/metrics")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(vendorRes.status).toBe(200);
+
+      const seeded = (await sharedOrderRepo.getById(ORDER_ID))!;
+      const settlementCommission = computeSettlementLine(seeded).commission_amount;
+      const vendorRow = (vendorRes.body.data as { id: string; commission: number }[]).find(
+        (r) => r.id === RESTAURANT_ID,
+      );
+
+      expect(settlementCommission).toBe(20);
+      expect(revenueRes.body.data.totals.commission).toBe(20);
+      expect(vendorRow?.commission).toBe(20);
     });
   });
 });

@@ -54,6 +54,23 @@ function round(amount: number): number {
   return Math.round(amount * 100) / 100;
 }
 
+/**
+ * Canonical flat-threshold commission rule (COMMISSION-SOURCE-TRUTH-A2).
+ * This is the ONE authority for commission on money math. The vendor-scoped
+ * `restaurants.commission_rate` is non-authoritative display/config debt and
+ * is never read here.
+ */
+export function computeCommission(totalAmount: number): {
+  rate: number;
+  amount: number;
+} {
+  const rate =
+    totalAmount > PRICING.commissionThreshold
+      ? PRICING.commissionRateHigh
+      : PRICING.commissionRateLow;
+  return { rate, amount: round(totalAmount * rate) };
+}
+
 export function calculateItemBreakdown(item: OrderItemInput): ItemBreakdown {
   const customizationTotal = item.customizations.reduce(
     (sum, c) => sum + c.price_delta,
@@ -85,11 +102,8 @@ export function calculatePriceBreakdown(items: OrderItemInput[]): PriceBreakdown
 
   const totalAmount = round(foodSubtotal + packagingFee + gstFood + gstPackaging);
 
-  const commissionRate =
-    totalAmount > PRICING.commissionThreshold
-      ? PRICING.commissionRateHigh
-      : PRICING.commissionRateLow;
-  const commissionAmount = round(totalAmount * commissionRate);
+  const { rate: commissionRate, amount: commissionAmount } =
+    computeCommission(totalAmount);
 
   return {
     items: breakdowns,

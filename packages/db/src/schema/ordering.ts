@@ -43,6 +43,13 @@ export const orders = pgTable(
       .notNull()
       .references(() => restaurants.id),
     total_amount: decimal("total_amount", { precision: 10, scale: 2 }).notNull(),
+    // COMMISSION-SNAPSHOT-MIGRATION-A3: immutable per-order commission snapshot
+    // computed from the canonical flat-threshold policy at create time. NULL for
+    // legacy rows created before the snapshot era (recomputed on read, never
+    // rewritten). Both are set together; restaurants.commission_rate is NOT a
+    // money input.
+    commission_rate: decimal("commission_rate", { precision: 5, scale: 2 }),
+    commission_amount: decimal("commission_amount", { precision: 10, scale: 2 }),
     status: orderStatusEnum("status").notNull().default("DRAFT"),
     // W12 (Phase 4): bulk B2B catering order flags. Standard orders default
     // is_catering=false and headcount=NULL.

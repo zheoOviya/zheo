@@ -1,6 +1,10 @@
-import { PRICING } from "./pricing";
+import { PRICING, computeCommission } from "./pricing";
 import { renderSettlementPdf } from "./pdfGenerator";
 import type { OrderDTO, OrderItemDTO, OrderRepository } from "../repositories/orderRepository";
+
+// Re-exported so the canonical flat-threshold rule has a single definition
+// (pricing.ts) while existing settlement consumers/tests keep their import.
+export { computeCommission };
 
 // ============================================
 // Settlement Engine (PRD V11 Daily Settlements)
@@ -55,17 +59,6 @@ export function computePackagingFee(items: OrderItemDTO[]): number {
   return round(itemCount * PRICING.packagingFeePerItem);
 }
 
-export function computeCommission(totalAmount: number): {
-  rate: number;
-  amount: number;
-} {
-  const rate =
-    totalAmount > PRICING.commissionThreshold
-      ? PRICING.commissionRateHigh
-      : PRICING.commissionRateLow;
-  return { rate, amount: round(totalAmount * rate) };
-}
-
 export function computeTaxes(items: OrderItemDTO[]): {
   gst_food: number;
   gst_packaging: number;
@@ -87,9 +80,12 @@ export function computeSettlementLine(order: OrderDTO): SettlementLine {
   const foodSubtotal = computeFoodSubtotal(order.items);
   const packagingFee = computePackagingFee(order.items);
   const { gst_food, gst_packaging, taxes } = computeTaxes(order.items);
-  const { rate, amount: commissionAmount } = computeCommission(
-    order.total_amount,
-  );
+  // Immutable per-order commission snapshot (COMMISSION-SNAPSHOT-MIGRATION-A3).
+  // Snapshot-era orders carry the exact persisted rate/amount; legacy NULL rows
+  // are resolved to the canonical flat-threshold rule at the repository read
+  // boundary, so this never recomputes snapshot-era economics.
+  const commissionRate = order.commission_rate;
+  const commissionAmount = round(order.commission_amount);
 
   return {
     order_id: order.id,
@@ -99,7 +95,7 @@ export function computeSettlementLine(order: OrderDTO): SettlementLine {
     packaging_fee: packagingFee,
     gst_food,
     gst_packaging,
-    commission_rate: rate,
+    commission_rate: commissionRate,
     commission_amount: commissionAmount,
     taxes,
     payout: round(order.total_amount - commissionAmount - taxes),

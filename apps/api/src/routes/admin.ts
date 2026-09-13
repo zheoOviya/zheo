@@ -750,7 +750,7 @@ adminRouter.get(
         const vendorRevenue = revenueOrders.filter((o) => o.restaurant_id === r.id);
         const revenue = vendorRevenue.reduce((sum, o) => sum + Number(o.total_amount), 0);
         const commission = vendorRevenue.reduce(
-          (sum, o) => sum + Number(o.commission_amount ?? 0),
+          (sum, o) => sum + Number(o.commission_amount),
           0,
         );
         const activeOrders = vendorOrders.filter((o) =>
@@ -815,7 +815,7 @@ adminRouter.get(
       if (buckets[key]) {
         buckets[key].revenue += Number(o.total_amount);
         buckets[key].orders += 1;
-        buckets[key].commission += Number(o.commission_amount ?? 0);
+        buckets[key].commission += Number(o.commission_amount);
       }
     }
     const series = Object.values(buckets).sort((a, b) => a.date.localeCompare(b.date));

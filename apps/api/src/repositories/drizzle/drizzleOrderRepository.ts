@@ -11,6 +11,7 @@ import type {
   CreateOrderInput,
 } from "../orderRepository";
 import type { PriceBreakdown } from "../../services/pricing";
+import { computeCommission } from "../../services/pricing";
 
 // ============================================
 // Ordering context repository (Drizzle/Postgres)
@@ -25,23 +26,44 @@ type ReturningUpdate = {
   returning: () => Promise<unknown[]>;
 };
 
+/**
+ * Commission read resolution (COMMISSION-SNAPSHOT-MIGRATION-A3).
+ * Snapshot-era rows carry both persisted columns -> return them verbatim.
+ * Legacy rows (both NULL) -> canonical flat-threshold recompute from the
+ * persisted total_amount. Reading NEVER mutates the row.
+ */
+export function resolveCommission(
+  rawRate: unknown,
+  rawAmount: unknown,
+  totalAmount: number,
+): { rate: number; amount: number } {
+  const hasSnapshot =
+    rawRate !== null && rawRate !== undefined && rawAmount !== null && rawAmount !== undefined;
+  if (hasSnapshot) {
+    return { rate: Number(rawRate), amount: Number(rawAmount) };
+  }
+  return computeCommission(totalAmount);
+}
+
 function mapOrderRow(
   row: Record<string, unknown>,
   items: OrderItemDTO[],
 ): OrderDTO {
+  const totalAmount = Number(row.total_amount);
+  const commission = resolveCommission(
+    (row as Record<string, unknown>).commission_rate,
+    (row as Record<string, unknown>).commission_amount,
+    totalAmount,
+  );
   return {
     id: row.id as string,
     user_id: row.user_id as string,
     restaurant_id: row.restaurant_id as string,
     items,
-    total_amount: Number(row.total_amount),
+    total_amount: totalAmount,
     status: row.status as OrderStatus,
-    commission_rate: Number(
-      (row as Record<string, unknown>).commission_rate ?? 0.08,
-    ),
-    commission_amount: Number(
-      (row as Record<string, unknown>).commission_amount ?? 0,
-    ),
+    commission_rate: commission.rate,
+    commission_amount: commission.amount,
     is_catering: (row.is_catering as boolean) ?? false,
     headcount: (row.headcount as number | null) ?? null,
     pickup_otp: (row.pickup_otp as string) ?? null,
@@ -88,6 +110,9 @@ export class DrizzleOrderRepository implements OrderRepository {
       user_id: input.user_id,
       restaurant_id: input.restaurant_id,
       total_amount: String(input.breakdown.total_amount),
+      // Immutable commission snapshot for the new order (canonical PRICING).
+      commission_rate: String(input.breakdown.commission_rate),
+      commission_amount: String(input.breakdown.commission_amount),
       status: "DRAFT",
       is_catering: input.is_catering ?? false,
       headcount: input.headcount ?? null,
@@ -405,6 +430,9 @@ export class DrizzleOrderRepository implements OrderRepository {
       .update(orders)
       .set({
         total_amount: String(breakdown.total_amount),
+        // Re-snapshot commission for the recomputed aggregate (group cart).
+        commission_rate: String(breakdown.commission_rate),
+        commission_amount: String(breakdown.commission_amount),
         updated_at: new Date(),
       })
       .where(eq(orders.id, orderId));

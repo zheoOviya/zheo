@@ -36,6 +36,7 @@ function order(
   items: OrderItemDTO[],
   createdAt: string,
 ): OrderDTO {
+  const snapshot = computeCommission(totalAmount);
   return {
     id,
     user_id: "u00000000-0000-4000-8000-000000000001",
@@ -43,8 +44,8 @@ function order(
     items,
     total_amount: totalAmount,
     status: "PICKED_UP",
-    commission_rate: 0.08,
-    commission_amount: 0,
+    commission_rate: snapshot.rate,
+    commission_amount: snapshot.amount,
     pickup_otp: null,
     qr_token: null,
     checked_in: false,
