@@ -154,7 +154,16 @@ export class CateringService {
     // Simulated separate catering-confirmation flow: the B2B desk approves
     // the quote, so the order moves DRAFT -> CONFIRMED outside the consumer
     // fulfillment state machine (which deliberately has no DRAFT transition).
-    const confirmed = await this.orderRepo.updateStatus(order.id, "CONFIRMED");
+    // The confirm is a from-state CAS: it only commits while the row is still
+    // DRAFT, so it can never blind-overwrite a terminal state (CANCELLED/
+    // PICKED_UP/...). Create and confirm stay SEPARATE commits in this stream,
+    // so the DRAFT crash window between them is unchanged and explicitly
+    // deferred (no atomicity is claimed here).
+    const confirmed = await this.orderRepo.transitionStatus(
+      order.id,
+      "DRAFT",
+      "CONFIRMED",
+    );
     if (!confirmed) {
       throw new AppError(
         "CATERING_CONFIRM_FAILED",
