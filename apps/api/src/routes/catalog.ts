@@ -172,15 +172,18 @@ catalogRouter.get(
     const tolerance = await effectiveSpiceToleranceOf(req);
     const filtered = tolerance ? data.filter((m) => m.spice_level <= tolerance) : data;
 
-    MenuResponseSchema.parse(filtered);
+    // MENU-ROUTE-PROJECTION-A2: return the MenuItemSchema parse result (not the
+    // raw repository DTO) so internal fields like description/pos_item_id/
+    // created_at never cross the public boundary.
+    const projected = MenuResponseSchema.parse(filtered);
     logger.info({
       message: "menu_fetched",
       restaurant_id: params.data.id,
       spice_tolerance: tolerance ?? null,
-      filtered: filtered.length,
+      filtered: projected.length,
       correlation_id: res.locals.correlationId,
     });
-    ok(res, filtered);
+    ok(res, projected);
   }),
 );
 
@@ -244,13 +247,15 @@ catalogRouter.get(
       config.catalog.cacheTtlFilter,
       () => repo.filterByDietary(tags),
     );
-    FilterResponseSchema.parse(data);
+    // MENU-ROUTE-PROJECTION-A2: return the MenuItemSchema parse result (not the
+    // raw repository DTO) so internal fields never cross the public boundary.
+    const projected = FilterResponseSchema.parse(data);
     logger.info({
       message: "dietary_filtered",
       tags,
-      results: data.length,
+      results: projected.length,
       correlation_id: res.locals.correlationId,
     });
-    ok(res, data);
+    ok(res, projected);
   }),
 );

@@ -10,6 +10,28 @@ import { dietaryFilterCondition } from "../repositories/catalogRepository";
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const GREEN_BOWL_ID = "a0000000-0000-4000-8000-000000000002";
 
+// MENU-ROUTE-PROJECTION-A2: the exact public MenuItemSchema key set.
+const PUBLIC_MENU_KEYS = [
+  "id",
+  "restaurant_id",
+  "name",
+  "price",
+  "dietary_tags",
+  "customizations",
+  "image_url",
+  "is_available",
+  "spice_level",
+].sort();
+
+function expectPublicMenuKeys(items: Record<string, unknown>[]) {
+  for (const item of items) {
+    expect(Object.keys(item).sort()).toEqual(PUBLIC_MENU_KEYS);
+    expect(Object.prototype.hasOwnProperty.call(item, "description")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(item, "pos_item_id")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(item, "created_at")).toBe(false);
+  }
+}
+
 describe("Catalog context routes", () => {
   let app: Express;
 
@@ -56,6 +78,26 @@ describe("Catalog context routes", () => {
       .expect(400);
     expect(res.body.success).toBe(false);
     expect(res.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  // MENU-ROUTE-PROJECTION-A2 (U1,U3,U4,U5,U6): the menu endpoint returns the
+  // parsed public MenuItem projection, not the raw repository DTO.
+  it("GET /restaurants/:id/menu returns exactly the public MenuItem contract", async () => {
+    const res = await request(app)
+      .get(`/api/v1/restaurants/${REST_ID}/menu`)
+      .expect(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.length).toBeGreaterThan(0);
+    expectPublicMenuKeys(res.body.data);
+    // Public fields are retained with real values.
+    const names = res.body.data.map((m: { name: string }) => m.name);
+    expect(names).toContain("Chicken Biryani");
+    const biryani = res.body.data.find(
+      (m: { name: string }) => m.name === "Chicken Biryani",
+    );
+    expect(biryani.price).toBe(220);
+    expect(biryani.restaurant_id).toBe(REST_ID);
+    expect(JSON.stringify(res.body)).not.toContain("pos_item_id");
   });
 
   it("GET /search/autocomplete matches restaurants and dishes", async () => {
@@ -110,6 +152,23 @@ describe("Catalog context routes", () => {
         .get("/api/v1/menu-items/filter?dietary=GLUTEN")
         .expect(400);
       expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    // MENU-ROUTE-PROJECTION-A2 (U2,U3,U4,U5,U6): the filter endpoint returns
+    // the parsed public MenuItem projection, not the raw repository DTO.
+    it("returns exactly the public MenuItem contract", async () => {
+      const res = await request(app)
+        .get("/api/v1/menu-items/filter?dietary=VEG")
+        .expect(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.length).toBeGreaterThan(0);
+      expectPublicMenuKeys(res.body.data);
+      const veg = res.body.data.find(
+        (m: { name: string }) => m.name === "Veg Biryani",
+      );
+      expect(veg.price).toBe(180);
+      expect(veg.is_available).toBe(true);
+      expect(JSON.stringify(res.body)).not.toContain("pos_item_id");
     });
 
     it("builds a query using the GIN @> operator on dietary_tags", () => {
