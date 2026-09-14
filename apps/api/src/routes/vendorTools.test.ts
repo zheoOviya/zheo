@@ -84,7 +84,7 @@ describe("Vendor Tools suite", () => {
 
   // ---- V12: GST Export ------------------------------------------------------
 
-  it("GET /gst-export streams a GSTR-1 CSV for the month", async () => {
+  it("GET /gst-export streams the GST export CSV for the month", async () => {
     seedOrder("o-in-month-1", "2026-08-04T10:00:00.000Z", "PICKED_UP", 220);
     seedOrder("o-in-month-2", "2026-08-15T12:00:00.000Z", "SETTLED", 440);
     seedOrder("o-cooking", "2026-08-16T10:00:00.000Z", "PREPARING", 500);
@@ -98,21 +98,22 @@ describe("Vendor Tools suite", () => {
 
     expect(res.headers["content-type"]).toContain("text/csv");
     expect(res.headers["content-disposition"]).toContain(
-      'filename="gstr1-2026-08.csv"',
+      'filename="gst-export-2026-08.csv"',
     );
 
     const lines = res.text.trim().split("\r\n");
     expect(lines[0]).toBe(
-      "Invoice No,GSTIN,Date,Taxable Value,CGST 2.5%,SGST 2.5%",
+      "Order Reference,GSTIN,Date,Taxable Value,CGST 2.5%,SGST 2.5%",
     );
     expect(lines).toHaveLength(3); // header + 2 eligible orders
 
     // 220 * 0.025 = 5.50; 440 * 0.025 = 11.00
+    // Order Reference is the stable persisted order id (non-statutory).
     expect(lines[1]).toBe(
-      `INV-2026-08-0001,${GSTIN},2026-08-04,220.00,5.50,5.50`,
+      `o-in-month-1,${GSTIN},2026-08-04,220.00,5.50,5.50`,
     );
     expect(lines[2]).toBe(
-      `INV-2026-08-0002,${GSTIN},2026-08-15,440.00,11.00,11.00`,
+      `o-in-month-2,${GSTIN},2026-08-15,440.00,11.00,11.00`,
     );
 
     const audits = await sharedAuditRepo.all();
@@ -129,7 +130,7 @@ describe("Vendor Tools suite", () => {
       .set(vendorAuthHeaders())
       .expect(200);
     expect(res.text.trim()).toBe(
-      "Invoice No,GSTIN,Date,Taxable Value,CGST 2.5%,SGST 2.5%",
+      "Order Reference,GSTIN,Date,Taxable Value,CGST 2.5%,SGST 2.5%",
     );
   });
 

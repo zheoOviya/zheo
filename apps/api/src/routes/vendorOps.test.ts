@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
-import { resetCatalogRepository } from "./catalog";
+import { getCatalogRepository, resetCatalogRepository } from "./catalog";
 import {
   sharedAuditRepo,
   sharedChainRepo,
@@ -345,6 +345,109 @@ describe("Vendor multi-restaurant resolution", () => {
     const res = await request(app)
       .get("/api/vendor/restaurants")
       .set(vendorAuthHeaders("u-consumer", "CONSUMER"))
+      .expect(403);
+    expect(res.body.error.code).toBe("FORBIDDEN");
+  });
+});
+
+// ============================================
+// GST_EXPORT_TRUTH_A2: statutory identity + copy truth
+// ============================================
+describe("Vendor GST export (GST_EXPORT_TRUTH_A2)", () => {
+  let app: Express;
+  const GSTIN = "27AABCB1234A1Z5";
+
+  beforeEach(() => {
+    resetRedisForTests();
+    resetCatalogRepository();
+    sharedOrderRepo._reset();
+    sharedAuditRepo._reset();
+    sharedUserRoleRepo._reset();
+    sharedChainRepo._reset();
+    app = createApp();
+  });
+
+  it("T8/T9: exports only PICKED_UP and SETTLED orders", async () => {
+    seedOrder("o-picked", "2026-08-04T10:00:00.000Z", "PICKED_UP");
+    seedOrder("o-settled", "2026-08-05T10:00:00.000Z", "SETTLED");
+    seedOrder("o-preparing", "2026-08-06T10:00:00.000Z", "PREPARING");
+    seedOrder("o-cancelled", "2026-08-07T10:00:00.000Z", "CANCELLED");
+
+    const res = await request(app)
+      .get(`/api/vendor/gst-export?month=2026-08&restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
+      .expect(200);
+
+    const lines = res.text.trim().split("\r\n");
+    expect(lines).toHaveLength(3);
+    expect(lines[1]!.split(",")[0]).toBe("o-picked");
+    expect(lines[2]!.split(",")[0]).toBe("o-settled");
+    expect(res.text).not.toContain("o-preparing");
+    expect(res.text).not.toContain("o-cancelled");
+  });
+
+  it("T10: month filter stays creation-time based (UTC boundaries)", async () => {
+    seedOrder("o-july", "2026-07-31T23:59:59.000Z", "PICKED_UP");
+    seedOrder("o-aug", "2026-08-01T00:00:00.000Z", "PICKED_UP");
+    seedOrder("o-sep", "2026-09-01T00:00:00.000Z", "PICKED_UP");
+
+    const res = await request(app)
+      .get(`/api/vendor/gst-export?month=2026-08&restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
+      .expect(200);
+
+    const lines = res.text.trim().split("\r\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[1]!.split(",")[0]).toBe("o-aug");
+  });
+
+  it("T12: a missing GSTIN fails closed with no CSV", async () => {
+    const restaurant = await getCatalogRepository().getRestaurantById(REST_ID);
+    const original = restaurant!.gst_number;
+    restaurant!.gst_number = null;
+    try {
+      seedOrder("o-aug", "2026-08-04T10:00:00.000Z", "PICKED_UP");
+      const res = await request(app)
+        .get(`/api/vendor/gst-export?month=2026-08&restaurant_id=${REST_ID}`)
+        .set(vendorAuthHeaders());
+
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(res.status).toBeLessThan(500);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe("GST_NUMBER_REQUIRED");
+      expect(res.text).not.toContain("27MOCK");
+      expect(res.text).not.toContain("Order Reference");
+    } finally {
+      restaurant!.gst_number = original;
+    }
+  });
+
+  it("T13/T14: a valid GSTIN returns a neutral GST export CSV", async () => {
+    seedOrder("o-aug", "2026-08-04T10:00:00.000Z", "PICKED_UP");
+
+    const res = await request(app)
+      .get(`/api/vendor/gst-export?month=2026-08&restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
+      .expect(200);
+
+    expect(res.headers["content-type"]).toContain("text/csv");
+    expect(res.headers["content-disposition"]).toContain(
+      'filename="gst-export-2026-08.csv"',
+    );
+    expect(res.headers["content-disposition"]).not.toContain("gstr1");
+
+    const lines = res.text.trim().split("\r\n");
+    expect(lines[0]).toBe(
+      "Order Reference,GSTIN,Date,Taxable Value,CGST 2.5%,SGST 2.5%",
+    );
+    // item_subtotal 450 -> CGST/SGST 11.25 each
+    expect(lines[1]).toBe(`o-aug,${GSTIN},2026-08-04,450.00,11.25,11.25`);
+  });
+
+  it("T15: vendor ownership guard is unchanged", async () => {
+    const res = await request(app)
+      .get(`/api/vendor/gst-export?month=2026-08&restaurant_id=${GREEN_BOWL_ID}`)
+      .set(vendorAuthHeaders())
       .expect(403);
     expect(res.body.error.code).toBe("FORBIDDEN");
   });

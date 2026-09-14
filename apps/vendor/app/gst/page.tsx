@@ -24,7 +24,7 @@ export default function GstPage() {
     setMessage("");
     try {
       await downloadGstCsv(month, activeRestaurantId);
-      setMessage(`GSTR-1 CSV for ${month} downloaded.`);
+      setMessage(`GST export CSV for ${month} downloaded.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate the GST report");
     } finally {
@@ -36,7 +36,7 @@ export default function GstPage() {
     <div className="space-y-6">
       <PageHeader
         title="GST Reports"
-        subtitle="Download a GSTR-1 ready CSV of settled orders for any month"
+        subtitle="Download a GST export CSV of eligible order tax data for the selected month"
       />
 
       <ErrorBanner message={error} />
@@ -47,7 +47,7 @@ export default function GstPage() {
         </div>
       )}
 
-      <SectionCard title="Download GSTR-1 CSV">
+      <SectionCard title="Download GST export CSV">
         <div className="flex flex-wrap items-end gap-3">
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-slate-500">Reporting month</span>
@@ -66,9 +66,10 @@ export default function GstPage() {
 
       <SectionCard title="Format">
         <p className="text-sm leading-relaxed text-slate-500">
-          Each row is one settled invoice: Invoice No, GSTIN, Date, Taxable Value, CGST 2.5%, SGST
-          2.5% (5% food GST split). Taxable value is recomputed from order items. Restaurant
-          services fall under SAC 996321 with 5% GST (2.5% CGST + 2.5% SGST for intra-state).
+          Each row is one eligible order: Order Reference, GSTIN, Date, Taxable Value, CGST 2.5%,
+          SGST 2.5% (5% food GST split). Taxable value is recomputed from order items. Order
+          Reference is an internal, non-statutory identifier. Restaurant services fall under SAC
+          996321 with 5% GST (2.5% CGST + 2.5% SGST for intra-state).
         </p>
       </SectionCard>
     </div>

@@ -584,7 +584,7 @@ vendorOpsRouter.get(
       throw new AppError("NOT_FOUND", "Restaurant not found", 404);
     }
 
-    const csv = buildGstCsv(orders, restaurant, month);
+    const csv = buildGstCsv(orders, restaurant);
 
     await sharedAuditRepo.log(actorId(res), "gst_export_downloaded", {
       restaurant_id: restaurantId,
@@ -595,7 +595,7 @@ vendorOpsRouter.get(
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="gstr1-${month}.csv"`,
+      `attachment; filename="gst-export-${month}.csv"`,
     );
     res.send(csv);
   }),

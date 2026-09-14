@@ -4,19 +4,32 @@ import type { RestaurantDTO } from "../repositories/catalogRepository";
 import { computeFoodSubtotal } from "./settlement";
 
 // ============================================
-// GST Compliance Export (PRD Phase 2, V12)
-// Generates a GSTR-1 ready CSV for a calendar month.
+// GST Export (PRD Phase 2, V12)
+// Generates a CSV of eligible order tax data for a calendar month.
 //
 //   - Month window is [start, end) over UTC boundaries.
 //   - Only PICKED_UP / SETTLED orders are eligible (caller fetches via
 //     getSettlableOrdersByRestaurant) - unpaid and cancelled orders never
-//     appear on a tax return.
+//     appear.
 //   - Taxable Value is the GST-exclusive food subtotal recomputed from the
 //     persisted order items. CGST 2.5% + SGST 2.5% = the 5% food GST rate.
 //   - Values are always recomputed server-side, never trusted from input.
+//
+// GST_EXPORT_TRUTH_A2 (statutory identity + copy):
+//   - The restaurant's real persisted GSTIN is emitted exactly. A missing /
+//     blank / whitespace GSTIN FAILS CLOSED (GST_NUMBER_REQUIRED); a synthetic
+//     GSTIN is never fabricated.
+//   - "Order Reference" is the persisted order id: a stable but explicitly
+//     NON-STATUTORY reference. No array-position invoice number is generated
+//     and no statutory "invoice number" is claimed. This CSV is a tax-data
+//     export, not a filing-ready statutory return.
 // ============================================
 
 const GST_MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/** CSV header. "Order Reference" is a non-statutory identifier, never an invoice number. */
+export const GST_CSV_HEADER =
+  "Order Reference,GSTIN,Date,Taxable Value,CGST 2.5%,SGST 2.5%";
 
 export function parseGstMonth(value: unknown): string {
   if (typeof value !== "string" || !GST_MONTH_PATTERN.test(value)) {
@@ -46,20 +59,24 @@ export function gstMonthWindow(month: string): GstMonthWindow {
   };
 }
 
-/** Deterministic GSTIN: restaurant's own number, else a mock derived from id. */
+/**
+ * The restaurant's real persisted GSTIN, emitted exactly.
+ * Missing / blank / whitespace-only GSTIN fails closed so the export can never
+ * carry a fabricated or empty statutory identity.
+ */
 export function gstinForRestaurant(restaurant: {
   id: string;
   gst_number: string | null;
 }): string {
-  if (restaurant.gst_number && restaurant.gst_number.length > 0) {
-    return restaurant.gst_number;
+  const stored = restaurant.gst_number;
+  if (typeof stored === "string" && stored.trim().length > 0) {
+    return stored;
   }
-  const digits = restaurant.id.replace(/[^0-9]/g, "").padEnd(10, "0");
-  return `27MOCK${digits.slice(0, 10)}Z${digits.slice(0, 1)}5`;
-}
-
-export function invoiceNumber(index: number, month: string): string {
-  return `INV-${month}-${String(index + 1).padStart(4, "0")}`;
+  throw new AppError(
+    "GST_NUMBER_REQUIRED",
+    "Restaurant GSTIN is not configured; GST export is unavailable",
+    422,
+  );
 }
 
 /** RFC 4180 escaping: quote fields containing , " or newline; double quotes. */
@@ -76,7 +93,7 @@ export function round2(amount: number): number {
 }
 
 export interface GstCsvRow {
-  invoice_no: string;
+  order_reference: string;
   gstin: string;
   date: string;
   taxable_value: number;
@@ -84,17 +101,17 @@ export interface GstCsvRow {
   sgst: number;
 }
 
-export function gstRowForOrder(
-  order: OrderDTO,
-  index: number,
-  month: string,
-  gstin: string,
-): GstCsvRow {
+/**
+ * One CSV row per order. `order_reference` is the persisted order id: stable
+ * across re-exports and windows, and explicitly non-statutory (never labelled
+ * as an invoice number).
+ */
+export function gstRowForOrder(order: OrderDTO, gstin: string): GstCsvRow {
   const taxable = round2(computeFoodSubtotal(order.items));
   const cgst = round2(taxable * 0.025);
   const sgst = round2(taxable * 0.025);
   return {
-    invoice_no: invoiceNumber(index, month),
+    order_reference: order.id,
     gstin,
     date: order.created_at.slice(0, 10),
     taxable_value: taxable,
@@ -106,14 +123,12 @@ export function gstRowForOrder(
 export function buildGstCsv(
   orders: OrderDTO[],
   restaurant: RestaurantDTO,
-  month: string,
 ): string {
   const gstin = gstinForRestaurant(restaurant);
-  const header = "Invoice No,GSTIN,Date,Taxable Value,CGST 2.5%,SGST 2.5%";
-  const rows = orders.map((order, index) => {
-    const row = gstRowForOrder(order, index, month, gstin);
+  const rows = orders.map((order) => {
+    const row = gstRowForOrder(order, gstin);
     return [
-      csvEscape(row.invoice_no),
+      csvEscape(row.order_reference),
       csvEscape(row.gstin),
       csvEscape(row.date),
       csvEscape(row.taxable_value.toFixed(2)),
@@ -121,5 +136,5 @@ export function buildGstCsv(
       csvEscape(row.sgst.toFixed(2)),
     ].join(",");
   });
-  return [header, ...rows].join("\r\n");
+  return [GST_CSV_HEADER, ...rows].join("\r\n");
 }

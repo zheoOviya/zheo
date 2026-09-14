@@ -693,7 +693,7 @@ export async function downloadGstCsv(
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `gstr1-${month}.csv`;
+  a.download = `gst-export-${month}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
