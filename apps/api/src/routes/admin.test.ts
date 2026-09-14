@@ -3,7 +3,7 @@ import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { jwtService } from "../services/jwt";
-import { sharedKillSwitchRepo, sharedIdentityRepo, sharedSupportRepo, sharedRoleRepo, sharedOrderRepo, sharedPaymentRepo, sharedLoyaltyRepo, sharedAuditRepo } from "../repositories/shared";
+import { sharedKillSwitchRepo, sharedIdentityRepo, sharedSupportRepo, sharedRoleRepo, sharedOrderRepo, sharedPaymentRepo, sharedLoyaltyRepo, sharedAuditRepo, sharedVendorApplicationRepo } from "../repositories/shared";
 import type { OrderDTO } from "../repositories/orderRepository";
 import type { OrderStatus } from "@snakzap/types";
 import { resetRedisForTests } from "../lib/redis";
@@ -1375,6 +1375,128 @@ describe("Admin RBAC (A-01, A-11)", () => {
       expect(settlementCommission).toBe(20);
       expect(revenueRes.body.data.totals.commission).toBe(20);
       expect(vendorRow?.commission).toBe(20);
+    });
+  });
+
+  // ============================================
+  // RESTAURANT-COMMISSION-UI-TRUTH-A2
+  // `restaurants.commission_rate` is non-authoritative internal config and
+  // must not be exposed through admin read surfaces. Money stays authoritative
+  // from the order snapshot (proved by the suites above).
+  // ============================================
+
+  describe("Commission config read-surface truth (RESTAURANT-COMMISSION-UI-TRUTH-A2)", () => {
+    const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
+
+    beforeEach(() => {
+      sharedVendorApplicationRepo._reset();
+      sharedOrderRepo._reset();
+    });
+
+    // A1 — admin vendors
+    it("A1 GET /admin/vendors omits commission_rate and preserves other fields", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/vendors")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      const rows = res.body.data as Record<string, unknown>[];
+      expect(rows.length).toBeGreaterThan(0);
+      for (const r of rows) {
+        expect(r).not.toHaveProperty("commission_rate");
+        expect(r).toHaveProperty("id");
+        expect(r).toHaveProperty("name");
+        expect(r).toHaveProperty("is_active");
+      }
+    });
+
+    // A2 — admin order detail
+    it("A2 GET /admin/orders/:id keeps restaurant identity but omits commission_rate", async () => {
+      sharedOrderRepo._seed({
+        id: "rcu-a2-000000000000000001",
+        user_id: "rcu-a2-user-000000000001",
+        restaurant_id: RESTAURANT_ID,
+        restaurant_name: "Test Cafe",
+        items: [],
+        total_amount: 200,
+        status: "CONFIRMED",
+        commission_rate: 0.1,
+        commission_amount: 20,
+        is_catering: false,
+        headcount: null,
+        pickup_otp: null,
+        qr_token: null,
+        checked_in: false,
+        scheduled_pickup_time: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      const res = await request(app)
+        .get("/api/v1/admin/orders/rcu-a2-000000000000000001")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      const d = res.body.data as { restaurant: Record<string, unknown>; commission_amount: number };
+      expect(d.restaurant).toBeTruthy();
+      expect(d.restaurant.id).toBe(RESTAURANT_ID);
+      expect(d.restaurant.name).toBe("Biryani House");
+      expect(d.restaurant).not.toHaveProperty("commission_rate");
+      expect(d.commission_amount).toBe(20);
+    });
+
+    // A3 — admin vendor metrics
+    it("A3 GET /admin/vendors/metrics omits commission_rate but keeps authoritative totals", async () => {
+      sharedOrderRepo._seed({
+        id: "rcu-a3-000000000000000001",
+        user_id: "rcu-a3-user-000000000001",
+        restaurant_id: RESTAURANT_ID,
+        restaurant_name: "Test Cafe",
+        items: [],
+        total_amount: 400,
+        status: "SETTLED",
+        commission_rate: 0.1,
+        commission_amount: 40,
+        is_catering: false,
+        headcount: null,
+        pickup_otp: null,
+        qr_token: null,
+        checked_in: false,
+        scheduled_pickup_time: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      const res = await request(app)
+        .get("/api/v1/admin/vendors/metrics")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      const rows = res.body.data as Record<string, unknown>[];
+      for (const r of rows) {
+        expect(r).not.toHaveProperty("commission_rate");
+      }
+      const vendor = rows.find((r) => r.id === RESTAURANT_ID);
+      expect(vendor).toBeTruthy();
+      expect(vendor!.revenue).toBe(400);
+      expect(vendor!.commission).toBe(40);
+    });
+
+    // A4 — admin vendor applications
+    it("A4 GET /admin/vendor-applications omits commission_rate and preserves application data", async () => {
+      const created = await sharedVendorApplicationRepo.create({
+        applicant_id: "rcu-a4-user-000000000001",
+        name: "RCU A4 Kitchen",
+        gst_number: "29ABCDE1234F1Z5",
+        fssai_license: "12345678901234",
+        phone: "+919999000001",
+      });
+      const res = await request(app)
+        .get("/api/v1/admin/vendor-applications")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      const rows = res.body.data as Record<string, unknown>[];
+      const application = rows.find((a) => a.id === created.id);
+      expect(application).toBeTruthy();
+      expect(application).not.toHaveProperty("commission_rate");
+      expect(application!.name).toBe("RCU A4 Kitchen");
+      expect(application!.status).toBe("PENDING");
+      expect(application!.gst_number).toBe("29ABCDE1234F1Z5");
     });
   });
 });

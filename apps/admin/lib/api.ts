@@ -52,7 +52,6 @@ export interface OrderCustomerDTO {
 export interface OrderRestaurantDTO {
   id: string;
   name: string;
-  commission_rate: number;
 }
 
 export interface OrderDetailDTO extends OrderDTO {
@@ -80,7 +79,6 @@ interface VendorDTO {
   name: string;
   gst_number: string | null;
   owner_id: string;
-  commission_rate: number;
   is_active: boolean;
   owner_phone: string | null;
 }
@@ -299,7 +297,6 @@ export interface VendorApplicationDTO {
   city: string | null;
   lat: number | null;
   lng: number | null;
-  commission_rate: number;
   status: VendorApplicationStatus;
   type: VendorApplicationType;
   outlet_count: number;

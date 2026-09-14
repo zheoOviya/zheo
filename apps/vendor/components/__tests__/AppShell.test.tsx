@@ -8,7 +8,6 @@ type VendorRestaurant = {
   id: string;
   name: string;
   is_active: boolean;
-  commission_rate: number;
   chain_id: string | null;
 };
 
@@ -176,8 +175,8 @@ describe("Vendor AppShell entry points", () => {
       role: "VENDOR_OWNER",
     });
     mocks.restaurants = [
-      { id: "r1", name: "Biryani House", is_active: true, commission_rate: 0.08, chain_id: null },
-      { id: "r2", name: "Green Bowl", is_active: true, commission_rate: 0.08, chain_id: null },
+      { id: "r1", name: "Biryani House", is_active: true, chain_id: null },
+      { id: "r2", name: "Green Bowl", is_active: true, chain_id: null },
     ];
     mocks.activeRestaurantId = "r1";
 

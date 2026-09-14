@@ -18,7 +18,6 @@ interface Vendor {
   name: string;
   gst_number: string | null;
   owner_id: string;
-  commission_rate: number;
   is_active: boolean;
   owner_phone: string | null;
 }
@@ -237,7 +236,6 @@ export default function VendorsPage() {
                 <th className="px-4 py-3 font-semibold text-neutral-600 dark:text-neutral-400">Name</th>
                 <th className="px-4 py-3 font-semibold text-neutral-600 dark:text-neutral-400">GST</th>
                 <th className="px-4 py-3 font-semibold text-neutral-600 dark:text-neutral-400">Owner</th>
-                <th className="px-4 py-3 font-semibold text-neutral-600 dark:text-neutral-400">Commission</th>
                 <th className="px-4 py-3 font-semibold text-neutral-600 dark:text-neutral-400">Status</th>
                 <th className="px-4 py-3 font-semibold text-neutral-600 dark:text-neutral-400">Action</th>
               </tr>
@@ -248,7 +246,6 @@ export default function VendorsPage() {
                   <td className="px-4 py-3 font-medium text-neutral-900 dark:text-neutral-100">{v.name}</td>
                   <td className="px-4 py-3 font-mono text-xs text-neutral-500">{v.gst_number ?? "-"}</td>
                   <td className="px-4 py-3 text-xs text-neutral-500">{v.owner_phone ?? v.owner_id.slice(0, 8)}...</td>
-                  <td className="px-4 py-3 text-sm">{(v.commission_rate * 100).toFixed(1)}%</td>
                   <td className="px-4 py-3">
                     <span
                       className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${
@@ -277,7 +274,7 @@ export default function VendorsPage() {
               ))}
               {vendors.length === 0 && !error && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-neutral-400">
+                  <td colSpan={5} className="px-4 py-8 text-center text-sm text-neutral-400">
                     No vendors found
                   </td>
                 </tr>

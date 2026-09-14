@@ -396,7 +396,6 @@ export interface VendorRestaurant {
   id: string;
   name: string;
   is_active: boolean;
-  commission_rate: number;
   chain_id: string | null;
 }
 

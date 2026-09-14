@@ -34,7 +34,6 @@ const VENDORS = [
   {
     id: "a0000000-0000-4000-8000-000000000001",
     name: "Biryani House",
-    commission_rate: 0.08,
     is_active: true,
     owner_id: "e1",
     order_count: 12,
@@ -59,6 +58,11 @@ describe("Admin revenue analytics page", () => {
     expect(screen.getByText("UPI")).toBeTruthy();
     expect(screen.getByText("COD")).toBeTruthy();
     expect(screen.getByText("Vendor Settlement")).toBeTruthy();
+    // RESTAURANT-COMMISSION-UI-TRUTH-A2: authoritative monetary totals remain,
+    // but the non-authoritative restaurant config rate is no longer rendered.
+    expect(screen.getByText("₹200")).toBeTruthy();
+    expect(screen.getByText("₹150")).toBeTruthy();
+    expect(screen.queryByText(/rate/)).toBeNull();
   });
 
   it("switches between 7 and 30 day windows", async () => {

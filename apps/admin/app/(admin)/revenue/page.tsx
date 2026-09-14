@@ -178,7 +178,6 @@ export default function RevenuePage() {
                         <tr key={v.id} className="text-neutral-700 dark:text-neutral-300">
                           <td className="py-2 pr-3">
                             <p className="font-medium">{v.name}</p>
-                            <p className="text-neutral-400">rate {Math.round(v.commission_rate * 100)}%</p>
                           </td>
                           <td className="py-2 pr-3 tabular-nums">{v.completed_orders}</td>
                           <td className="py-2 pr-3 font-mono tabular-nums">{fmt(v.revenue)}</td>

@@ -188,7 +188,6 @@ interface VendorRestaurantResponse {
   id: string;
   name: string;
   is_active: boolean;
-  commission_rate: number;
   chain_id: string | null;
 }
 
@@ -241,7 +240,6 @@ async function toVendorRestaurant(r: RestaurantDTO): Promise<VendorRestaurantRes
     id: r.id,
     name: r.name,
     is_active: r.is_active,
-    commission_rate: r.commission_rate,
     chain_id: await sharedChainRepo.getOutletChainId(r.id),
   };
 }

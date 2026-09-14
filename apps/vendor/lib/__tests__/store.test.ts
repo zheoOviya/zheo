@@ -15,7 +15,6 @@ function restaurant(overrides: Partial<VendorRestaurant> = {}): VendorRestaurant
     id: "r1",
     name: "Biryani House",
     is_active: true,
-    commission_rate: 0.08,
     chain_id: null,
     ...overrides,
   };

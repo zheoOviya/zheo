@@ -279,9 +279,11 @@ describe("Vendor multi-restaurant resolution", () => {
       id: REST_ID,
       name: "Biryani House",
       is_active: true,
-      commission_rate: 0.08,
       chain_id: null,
     });
+    // A5 (RESTAURANT-COMMISSION-UI-TRUTH-A2): non-authoritative restaurant
+    // commission config must not be exposed on the vendor read surface.
+    expect(res.body.data[0]).not.toHaveProperty("commission_rate");
   });
 
   it("includes restaurants granted via restaurant-scoped membership", async () => {

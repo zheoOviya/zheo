@@ -46,6 +46,20 @@ const adminWriteLimiter = rateLimiter({
 /** Orders that count toward completed revenue / settlement math. */
 const REVENUE_COMPLETED_STATUSES = new Set(["PICKED_UP", "SETTLED"]);
 
+// RESTAURANT-COMMISSION-UI-TRUTH-A2: `restaurants.commission_rate` (and the
+// vendor-application rate it is copied from) is non-authoritative internal
+// config. Money is authoritative from the order-level snapshot / flat-threshold
+// policy, so this raw config must not reach admin read surfaces where it would
+// read as if it controls billing. Strip it from response projections only; the
+// repository DTOs, DB columns, and write paths are untouched.
+function omitCommissionRate<T extends { commission_rate: number }>(
+  source: T,
+): Omit<T, "commission_rate"> {
+  const safe = { ...source };
+  delete (safe as Partial<T>).commission_rate;
+  return safe;
+}
+
 // ============================================
 // System Health (A-11) — live component status
 // ============================================
@@ -335,7 +349,7 @@ adminRouter.get(
         ? { id: customer.id, phone: customer.phone, role: customer.role, is_suspended: customer.is_suspended }
         : null,
       restaurant: restaurant
-        ? { id: restaurant.id, name: restaurant.name, commission_rate: restaurant.commission_rate }
+        ? { id: restaurant.id, name: restaurant.name }
         : null,
     });
   }),
@@ -427,9 +441,9 @@ adminRouter.get(
       restaurants.map(async (r) => {
         try {
           const owner = await sharedIdentityRepo.getById(r.owner_id);
-          return { ...r, owner_phone: owner?.phone ?? null };
+          return { ...omitCommissionRate(r), owner_phone: owner?.phone ?? null };
         } catch {
-          return { ...r, owner_phone: null };
+          return { ...omitCommissionRate(r), owner_phone: null };
         }
       }),
     );
@@ -524,7 +538,7 @@ adminRouter.get(
   asyncHandler(async (req, res) => {
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
     const apps = await sharedVendorApplicationRepo.listAll(status as never);
-    ok(res, apps);
+    ok(res, apps.map((a) => omitCommissionRate(a)));
   }),
 );
 
@@ -758,7 +772,7 @@ adminRouter.get(
         ).length;
         const owner = await sharedIdentityRepo.getById(r.owner_id).catch(() => null);
         return {
-          ...r,
+          ...omitCommissionRate(r),
           owner_phone: owner?.phone ?? null,
           order_count: vendorOrders.length,
           completed_orders: vendorRevenue.length,
