@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, lte } from "drizzle-orm";
+import { and, eq, lte, sql } from "drizzle-orm";
 import { notifications } from "@snakzap/db";
 import type { DrizzleDb } from "../lib/dbType";
 
@@ -181,21 +181,34 @@ export class DrizzleNotificationRepository implements NotificationRepository {
   async markSent(id: string): Promise<void> {
     await this.db
       .update(notifications)
-      .set({ status: "SENT", last_error: null })
+      .set({
+        status: "SENT",
+        attempts: sql`${notifications.attempts} + 1`,
+        last_error: null,
+      })
       .where(eq(notifications.id, id));
   }
 
   async markRetryable(id: string, error: string, nextAttemptAt: Date): Promise<void> {
     await this.db
       .update(notifications)
-      .set({ status: "PENDING", last_error: error, next_attempt_at: nextAttemptAt })
+      .set({
+        status: "PENDING",
+        attempts: sql`${notifications.attempts} + 1`,
+        last_error: error,
+        next_attempt_at: nextAttemptAt,
+      })
       .where(eq(notifications.id, id));
   }
 
   async markDead(id: string, error: string): Promise<void> {
     await this.db
       .update(notifications)
-      .set({ status: "FAILED", last_error: error })
+      .set({
+        status: "FAILED",
+        attempts: sql`${notifications.attempts} + 1`,
+        last_error: error,
+      })
       .where(eq(notifications.id, id));
   }
 
