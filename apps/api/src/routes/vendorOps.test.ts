@@ -1,7 +1,8 @@
 import type { Express } from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
+import { AppError } from "../middleware/envelope";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
 import { getCatalogRepository, resetCatalogRepository } from "./catalog";
@@ -17,6 +18,34 @@ import type { OrderDTO, OrderItemDTO } from "../repositories/orderRepository";
 // ============================================
 // Vendor Ops routes - V11 settlements, V13 menu photo upload, audit trail
 // ============================================
+
+// IMAGE-STORAGE-TRUTH-A2: let a single test force the storage backend to fail
+// so the real route's fail-before-persist ordering can be proven. `null` means
+// "use the real MockImageStorage", which is what the non-production suite runs.
+const storageOverride = vi.hoisted(() => ({
+  current: null as
+    | {
+        upload: (
+          buffer: Buffer,
+          contentType: string,
+          key: string,
+        ) => Promise<string>;
+      }
+    | null,
+}));
+
+vi.mock("../services/imageStorage", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../services/imageStorage")>();
+  const realMock = new actual.MockImageStorage();
+  return {
+    ...actual,
+    createImageStorage: () => ({
+      upload: (buffer: Buffer, contentType: string, key: string) =>
+        (storageOverride.current ?? realMock).upload(buffer, contentType, key),
+    }),
+  };
+});
 
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const GREEN_BOWL_ID = "a0000000-0000-4000-8000-000000000002";
@@ -96,6 +125,7 @@ describe("Vendor Ops routes", () => {
   let app: Express;
 
   beforeEach(() => {
+    storageOverride.current = null;
     resetRedisForTests();
     resetCatalogRepository();
     sharedOrderRepo._reset();
@@ -103,6 +133,10 @@ describe("Vendor Ops routes", () => {
     sharedUserRoleRepo._reset();
     sharedChainRepo._reset();
     app = createApp();
+  });
+
+  afterEach(() => {
+    storageOverride.current = null;
   });
 
   it("GET /settlements/summary only counts PICKED_UP orders from the previous day", async () => {
@@ -186,7 +220,11 @@ describe("Vendor Ops routes", () => {
     expect(res.body.error.code).toBe("VALIDATION_ERROR");
   });
 
-  it("POST /menu/:itemId/upload-photo persists a CDN URL and audits it", async () => {
+  // IMAGE-STORAGE-TRUTH-A2: this suite runs with NODE_ENV=test, so the real
+  // backend selection yields MockImageStorage (non-production). The synthetic
+  // URL below is only acceptable in dev/test; production fails closed and is
+  // covered by imageStorage.test.ts + the fail-closed route test that follows.
+  it("POST /menu/:itemId/upload-photo persists the non-production mock CDN URL and audits it", async () => {
     const res = await request(app)
       .post(`/api/vendor/menu/${MENU_ITEM_1}/upload-photo`)
       .set(vendorAuthHeaders())
@@ -210,6 +248,35 @@ describe("Vendor Ops routes", () => {
     expect(audit.action).toBe("menu_photo_uploaded");
     expect(audit.metadata.menu_item_id).toBe(MENU_ITEM_1);
     expect(audit.metadata.size_bytes).toBe(Buffer.from("fake-jpeg-bytes").length);
+  });
+
+  it("T12 upload-photo: storage failure returns 503 and never persists or audits", async () => {
+    storageOverride.current = {
+      upload: async () => {
+        throw new AppError(
+          "IMAGE_STORAGE_UNCONFIGURED",
+          "Menu photo storage is not configured for this environment",
+          503,
+        );
+      },
+    };
+
+    const res = await request(app)
+      .post(`/api/vendor/menu/${MENU_ITEM_1}/upload-photo`)
+      .set(vendorAuthHeaders())
+      .attach("photo", Buffer.from("fake-jpeg-bytes"), {
+        filename: "biryani.jpg",
+        contentType: "image/jpeg",
+      })
+      .expect(503);
+
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe("IMAGE_STORAGE_UNCONFIGURED");
+
+    const menu = await request(app).get(`/api/vendor/menu?restaurant_id=${REST_ID}`).set(vendorAuthHeaders());
+    const item = menu.body.data.find((m: { id: string }) => m.id === MENU_ITEM_1);
+    expect(item.image_url).toBeNull();
+    expect(await sharedAuditRepo.all()).toHaveLength(0);
   });
 
   it("POST upload-photo rejects non-image files", async () => {

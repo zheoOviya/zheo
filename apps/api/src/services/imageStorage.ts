@@ -3,13 +3,20 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
-import { config } from "../config";
+import { config, type AppConfig } from "../config";
+import { AppError } from "../middleware/envelope";
 
 // ============================================
 // Image Storage (PRD V13 Menu Photo Upload)
 // Abstraction over object storage so the S3
 // backend is swappable. When S3 credentials are
 // absent (dev/test), a deterministic mock is used.
+//
+// IMAGE-STORAGE-TRUTH-A2: production must never
+// fabricate a synthetic CDN URL. When S3 is not
+// configured in production the upload fails closed
+// (503 IMAGE_STORAGE_UNCONFIGURED) instead of
+// silently returning/persisting a mock URL.
 // ============================================
 
 export interface ImageStorage {
@@ -90,11 +97,36 @@ export class MockImageStorage implements ImageStorage {
   }
 }
 
-/** Picks the real S3 backend when configured, otherwise the mock. */
+/**
+ * Fail-closed backend used in production when S3 is not fully configured.
+ * Guessing is worse than failing: it must never return or persist a
+ * synthetic URL, so `upload` throws before the route can persist anything.
+ */
+export class UnconfiguredImageStorage implements ImageStorage {
+  async upload(): Promise<string> {
+    throw new AppError(
+      "IMAGE_STORAGE_UNCONFIGURED",
+      "Menu photo storage is not configured for this environment",
+      503,
+    );
+  }
+}
+
+/** Complete S3 config mirrors what `S3ImageStorage` needs to sign a PUT. */
+function isS3Configured(s3: AppConfig["s3"]): boolean {
+  return Boolean(s3.bucket && s3.accessKeyId && s3.secretAccessKey);
+}
+
+/**
+ * Picks the object storage backend:
+ * - S3 credentials present            => S3ImageStorage
+ * - production + incomplete config    => UnconfiguredImageStorage (fails closed)
+ * - non-production + absent config    => MockImageStorage (dev/test only)
+ */
 export function createImageStorage(): ImageStorage {
   const { bucket, region, accessKeyId, secretAccessKey, cdnBaseUrl } =
     config.s3;
-  if (bucket && accessKeyId && secretAccessKey) {
+  if (isS3Configured(config.s3)) {
     return new S3ImageStorage({
       bucket,
       region,
@@ -102,6 +134,9 @@ export function createImageStorage(): ImageStorage {
       secretAccessKey,
       cdnBaseUrl,
     });
+  }
+  if (config.env === "production") {
+    return new UnconfiguredImageStorage();
   }
   return new MockImageStorage();
 }
