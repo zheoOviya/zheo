@@ -5,7 +5,7 @@ import Link from "next/link";
 import { fetchOrders, fetchInsights, type VendorOrder, type Insights } from "@/lib/api";
 import { useActiveRestaurant } from "@/hooks/useActiveRestaurant";
 import { ACTIVE_ORDER_STATUSES } from "@/lib/status";
-import { formatINR, formatINRCompact, relativeTime, shortOrderId, isSameDay } from "@/lib/format";
+import { formatINR, formatINRCompact, relativeTime, shortOrderId } from "@/lib/format";
 import {
   PageHeader,
   SectionCard,
@@ -17,13 +17,37 @@ import {
   Spinner,
 } from "@/components/ui";
 
-function countToday(orders: VendorOrder[]) {
-  return orders.filter((o) => isSameDay(o.created_at)).length;
+// Frozen vendor truth: an order only counts as a sale once it is
+// fulfilled, i.e. PICKED_UP or SETTLED. In-flight orders
+// (CONFIRMED..READY_FOR_PICKUP) and abandoned/failed carts are excluded.
+const FULFILLED_STATUSES = new Set<VendorOrder["status"]>(["PICKED_UP", "SETTLED"]);
+
+// Deterministic IST (+05:30) calendar bucketing so "today" and the 7-day
+// trend never drift with the viewer's browser timezone (India has no DST).
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+
+function istDayKey(iso: string): string {
+  const shifted = new Date(new Date(iso).getTime() + IST_OFFSET_MS);
+  return shifted.toISOString().slice(0, 10);
 }
 
-function revenue(orders: VendorOrder[]) {
-  const excluded = new Set(["CANCELLED", "PAYMENT_FAILED", "DRAFT", "REFUNDED"]);
-  return orders.filter((o) => !excluded.has(o.status)).reduce((sum, o) => sum + o.total_amount, 0);
+function istTodayKey(ref = new Date()): string {
+  return istDayKey(ref.toISOString());
+}
+
+function istDayKeys(days: number, ref = new Date()): { key: string; label: string }[] {
+  const shifted = new Date(ref.getTime() + IST_OFFSET_MS);
+  const keys: { key: string; label: string }[] = [];
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const d = new Date(
+      Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate() - i),
+    );
+    keys.push({
+      key: d.toISOString().slice(0, 10),
+      label: d.toLocaleDateString("en-IN", { weekday: "short", timeZone: "UTC" }),
+    });
+  }
+  return keys;
 }
 
 export default function OverviewPage() {
@@ -59,32 +83,33 @@ export default function OverviewPage() {
   }, [activeRestaurantId]);
 
   const stats = useMemo(() => {
-    const todays = orders.filter((o) => isSameDay(o.created_at));
-    const todaysRevenue = revenue(todays);
+    const todayKey = istTodayKey();
+    const todays = orders.filter((o) => istDayKey(o.created_at) === todayKey);
+    const todaysFulfilled = todays.filter((o) => FULFILLED_STATUSES.has(o.status));
+    const todaysRevenue = todaysFulfilled.reduce((sum, o) => sum + o.total_amount, 0);
     const active = orders.filter((o) => ACTIVE_ORDER_STATUSES.includes(o.status));
-    const aov = todays.length > 0 ? todaysRevenue / todays.length : 0;
-    return { todays, todaysRevenue, active, aov };
+    // AOV numerator and denominator use the SAME fulfilled population.
+    const aov = todaysFulfilled.length > 0 ? todaysRevenue / todaysFulfilled.length : 0;
+    return { todays, todaysFulfilled, todaysRevenue, active, aov };
   }, [orders]);
 
   const trend = useMemo(() => {
-    const days: { label: string; total: number; count: number }[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setHours(0, 0, 0, 0);
-      d.setDate(d.getDate() - i);
-      const label = d.toLocaleDateString("en-IN", { weekday: "short" });
-      const dayOrders = orders.filter((o) => {
-        const t = new Date(o.created_at);
-        return (
-          t.getFullYear() === d.getFullYear() &&
-          t.getMonth() === d.getMonth() &&
-          t.getDate() === d.getDate()
-        );
-      });
-      days.push({ label, total: revenue(dayOrders), count: countToday(dayOrders) });
+    const buckets = istDayKeys(7).map(({ key, label }) => ({
+      key,
+      label,
+      total: 0,
+      count: 0,
+    }));
+    const byKey = new Map(buckets.map((b) => [b.key, b]));
+    for (const o of orders) {
+      if (!FULFILLED_STATUSES.has(o.status)) continue;
+      const bucket = byKey.get(istDayKey(o.created_at));
+      if (!bucket) continue;
+      bucket.total += o.total_amount;
+      bucket.count += 1;
     }
-    const max = Math.max(1, ...days.map((d) => d.total));
-    return { days, max };
+    const max = Math.max(1, ...buckets.map((d) => d.total));
+    return { days: buckets, max };
   }, [orders]);
 
   const paymentSplit = useMemo(() => {
@@ -146,15 +171,15 @@ export default function OverviewPage() {
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
-          label="Today's Revenue"
+          label="Today's Fulfilled Sales"
           value={formatINR(stats.todaysRevenue)}
-          hint={`${stats.todays.length} paid orders`}
+          hint={`${stats.todaysFulfilled.length} fulfilled orders`}
           accent="teal"
         />
         <StatCard
           label="Today's Orders"
           value={String(stats.todays.length)}
-          hint="placed today"
+          hint="placed today (IST)"
           accent="blue"
         />
         <StatCard
@@ -164,7 +189,7 @@ export default function OverviewPage() {
           accent="amber"
         />
         <StatCard
-          label="Avg Order Value"
+          label="Avg Fulfilled Order Value"
           value={formatINR(stats.aov)}
           hint="today"
           accent="green"
@@ -173,19 +198,19 @@ export default function OverviewPage() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <SectionCard
-          title="Revenue — last 7 days"
-          subtitle="Daily total of paid orders"
+          title="Fulfilled Sales — last 7 days"
+          subtitle="Daily total of fulfilled orders (picked up or settled)"
           className="lg:col-span-2"
         >
           {trend.days.every((d) => d.total === 0) ? (
             <EmptyPanel
-              title="No sales yet"
-              description="Orders placed this week will appear here."
+              title="No fulfilled sales yet"
+              description="Fulfilled orders from the last 7 days will appear here."
             />
           ) : (
             <div className="flex h-44 items-end gap-3">
               {trend.days.map((d) => (
-                <div key={d.label} className="flex flex-1 flex-col items-center gap-1.5">
+                <div key={d.key} className="flex flex-1 flex-col items-center gap-1.5">
                   <div className="flex w-full flex-1 items-end">
                     <div
                       className="w-full rounded-t-md bg-teal-600/80 transition-all"
@@ -203,7 +228,7 @@ export default function OverviewPage() {
           )}
         </SectionCard>
 
-        <SectionCard title="Today's payment split" subtitle="How customers paid">
+        <SectionCard title="Today's payment split" subtitle="Payment methods used today">
           {paymentSplit.length === 0 ? (
             <EmptyPanel
               title="No payments today"

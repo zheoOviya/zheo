@@ -4,25 +4,39 @@ import { AppError } from "../middleware/envelope";
 // ============================================
 // Customer Insights Engine (PRD Phase 2, V08)
 //
-// Metrics are derived ONLY from orders whose status is a real
-// fulfillment state. DRAFT / PAYMENT_PENDING / PAYMENT_FAILED /
-// CANCELLED / EXPIRED / REFUNDED / DISPUTED are excluded, so
-// abandoned carts never pollute the numbers.
+// Metrics are derived ONLY from orders that reached a terminal
+// fulfilled state: PICKED_UP or SETTLED. In-flight orders
+// (CONFIRMED / PREPARING / ALMOST_READY / READY_FOR_PICKUP) and
+// abandoned or failed carts (DRAFT / PAYMENT_PENDING /
+// PAYMENT_FAILED / CANCELLED / EXPIRED / REFUNDED / DISPUTED) are
+// excluded, so the numbers describe fulfilled sales only.
 //
-//  - AOV          = total_revenue / order_count (2dp)
-//  - Repeat rate  = distinct users with >=2 orders / distinct users >=1
-//  - Peak hours   = 24 fixed buckets labeled in IST (Asia/Kolkata).
-//                   Uses an explicit +5:30 offset instead of a locale
-//                   formatter so results are deterministic in tests.
+//  - order_count   = fulfilled orders inside the IST window
+//  - total_revenue = gross fulfilled sales: SUM(total_amount) over the
+//                    same fulfilled set. GST and packaging are already
+//                    embedded in total_amount; commission is NOT
+//                    deducted and no payment-state filter is applied.
+//  - AOV           = total_revenue / order_count (2dp), same population
+//  - Repeat rate   = distinct users with >=2 fulfilled orders /
+//                    distinct users with >=1 fulfilled order
+//  - Peak hours    = 24 fixed buckets labeled in IST (Asia/Kolkata).
+//                    Uses an explicit +5:30 offset instead of a locale
+//                    formatter so results are deterministic in tests.
+//
+// Window: last N IST calendar days, including the current (partial) day,
+// using deterministic +05:30 boundaries (India observes no DST).
 // ============================================
 
 const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Terminal fulfilled states. Mirrors the authoritative admin /
+ * settlement policy (REVENUE_COMPLETED_STATUSES): an order counts only
+ * once the customer has picked it up (PICKED_UP) or it has settled.
+ * In-flight and abandoned/failed states never pollute these metrics.
+ */
 export const ELIGIBLE_INSIGHT_STATUSES = new Set([
-  "CONFIRMED",
-  "PREPARING",
-  "ALMOST_READY",
-  "READY_FOR_PICKUP",
   "PICKED_UP",
   "SETTLED",
 ]);
@@ -72,6 +86,31 @@ function emptyPeakHours(): PeakHourBucket[] {
   }));
 }
 
+/** Start of the IST day containing `now`, as an absolute UTC instant. */
+export function istDayStart(now: Date = new Date()): Date {
+  const shifted = new Date(now.getTime() + IST_OFFSET_MS);
+  const dayStartShifted = new Date(
+    Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()),
+  );
+  return new Date(dayStartShifted.getTime() - IST_OFFSET_MS);
+}
+
+/**
+ * Frozen IST period window: the last `days` IST calendar days ending with
+ * the current (partial) day. `start` is IST midnight of day
+ * `now - (days - 1)`; `end` is `now`. No rolling 24h and no browser-local
+ * drift, so the same order set is produced regardless of the caller's TZ.
+ */
+export function insightWindow(
+  days: number,
+  now: Date = new Date(),
+): { start: Date; end: Date } {
+  return {
+    start: new Date(istDayStart(now).getTime() - (days - 1) * DAY_MS),
+    end: now,
+  };
+}
+
 export class InsightsService {
   constructor(private readonly orderRepo: OrderRepository) {}
 
@@ -79,12 +118,9 @@ export class InsightsService {
     restaurantId: string,
     days: number,
   ): Promise<InsightsResult> {
-    const windowEnd = new Date();
-    const windowStart = new Date(
-      windowEnd.getTime() - days * 24 * 60 * 60 * 1000,
-    );
-    const startIso = windowStart.toISOString();
-    const endIso = windowEnd.toISOString();
+    const { start, end } = insightWindow(days);
+    const startIso = start.toISOString();
+    const endIso = end.toISOString();
 
     const allOrders = await this.orderRepo.getByRestaurant(restaurantId);
     const eligible = allOrders.filter(

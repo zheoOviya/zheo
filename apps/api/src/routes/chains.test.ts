@@ -87,13 +87,14 @@ describe("V15 Multi-Outlet Dashboard", () => {
       [REST_ID],
     );
 
-    // Biryani House: 3 eligible (1400 total) + 1 DRAFT + 1 PAYMENT_FAILED
+    // Biryani House: 2 fulfilled (1000 total) + 1 CONFIRMED (in-flight,
+    // excluded) + 1 DRAFT + 1 PAYMENT_FAILED
     seedOrder("o1", REST_ID, 500, "PICKED_UP");
     seedOrder("o2", REST_ID, 500, "PICKED_UP");
     seedOrder("o3", REST_ID, 400, "CONFIRMED");
     seedOrder("o4", REST_ID, 999, "DRAFT");
     seedOrder("o5", REST_ID, 999, "PAYMENT_FAILED");
-    // Green Bowl: 2 eligible (500 total)
+    // Green Bowl: 2 fulfilled (500 total)
     seedOrder("o6", GREEN_BOWL_ID, 300, "PICKED_UP");
     seedOrder("o7", GREEN_BOWL_ID, 200, "SETTLED");
 
@@ -132,10 +133,10 @@ describe("V15 Multi-Outlet Dashboard", () => {
       expect(d.chain_id).toBe(CHAIN_ID);
       expect(d.chain_name).toBe("SnakZap Mumbai Chain");
       expect(d.outlet_count).toBe(2);
-      // DRAFT + PAYMENT_FAILED excluded -> 3 + 2
-      expect(d.total_orders).toBe(5);
-      expect(d.total_revenue).toBe(1900);
-      expect(d.combined_aov).toBe(380);
+      // CONFIRMED (in-flight) + DRAFT + PAYMENT_FAILED excluded -> 2 + 2
+      expect(d.total_orders).toBe(4);
+      expect(d.total_revenue).toBe(1500);
+      expect(d.combined_aov).toBe(375);
 
       const biryani = d.outlets.find(
         (o: { restaurant_id: string }) => o.restaurant_id === REST_ID,
@@ -145,17 +146,17 @@ describe("V15 Multi-Outlet Dashboard", () => {
       );
       expect(biryani).toMatchObject({
         name: "Biryani House",
-        order_count: 3,
-        revenue: 1400,
-        aov: 466.67,
-        share: 73.68,
+        order_count: 2,
+        revenue: 1000,
+        aov: 500,
+        share: 66.67,
       });
       expect(green).toMatchObject({
         name: "Green Bowl",
         order_count: 2,
         revenue: 500,
         aov: 250,
-        share: 26.32,
+        share: 33.33,
       });
       // shares sum to 100.00
       expect(

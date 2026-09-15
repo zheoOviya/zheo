@@ -6,15 +6,17 @@ import { ELIGIBLE_INSIGHT_STATUSES } from "./insights";
 
 // ============================================
 // Multi-outlet Aggregate Insights (V15, Phase 4)
-// Vendor-ops context. Computes total orders / total revenue / combined AOV
-// across every outlet under a chain, plus a per-outlet breakdown for the
-// "Outlet A vs Outlet B" comparison UI.
+// Vendor-ops context. Computes total orders / total fulfilled sales /
+// combined AOV across every outlet under a chain, plus a per-outlet
+// breakdown for the "Outlet A vs Outlet B" comparison UI.
 //
-// Aggregation semantics match the V08 Insights engine: only orders in real
-// fulfillment states count (DRAFT / PAYMENT_PENDING / PAYMENT_FAILED /
-// CANCELLED / EXPIRED / REFUNDED / DISPUTED are excluded), so abandoned
-// carts never pollute the numbers. Catering revenue is genuine revenue and
-// is therefore included.
+// Eligibility is the shared terminal fulfilled set from the V08 Insights
+// engine ({PICKED_UP, SETTLED}), so in-flight orders (CONFIRMED /
+// PREPARING / ALMOST_READY / READY_FOR_PICKUP) and abandoned/failed
+// carts (DRAFT / PAYMENT_PENDING / PAYMENT_FAILED / CANCELLED / EXPIRED /
+// REFUNDED / DISPUTED) never pollute the numbers. The window is LIFETIME
+// (not the outlet insights page's IST N-day window) and must be labeled
+// as such in the UI.
 // ============================================
 
 function round2(amount: number): number {

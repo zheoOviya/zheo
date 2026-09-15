@@ -73,7 +73,7 @@ export default function ChainOverviewPage() {
     <div className="space-y-6">
       <PageHeader
         title="Chain Overview"
-        subtitle="Aggregate orders, revenue and AOV across every outlet in your chain"
+        subtitle="Lifetime aggregate orders, fulfilled sales and AOV across every outlet in your chain"
       />
 
       <ErrorBanner message={error} />
@@ -123,40 +123,40 @@ export default function ChainOverviewPage() {
                 {selectedOutlet ? (
                   <>
                     <StatCard
-                      label="Orders"
+                      label="Lifetime Orders"
                       value={String(selectedOutlet.order_count)}
                       hint={selectedOutlet.name}
                       accent="blue"
                     />
                     <StatCard
-                      label="Revenue"
+                      label="Lifetime Fulfilled Sales"
                       value={formatINR(selectedOutlet.revenue)}
                       hint={`${selectedOutlet.share}% of chain`}
                       accent="teal"
                     />
                     <StatCard
-                      label="AOV"
+                      label="Lifetime AOV"
                       value={formatINR(selectedOutlet.aov)}
-                      hint="average order value"
+                      hint="average fulfilled order value"
                       accent="green"
                     />
                   </>
                 ) : (
                   <>
                     <StatCard
-                      label="Total Orders"
+                      label="Lifetime Orders"
                       value={String(insights.total_orders)}
                       hint={`${insights.outlet_count} outlets`}
                       accent="blue"
                     />
                     <StatCard
-                      label="Total Revenue"
+                      label="Lifetime Fulfilled Sales"
                       value={formatINR(insights.total_revenue)}
                       hint="all outlets combined"
                       accent="teal"
                     />
                     <StatCard
-                      label="Combined AOV"
+                      label="Lifetime Combined AOV"
                       value={formatINR(insights.combined_aov)}
                       hint="chain-wide average"
                       accent="green"
@@ -169,8 +169,8 @@ export default function ChainOverviewPage() {
                 title="Outlet Comparison"
                 subtitle={
                   selectedOutlet
-                    ? `${selectedOutlet.name} vs chain total`
-                    : "Revenue share across outlets"
+                    ? `${selectedOutlet.name} vs chain total (lifetime)`
+                    : "Lifetime fulfilled sales share across outlets"
                 }
               >
                 <div className="space-y-4">

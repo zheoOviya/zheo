@@ -61,7 +61,7 @@ export default function InsightsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Insights"
-        subtitle="Repeat rate, average order value and peak hours from completed orders"
+        subtitle="Repeat rate, average fulfilled order value and peak hours from fulfilled orders"
         actions={
           <div className="flex gap-1.5">
             {PERIODS.map((period) => (
@@ -82,9 +82,9 @@ export default function InsightsPage() {
         <>
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
             <StatCard
-              label="Average Order Value"
+              label="Average Fulfilled Order Value"
               value={formatINR(insights.aov)}
-              hint={`${insights.order_count} orders`}
+              hint={`${insights.order_count} fulfilled orders`}
               accent="teal"
             />
             <StatCard
@@ -94,15 +94,15 @@ export default function InsightsPage() {
               accent="green"
             />
             <StatCard
-              label="Revenue"
+              label="Fulfilled Sales"
               value={formatINR(insights.total_revenue)}
               hint={`last ${insights.days} days`}
               accent="amber"
             />
             <StatCard
-              label="Total Orders"
+              label="Fulfilled Orders"
               value={String(insights.order_count)}
-              hint="completed only"
+              hint="picked up or settled"
               accent="blue"
             />
           </div>
@@ -114,7 +114,7 @@ export default function InsightsPage() {
             {maxCount <= 1 ? (
               <EmptyPanel
                 title="Not enough data"
-                description="More completed orders will reveal peak hours."
+                description="More fulfilled orders will reveal peak hours."
               />
             ) : (
               <div className="space-y-2">
