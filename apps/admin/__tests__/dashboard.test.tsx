@@ -50,26 +50,26 @@ describe("Admin dashboard truth", () => {
 
   it("renders payload-derived truthful metrics and series", async () => {
     render(<DashboardPage />);
-    expect(await screen.findByText("Today's Revenue")).toBeTruthy();
+    expect(await screen.findByText("Today's Fulfilled Sales")).toBeTruthy();
     expect(screen.getAllByText("₹1,500").length).toBeGreaterThan(0);
     expect(screen.getByText("Fulfilled Orders Today")).toBeTruthy();
     expect(screen.getByText("3")).toBeTruthy();
     expect(screen.getByText("Active Orders")).toBeTruthy();
     expect(screen.getByText("2")).toBeTruthy();
-    expect(screen.getByText("Revenue — last 7 days")).toBeTruthy();
+    expect(screen.getByText("Fulfilled Sales — last 7 days")).toBeTruthy();
     expect(screen.getByText("2026-08-15")).toBeTruthy();
   });
 
   it("renders zero-data days as literal zero with no fabricated fallback", async () => {
     render(<DashboardPage />);
-    await screen.findByText("Today's Revenue");
+    await screen.findByText("Today's Fulfilled Sales");
     expect(screen.getAllByText("₹0").length).toBeGreaterThanOrEqual(6);
     expect(screen.getAllByText("0 fulfilled").length).toBe(6);
   });
 
   it("removes all fabricated KPI labels from the dashboard", async () => {
     render(<DashboardPage />);
-    await screen.findByText("Today's Revenue");
+    await screen.findByText("Today's Fulfilled Sales");
     for (const gone of [
       "Vendor Churn",
       "Webhook Failures",
@@ -103,6 +103,6 @@ describe("Admin dashboard truth", () => {
     const { container } = render(<DashboardPage />);
     expect(container.querySelector(".animate-pulse")).toBeTruthy();
     resolve(METRICS);
-    expect(await screen.findByText("Today's Revenue")).toBeTruthy();
+    expect(await screen.findByText("Today's Fulfilled Sales")).toBeTruthy();
   });
 });

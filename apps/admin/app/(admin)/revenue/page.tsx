@@ -49,7 +49,7 @@ export default function RevenuePage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">Revenue Analytics</h2>
-          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">Daily revenue, payment mix, and vendor settlement. Auto-refreshes every 60s.</p>
+          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">Daily fulfilled sales, lifetime payment mix, and lifetime vendor performance. Auto-refreshes every 60s.</p>
         </div>
         <div className="flex gap-2">
           {[7, 30].map((d) => (
@@ -78,15 +78,15 @@ export default function RevenuePage() {
         <>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-              <p className="text-sm text-neutral-500 dark:text-neutral-400">Revenue ({days}d)</p>
+              <p className="text-sm text-neutral-500 dark:text-neutral-400">Fulfilled Sales ({days}d)</p>
               <p className="mt-1 text-2xl font-bold text-primary-600 dark:text-primary-400">{fmt(report.totals.revenue)}</p>
             </div>
             <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-              <p className="text-sm text-neutral-500 dark:text-neutral-400">Orders ({days}d)</p>
+              <p className="text-sm text-neutral-500 dark:text-neutral-400">Fulfilled Orders ({days}d)</p>
               <p className="mt-1 text-2xl font-bold text-neutral-900 dark:text-neutral-100">{report.totals.orders}</p>
             </div>
             <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-              <p className="text-sm text-neutral-500 dark:text-neutral-400">Platform Commission</p>
+              <p className="text-sm text-neutral-500 dark:text-neutral-400">Platform Commission ({days}d)</p>
               <p className="mt-1 text-2xl font-bold text-emerald-600 dark:text-emerald-400">{fmt(report.totals.commission)}</p>
             </div>
             <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
@@ -97,7 +97,7 @@ export default function RevenuePage() {
 
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-              <p className="mb-4 font-semibold text-neutral-800 dark:text-neutral-200">Daily Revenue</p>
+              <p className="mb-4 font-semibold text-neutral-800 dark:text-neutral-200">Daily Fulfilled Sales</p>
               <div className="flex h-40 items-end gap-1.5">
                 {report.series.map((s) => (
                   <div key={s.date} className="group flex flex-1 flex-col items-center gap-1">
@@ -116,9 +116,9 @@ export default function RevenuePage() {
             </div>
 
             <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-              <p className="mb-4 font-semibold text-neutral-800 dark:text-neutral-200">Payment Mix</p>
+              <p className="mb-4 font-semibold text-neutral-800 dark:text-neutral-200">Lifetime Payment Mix</p>
               {paymentEntries.length === 0 ? (
-                <p className="py-6 text-center text-sm text-neutral-400">No completed payments in this window.</p>
+                <p className="py-6 text-center text-sm text-neutral-400">No completed payments recorded yet.</p>
               ) : (
                 <div className="space-y-3">
                   {paymentEntries.map(([method, count]) => {
@@ -142,9 +142,9 @@ export default function RevenuePage() {
 
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-              <p className="mb-3 font-semibold text-neutral-800 dark:text-neutral-200">Top Vendors</p>
+              <p className="mb-3 font-semibold text-neutral-800 dark:text-neutral-200">Lifetime Top Vendors</p>
               {report.top_vendors.length === 0 ? (
-                <p className="py-6 text-center text-sm text-neutral-400">No vendor revenue in this window.</p>
+                <p className="py-6 text-center text-sm text-neutral-400">No vendor fulfilled sales recorded yet.</p>
               ) : (
                 <div className="space-y-2">
                   {report.top_vendors.map((v) => (
@@ -158,7 +158,7 @@ export default function RevenuePage() {
             </div>
 
             <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-              <p className="mb-3 font-semibold text-neutral-800 dark:text-neutral-200">Vendor Settlement</p>
+              <p className="mb-3 font-semibold text-neutral-800 dark:text-neutral-200">Lifetime Vendor Performance</p>
               {vendors.length === 0 ? (
                 <p className="py-6 text-center text-sm text-neutral-400">No vendors onboarded yet.</p>
               ) : (
@@ -167,9 +167,9 @@ export default function RevenuePage() {
                     <thead className="border-b border-neutral-200 dark:border-neutral-800">
                       <tr>
                         <th className="py-2 pr-3 text-neutral-500">Vendor</th>
-                        <th className="py-2 pr-3 text-neutral-500">Orders</th>
-                        <th className="py-2 pr-3 text-neutral-500">Revenue</th>
-                        <th className="py-2 pr-3 text-neutral-500">Commission</th>
+                        <th className="py-2 pr-3 text-neutral-500">Fulfilled Orders</th>
+                        <th className="py-2 pr-3 text-neutral-500">Fulfilled Sales</th>
+                        <th className="py-2 pr-3 text-neutral-500">Platform Commission</th>
                         <th className="py-2 pr-3 text-neutral-500">Active</th>
                       </tr>
                     </thead>

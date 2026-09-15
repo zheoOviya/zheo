@@ -58,7 +58,7 @@ export default function DashboardPage() {
 
   const cards = [
     {
-      label: "Today's Revenue",
+      label: "Today's Fulfilled Sales",
       value: fmt(metrics.revenue_today),
       sub: "Gross incl. GST · orders placed today",
       color: "text-primary-600 dark:text-primary-400",
@@ -117,7 +117,7 @@ export default function DashboardPage() {
       <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="font-semibold text-neutral-800 dark:text-neutral-200">
-            Revenue — last 7 days
+            Fulfilled Sales — last 7 days
           </p>
           <span className="text-xs text-neutral-400">IST day buckets</span>
         </div>

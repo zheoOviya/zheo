@@ -71,7 +71,7 @@ function statValue(page: Page, label: string) {
 function seriesPanel(page: Page) {
   return page
     .locator("div.rounded-xl.border")
-    .filter({ has: page.getByText(/Revenue — last 7 days/) });
+    .filter({ has: page.getByText(/Fulfilled Sales — last 7 days/) });
 }
 
 function seriesRows(page: Page) {
@@ -86,14 +86,14 @@ test.describe("admin dashboard metrics truth", () => {
     const today = istToday();
 
     // Card labels are real, placement-day semantics surfaced, no fabricated KPIs.
-    await expect(page.getByText("Today's Revenue")).toBeVisible();
+    await expect(page.getByText("Today's Fulfilled Sales")).toBeVisible();
     await expect(page.getByText("Fulfilled Orders Today")).toBeVisible();
     await expect(page.getByText("Active Orders")).toBeVisible();
 
     // Every headline card value equals the backend payload. Each assertion
     // is scoped to the card that carries its label (bold value line), so an
     // identical series-row value can never satisfy the headline check.
-    await expect(statValue(page, "Today's Revenue")).toHaveText(inr(m.revenue_today));
+    await expect(statValue(page, "Today's Fulfilled Sales")).toHaveText(inr(m.revenue_today));
     await expect(statValue(page, "Fulfilled Orders Today")).toHaveText(
       String(m.fulfilled_orders_today),
     );
@@ -134,7 +134,7 @@ test.describe("admin dashboard metrics truth", () => {
     await adminLogin(page, SEEDED_ADMIN_EMAIL);
     const m = await readMetrics(page);
 
-    await expect(statValue(page, "Today's Revenue")).toHaveText(inr(m.revenue_today));
+    await expect(statValue(page, "Today's Fulfilled Sales")).toHaveText(inr(m.revenue_today));
 
     // Count in-page /metrics GETs so reload freshness is proven by the page
     // itself emitting a new request (not by the oracle re-read below).
@@ -145,8 +145,8 @@ test.describe("admin dashboard metrics truth", () => {
     const before = metricsGets;
 
     await page.reload();
-    await expect(page.getByText("Today's Revenue")).toBeVisible();
-    await expect(statValue(page, "Today's Revenue")).toHaveText(inr(m.revenue_today));
+    await expect(page.getByText("Today's Fulfilled Sales")).toBeVisible();
+    await expect(statValue(page, "Today's Fulfilled Sales")).toHaveText(inr(m.revenue_today));
     await expect(statValue(page, "Fulfilled Orders Today")).toHaveText(
       String(m.fulfilled_orders_today),
     );

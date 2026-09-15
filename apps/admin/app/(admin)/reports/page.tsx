@@ -68,7 +68,7 @@ export default function ReportsPage() {
           Reports
         </h2>
         <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-          Revenue, order mix, and demand snapshot. Auto-refreshes every 60s.
+          Fulfilled sales, order mix, and demand snapshot. Auto-refreshes every 60s.
         </p>
       </div>
 
@@ -80,7 +80,7 @@ export default function ReportsPage() {
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">Today's Revenue</p>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">Today's Fulfilled Sales</p>
           <p className="mt-1 text-2xl font-bold text-primary-600 dark:text-primary-400">
             {metrics ? fmt(metrics.revenue_today) : "-"}
           </p>

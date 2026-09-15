@@ -206,7 +206,7 @@ export default function HealthPage() {
           <p className="mt-1 text-xs text-neutral-400">PICKED_UP / SETTLED · placed today</p>
         </div>
         <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">Today's Revenue</p>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">Today's Fulfilled Sales</p>
           <p className="mt-2 text-2xl font-bold text-neutral-900 dark:text-neutral-100">
             {metrics ? `₹${metrics.revenue_today.toLocaleString("en-IN")}` : "-"}
           </p>
