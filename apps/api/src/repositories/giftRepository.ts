@@ -55,7 +55,11 @@ export interface GiftRepository {
   getById(id: string): Promise<GiftDTO | null>;
   getByToken(token: string): Promise<GiftDTO | null>;
   getBySender(senderId: string): Promise<GiftDTO[]>;
-  updateStatus(id: string, status: GiftStatus): Promise<GiftDTO | null>;
+  /**
+   * CAS cancel: only succeeds while the row is still PENDING, so a payment
+   * capture (PENDING -> ACTIVE) that lands first can never be clobbered.
+   */
+  cancelPending(id: string): Promise<GiftDTO | null>;
   /**
    * CAS claim: only succeeds while the gift is ACTIVE and unclaimed. Returns
    * null when a concurrent claim won, so "fulfills exactly once" holds.
@@ -69,14 +73,30 @@ export interface GiftRepository {
   releaseFromOrder(id: string, orderId: string): Promise<GiftDTO | null>;
   /** CAS fulfill: only from CLAIMED by the order that redeemed the gift. */
   markFulfilled(id: string, orderId: string): Promise<GiftDTO | null>;
-  /** CAS refund-confirm: only from REFUNDING/EXPIRED/ACTIVE (not yet REFUNDED). */
+  /**
+   * CAS refund-confirm: only from a state that already entered the refund
+   * lifecycle (REFUNDING/EXPIRED). A stale confirmation can therefore never
+   * regress a freshly ACTIVE/CLAIMED gift produced by a valid later
+   * transition (e.g. releaseFromOrder).
+   */
   markRefunded(id: string): Promise<GiftDTO | null>;
   /** CAS paid-confirm: only PENDING -> ACTIVE (never clobbers CANCELLED/EXPIRED). */
   markPaid(id: string): Promise<GiftDTO | null>;
-  /** CAS refund-submit: records the submission exactly once. */
-  markRefundSubmitted(id: string): Promise<GiftDTO | null>;
+  /**
+   * CAS refund-submit: reserves the one-shot gateway submission
+   * (refund_requested_at) and moves the gift to REFUNDING, but only when the
+   * row is still in one of the caller's `from` states and has no marker yet.
+   */
+  markRefundSubmitted(id: string, from: GiftStatus[]): Promise<GiftDTO | null>;
+  /** CAS refund-hold: moves a `from`-state gift to REFUNDING without reserving a submission. */
+  markRefunding(id: string, from: GiftStatus[]): Promise<GiftDTO | null>;
   /** Clears the refund-submitted marker after a failed submission. */
   clearRefundSubmitted(id: string): Promise<GiftDTO | null>;
+  /**
+   * Atomic expiry: only a still-due, still-unbound PENDING/ACTIVE/CLAIMED gift
+   * becomes EXPIRED. A gift bound after the sweep's read loses the race.
+   */
+  expireIfDueAndUnbound(id: string, nowIso: string): Promise<GiftDTO | null>;
   listDueForExpiry(nowIso: string): Promise<GiftDTO[]>;
   _reset(): void;
 }
@@ -130,10 +150,11 @@ export class MemoryGiftRepository implements GiftRepository {
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
 
-  async updateStatus(id: string, status: GiftStatus): Promise<GiftDTO | null> {
+  async cancelPending(id: string): Promise<GiftDTO | null> {
     const gift = this.gifts.get(id);
     if (!gift) return null;
-    const updated = { ...gift, status, updated_at: new Date().toISOString() };
+    if (gift.status !== "PENDING") return null;
+    const updated = { ...gift, status: "CANCELLED" as const, updated_at: new Date().toISOString() };
     this.gifts.set(id, updated);
     return updated;
   }
@@ -209,7 +230,10 @@ export class MemoryGiftRepository implements GiftRepository {
   async markRefunded(id: string): Promise<GiftDTO | null> {
     const gift = this.gifts.get(id);
     if (!gift) return null;
-    if (!["REFUNDING", "EXPIRED", "ACTIVE"].includes(gift.status)) return null;
+    // Only a gift already in the refund lifecycle may be confirmed; ACTIVE is
+    // deliberately excluded so a stale confirmation cannot regress a gift that
+    // a later valid transition released back to ACTIVE.
+    if (!["REFUNDING", "EXPIRED"].includes(gift.status)) return null;
     const now = new Date().toISOString();
     const updated = { ...gift, status: "REFUNDED" as const, refunded_at: now, updated_at: now };
     this.gifts.set(id, updated);
@@ -225,20 +249,43 @@ export class MemoryGiftRepository implements GiftRepository {
     return updated;
   }
 
-  async markRefundSubmitted(id: string): Promise<GiftDTO | null> {
+  async markRefundSubmitted(id: string, from: GiftStatus[]): Promise<GiftDTO | null> {
     const gift = this.gifts.get(id);
     if (!gift) return null;
     // CAS: exactly one submission, and never regress a FULFILLED/CANCELLED/
     // PENDING/CLAIMED-bound gift (bound gifts are excluded upstream by the
     // sweep, this guard is the last line of defense).
     if (gift.refund_requested_at !== null) return null;
-    if (!["ACTIVE", "CLAIMED", "EXPIRED", "REFUNDING"].includes(gift.status)) return null;
+    if (!from.includes(gift.status)) return null;
+    const now = new Date().toISOString();
     const updated = {
       ...gift,
       status: "REFUNDING" as const,
-      refund_requested_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      refund_requested_at: now,
+      updated_at: now,
     };
+    this.gifts.set(id, updated);
+    return updated;
+  }
+
+  async markRefunding(id: string, from: GiftStatus[]): Promise<GiftDTO | null> {
+    const gift = this.gifts.get(id);
+    if (!gift) return null;
+    if (!from.includes(gift.status)) return null;
+    const updated = { ...gift, status: "REFUNDING" as const, updated_at: new Date().toISOString() };
+    this.gifts.set(id, updated);
+    return updated;
+  }
+
+  async expireIfDueAndUnbound(id: string, nowIso: string): Promise<GiftDTO | null> {
+    const gift = this.gifts.get(id);
+    if (!gift) return null;
+    if (gift.status !== "PENDING" && gift.status !== "ACTIVE" && gift.status !== "CLAIMED") {
+      return null;
+    }
+    if (gift.redeemed_order_id !== null) return null;
+    if (Date.parse(gift.expires_at) > Date.parse(nowIso)) return null;
+    const updated = { ...gift, status: "EXPIRED" as const, updated_at: new Date().toISOString() };
     this.gifts.set(id, updated);
     return updated;
   }

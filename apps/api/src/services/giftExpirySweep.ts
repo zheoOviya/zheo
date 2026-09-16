@@ -13,12 +13,13 @@ export interface SweepResult {
 
 /**
  * Daily expiry + refund sweep. Gifts that are ACTIVE/CLAIMED/PENDING past
- * their expires_at become EXPIRED. Paid gifts (payment CAPTURED, not yet
- * REFUNDED) move to REFUNDING and a Razorpay refund is submitted exactly
- * once (guarded by gifts.refund_requested_at). The gift only reaches
- * REFUNDED when the refund webhook confirms — except in mock/preview mode,
- * where it resolves immediately. Failed refund submissions keep no marker
- * and are retried on the next sweep.
+ * their expires_at become EXPIRED via an atomic CAS (row must still be due,
+ * unbound, and in a fresh-expiry state at write time). Paid gifts (payment
+ * CAPTURED, not yet REFUNDED) move to REFUNDING and a Razorpay refund is
+ * submitted exactly once (guarded by gifts.refund_requested_at). The gift only
+ * reaches REFUNDED when the refund webhook confirms — except in mock/preview
+ * mode, where it resolves immediately. Failed refund submissions keep no
+ * marker and are retried on the next sweep.
  */
 export async function runGiftExpirySweep(
   giftRepo: GiftRepository,
@@ -27,20 +28,24 @@ export async function runGiftExpirySweep(
 ): Promise<SweepResult> {
   const result: SweepResult = { expired: 0, refunded: 0, failed: 0 };
   const due = await giftRepo.listDueForExpiry(now.toISOString());
+  const nowIso = now.toISOString();
 
   for (const gift of due) {
     try {
-      // A gift already committed to an order is in flight: never expire or
-      // refund it, or the recipient's ₹0 meal at pickup would be voided and
-      // the sender double-paid.
-      if (gift.redeemed_order_id) continue;
-
-      if (gift.status === "ACTIVE" || gift.status === "CLAIMED" || gift.status === "PENDING") {
-        await giftRepo.updateStatus(gift.id, "EXPIRED");
-        result.expired += 1;
-        await emit(
-          createEventEnvelope("GiftExpired", gift.id, { gift_id: gift.id }),
-        );
+      // Expiry is a write-time CAS, not a read-time decision: only a gift that
+      // is STILL due, unbound, and in a fresh-expiry state at the moment of the
+      // write becomes EXPIRED. A gift bound between listDueForExpiry() and this
+      // call therefore survives — no EXPIRED write, no GiftExpired event, no
+      // refund from the stale DTO.
+      let expired: GiftDTO | null = null;
+      if (gift.status === "PENDING" || gift.status === "ACTIVE" || gift.status === "CLAIMED") {
+        expired = await giftRepo.expireIfDueAndUnbound(gift.id, nowIso);
+        if (expired) {
+          result.expired += 1;
+          await emit(
+            createEventEnvelope("GiftExpired", gift.id, { gift_id: gift.id }),
+          );
+        }
       }
 
       const payment = await paymentRepo.getByGiftId(gift.id);
@@ -49,12 +54,23 @@ export async function runGiftExpirySweep(
       // razorpay_payment_id but were never charged, so refunding one would
       // invent money in mock mode and 400-loop in production.
       if (payment.status !== "CAPTURED") continue;
+
+      const current = expired ?? gift;
       // A refund was already submitted (or is being resolved); skip so we
       // never double-refund a gift whose webhook is still in flight.
-      if (gift.refund_requested_at) continue;
+      if (current.refund_requested_at) continue;
 
-      await submitGiftRefund(gift, giftRepo, paymentRepo);
-      result.refunded += 1;
+      // The refund reservation is a CAS constrained to states that were
+      // actually expired (or already refunding). If expiry above lost, the
+      // gift is e.g. CLAIMED and this CAS loses too: no REFUNDING, no gateway
+      // call, no counter inflation.
+      const refunded = await submitGiftRefund(current, giftRepo, paymentRepo, [
+        "EXPIRED",
+        "REFUNDING",
+      ]);
+      if (refunded.status === "REFUNDING" || refunded.status === "REFUNDED") {
+        result.refunded += 1;
+      }
     } catch (err) {
       result.failed += 1;
       logger.error({

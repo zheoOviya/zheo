@@ -174,6 +174,39 @@ describe("Gift routes", () => {
       expect(res.body.data.status).toBe("REFUNDED");
       expect(res.body.data.refunded_at).not.toBeNull();
     });
+
+    it("refuses to cancel an ACTIVE gift once a recipient has claimed it", async () => {
+      const giftId = await seedActiveGift();
+      const senderId = "u00000000-0000-4000-8000-0000000000aa";
+      const payment = await sharedPaymentRepo.create({
+        gift_id: giftId,
+        razorpay_order_id: "order_mock_claim_race",
+        amount: 220,
+      });
+      await sharedPaymentRepo.updateWebhookResult(payment.id, {
+        razorpay_payment_id: "pay_mock_claim_race",
+        status: "CAPTURED",
+        method: "upi",
+        webhook_event: "payment.captured",
+        webhook_raw: null,
+      });
+
+      const token = await claimTokenForGiftId(giftId);
+      await request(app)
+        .post(`/api/v1/gifts/t/${token}/claim`)
+        .set(authHeaders(OTHER_USER_ID))
+        .expect(200);
+
+      const res = await request(app)
+        .post(`/api/v1/gifts/${giftId}/cancel`)
+        .set(authHeaders(senderId))
+        .expect(400);
+
+      expect(res.body.error.code).toBe("GIFT_NOT_CANCELLABLE");
+      const after = await sharedGiftRepo.getById(giftId);
+      expect(after?.status).toBe("CLAIMED");
+      expect(after?.refund_requested_at).toBeNull();
+    });
   });
 
   describe("GET /api/v1/gifts/t/:token", () => {

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { AppError } from "../middleware/envelope";
 import { createEventEnvelope, emit } from "../lib/eventBus";
 import type { CatalogRepository } from "../repositories/catalogRepository";
-import type { GiftRepository, GiftDTO } from "../repositories/giftRepository";
+import type { GiftRepository, GiftDTO, GiftStatus } from "../repositories/giftRepository";
 import type { PaymentRepository } from "../repositories/paymentRepository";
 import type { CustomizationDelta } from "./pricing";
 import { isRazorpayMockMode, razorpayService } from "./razorpay";
@@ -179,12 +179,30 @@ export class GiftService {
       throw new AppError("FORBIDDEN", "Not your gift", 403);
     }
     if (gift.status === "PENDING") {
-      const updated = await this.giftRepo.updateStatus(gift.id, "CANCELLED");
-      if (!updated) throw new AppError("CANCEL_FAILED", "Failed to cancel gift", 500);
+      // CAS: only a still-PENDING row may become CANCELLED. If a payment
+      // capture won the race (PENDING -> ACTIVE) the cancel must lose.
+      const updated = await this.giftRepo.cancelPending(gift.id);
+      if (!updated) {
+        const current = await this.giftRepo.getById(gift.id);
+        throw new AppError(
+          "GIFT_NOT_CANCELLABLE",
+          `Gift is ${current?.status ?? "unknown"}, not cancellable`,
+          400,
+        );
+      }
       return updated;
     }
     if (gift.status === "ACTIVE") {
-      return submitGiftRefund(gift, this.giftRepo, this.paymentRepo);
+      // The refund pipeline proves ACTIVE atomically before it can reserve a
+      // submission; if a claim won, no refund side effect happens and the
+      // result is the claimed gift.
+      const result = await submitGiftRefund(gift, this.giftRepo, this.paymentRepo, ["ACTIVE"]);
+      if (result.status === "REFUNDING" || result.status === "REFUNDED") return result;
+      throw new AppError(
+        "GIFT_NOT_CANCELLABLE",
+        `Gift is ${result.status}, not cancellable`,
+        400,
+      );
     }
     throw new AppError(
       "GIFT_NOT_CANCELLABLE",
@@ -200,8 +218,11 @@ export class GiftService {
    * refund webhook confirms — except in mock/preview mode where no webhook will
    * ever arrive, so it resolves immediately.
    */
-  async requestRefund(gift: GiftDTO): Promise<GiftDTO> {
-    return submitGiftRefund(gift, this.giftRepo, this.paymentRepo);
+  async requestRefund(
+    gift: GiftDTO,
+    from: GiftStatus[] = ["ACTIVE", "EXPIRED", "REFUNDING"],
+  ): Promise<GiftDTO> {
+    return submitGiftRefund(gift, this.giftRepo, this.paymentRepo, from);
   }
 }
 
@@ -210,17 +231,21 @@ export class GiftService {
  *
  * Refund exactly once:
  *   1. A captured payment (razorpay_payment_id) is required.
- *   2. The submission is CAS-reserved via giftRepo.markRefundSubmitted() —
+ *   2. The gift must still be in one of the caller-supplied `from` states
+ *      (e.g. ["ACTIVE"] for a sender cancel, ["EXPIRED","REFUNDING"] for the
+ *      sweep) at the moment the transition is attempted.
+ *   3. The submission is CAS-reserved via giftRepo.markRefundSubmitted() —
  *      only the first caller wins; concurrent/duplicate callers skip.
- *   3. After a successful gateway call the reservation stays set so later
+ *   4. After a successful gateway call the reservation stays set so later
  *      sweeps skip the gift (awaiting the webhook) instead of double-refunding.
- *   4. Mock mode (no real gateway) resolves straight to REFUNDED because no
+ *   5. Mock mode (no real gateway) resolves straight to REFUNDED because no
  *      refund webhook is ever emitted in preview/test environments.
  */
 export async function submitGiftRefund(
   gift: GiftDTO,
   giftRepo: GiftRepository,
   paymentRepo: PaymentRepository,
+  from: GiftStatus[],
 ): Promise<GiftDTO> {
   const payment = await paymentRepo.getByGiftId(gift.id);
   if (!payment) {
@@ -234,19 +259,22 @@ export async function submitGiftRefund(
   }
   if (!payment.razorpay_payment_id) {
     // Not yet captured: nothing to refund; stay REFUNDING so the expiry sweep
-    // retries once a capture lands.
-    const updated = await giftRepo.updateStatus(gift.id, "REFUNDING");
-    if (!updated) throw new AppError("REFUND_FAILED", "Failed to start refund", 500);
-    return updated;
+    // retries once a capture lands. CAS on the expected caller state so this
+    // cannot force REFUNDING over a gift that moved on.
+    const updated = await giftRepo.markRefunding(gift.id, from);
+    return updated ?? (await giftRepo.getById(gift.id)) ?? gift;
   }
   if (gift.refund_requested_at) {
-    // Refund already submitted; awaiting webhook confirmation.
-    const updated = await giftRepo.updateStatus(gift.id, "REFUNDING");
-    return updated ?? gift;
+    // Refund already submitted; awaiting webhook confirmation. CAS again so a
+    // gift that moved out of the expected state is not forced back.
+    const updated = await giftRepo.markRefunding(gift.id, from);
+    return updated ?? (await giftRepo.getById(gift.id)) ?? gift;
   }
 
   // CAS-reserve the submission so two concurrent refunds never both fire.
-  const reserved = await giftRepo.markRefundSubmitted(gift.id);
+  // This reservation is the gate that must be won BEFORE any gateway call, so
+  // a lost expected-state race means razorpayService.refund is never invoked.
+  const reserved = await giftRepo.markRefundSubmitted(gift.id, from);
   if (!reserved) {
     return (await giftRepo.getById(gift.id)) ?? gift;
   }

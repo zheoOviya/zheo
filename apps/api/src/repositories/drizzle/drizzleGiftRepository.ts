@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq, and, isNull, inArray, isNotNull, type SQL } from "drizzle-orm";
+import { eq, and, isNull, inArray, isNotNull, lte, type SQL } from "drizzle-orm";
 import { gifts } from "@snakzap/db";
 import type { DrizzleDb } from "../../lib/dbType";
 import type {
@@ -110,11 +110,14 @@ export class DrizzleGiftRepository implements GiftRepository {
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
 
-  async updateStatus(id: string, status: GiftStatus): Promise<GiftDTO | null> {
-    await this.db
-      .update(gifts)
-      .set({ status, updated_at: new Date() })
-      .where(eq(gifts.id, id));
+  async cancelPending(id: string): Promise<GiftDTO | null> {
+    const now = new Date();
+    const ok = await this.casUpdate(
+      gifts,
+      { status: "CANCELLED", updated_at: now },
+      and(eq(gifts.id, id), eq(gifts.status, "PENDING")),
+    );
+    if (!ok) return null;
     return this.getById(id);
   }
 
@@ -178,7 +181,7 @@ export class DrizzleGiftRepository implements GiftRepository {
     const ok = await this.casUpdate(
       gifts,
       { status: "REFUNDED", refunded_at: now, updated_at: now },
-      and(eq(gifts.id, id), inArray(gifts.status, ["REFUNDING", "EXPIRED", "ACTIVE"])),
+      and(eq(gifts.id, id), inArray(gifts.status, ["REFUNDING", "EXPIRED"])),
     );
     if (!ok) return null;
     return this.getById(id);
@@ -195,7 +198,7 @@ export class DrizzleGiftRepository implements GiftRepository {
     return this.getById(id);
   }
 
-  async markRefundSubmitted(id: string): Promise<GiftDTO | null> {
+  async markRefundSubmitted(id: string, from: GiftStatus[]): Promise<GiftDTO | null> {
     const now = new Date();
     const ok = await this.casUpdate(
       gifts,
@@ -203,7 +206,34 @@ export class DrizzleGiftRepository implements GiftRepository {
       and(
         eq(gifts.id, id),
         isNull(gifts.refund_requested_at),
-        inArray(gifts.status, ["ACTIVE", "CLAIMED", "EXPIRED", "REFUNDING"]),
+        inArray(gifts.status, from),
+      ),
+    );
+    if (!ok) return null;
+    return this.getById(id);
+  }
+
+  async markRefunding(id: string, from: GiftStatus[]): Promise<GiftDTO | null> {
+    const now = new Date();
+    const ok = await this.casUpdate(
+      gifts,
+      { status: "REFUNDING", updated_at: now },
+      and(eq(gifts.id, id), inArray(gifts.status, from)),
+    );
+    if (!ok) return null;
+    return this.getById(id);
+  }
+
+  async expireIfDueAndUnbound(id: string, nowIso: string): Promise<GiftDTO | null> {
+    const now = new Date(nowIso);
+    const ok = await this.casUpdate(
+      gifts,
+      { status: "EXPIRED", updated_at: new Date() },
+      and(
+        eq(gifts.id, id),
+        inArray(gifts.status, ["PENDING", "ACTIVE", "CLAIMED"]),
+        isNull(gifts.redeemed_order_id),
+        lte(gifts.expires_at, now),
       ),
     );
     if (!ok) return null;
