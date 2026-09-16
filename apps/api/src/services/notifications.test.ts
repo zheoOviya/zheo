@@ -5,6 +5,7 @@ import { resetRedisForTests } from "../lib/redis";
 import {
   registerVendorNotificationHandlers,
   drainNotifications,
+  deliverOne,
   sendSmsMessage,
   sendEmailMessage,
 } from "./notifications";
@@ -91,7 +92,7 @@ describe("MemoryNotificationRepository retry semantics", () => {
     repo = new MemoryNotificationRepository();
   });
 
-  it("retryable failure stays PENDING until backoff elapses, then becomes dead", async () => {
+  it("retryable failure stays PENDING until backoff elapses, then can be reserved again", async () => {
     const n = await repo.enqueue({
       user_id: APPLICANT_ID,
       channel: "sms",
@@ -99,16 +100,18 @@ describe("MemoryNotificationRepository retry semantics", () => {
       body: "hi",
     });
 
-    await repo.markRetryable(n.id, "boom", new Date(Date.now() + 60_000));
+    const r1 = await repo.reserveAttempt(n.id, 0, new Date());
+    await repo.markRetryable(n.id, r1!.attempts, "boom", new Date(Date.now() + 60_000));
     expect(await repo.listPending()).toHaveLength(0);
 
-    await repo.markRetryable(n.id, "boom", new Date(Date.now() - 1_000));
+    await repo.markRetryable(n.id, r1!.attempts, "boom", new Date(Date.now() - 1_000));
     expect(await repo.listPending()).toHaveLength(1);
 
-    await repo.markDead(n.id, "boom");
+    const r2 = await repo.reserveAttempt(n.id, r1!.attempts, new Date());
+    await repo.markDead(n.id, r2!.attempts, "boom");
     const all = await repo.listAll();
     expect(all[0]!.status).toBe("FAILED");
-    expect(all[0]!.attempts).toBe(3);
+    expect(all[0]!.attempts).toBe(2);
     expect(await repo.listPending()).toHaveLength(0);
   });
 });
@@ -246,9 +249,11 @@ describe("Provider truth (NOTIFICATION-PROVIDER-TRUTH-A2)", () => {
   it("T10: at MAX_ATTEMPTS boundary the unconfigured provider reaches FAILED, not SENT", async () => {
     vi.spyOn(logger, "error").mockReturnValue(logger);
     const n = await enqueueSms();
+    const now = new Date();
     const due = new Date(Date.now() - 60_000);
     for (let i = 0; i < 4; i += 1) {
-      await sharedNotificationRepo.markRetryable(n.id, "prior", due);
+      const reserved = await sharedNotificationRepo.reserveAttempt(n.id, i, now);
+      await sharedNotificationRepo.markRetryable(n.id, reserved!.attempts, "prior", due);
     }
     const [before] = await sharedNotificationRepo.listAll();
     expect(before!.attempts).toBe(4);
@@ -296,5 +301,109 @@ describe("Provider truth (NOTIFICATION-PROVIDER-TRUTH-A2)", () => {
     const statuses: NotificationStatus[] = ["PENDING", "SENT", "FAILED"];
     expect(statuses).toHaveLength(3);
     expect(drainNotifications.length).toBe(0);
+  });
+});
+
+// ============================================
+// NOTIFICATION-DELIVERY-CONCURRENCY-A2 — service delivery flow.
+// The reservation decides the winner BEFORE any provider call; a loser
+// returns without invoking the provider or mutating the row.
+// ============================================
+
+describe("Notification delivery concurrency (service flow)", () => {
+  beforeEach(() => {
+    resetRedisForTests();
+    sharedNotificationRepo._reset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function swapReserve(
+    fn: (id: string, expected: number, now: Date) => Promise<unknown>,
+  ): () => void {
+    const record = sharedNotificationRepo as unknown as Record<string, unknown>;
+    const original = record.reserveAttempt;
+    record.reserveAttempt = fn;
+    return () => {
+      record.reserveAttempt = original;
+    };
+  }
+
+  it("T15: provider is invoked only after a successful attempt reservation", async () => {
+    const n = await enqueueSms();
+    const record = sharedNotificationRepo as unknown as Record<string, unknown>;
+    const realReserve = sharedNotificationRepo.reserveAttempt.bind(sharedNotificationRepo);
+    const reserveSpy = vi.fn((id: string, expected: number, now: Date) =>
+      realReserve(id, expected, now),
+    );
+    record.reserveAttempt = reserveSpy;
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await withNodeEnv("production", () => deliverOne(n));
+    } finally {
+      record.reserveAttempt = realReserve;
+    }
+
+    const providerIdx = errorSpy.mock.calls.findIndex(
+      (c) =>
+        (c[0] as { message?: string } | undefined)?.message ===
+        "notification_sms_provider_unconfigured",
+    );
+    expect(providerIdx).toBeGreaterThanOrEqual(0);
+    expect(reserveSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      errorSpy.mock.invocationCallOrder[providerIdx]!,
+    );
+  });
+
+  it("T16: a reservation loser calls the provider zero times and mutates nothing", async () => {
+    const n = await enqueueSms();
+    const restore = swapReserve(async () => null);
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await withNodeEnv("production", () => deliverOne(n));
+    } finally {
+      restore();
+    }
+
+    expect(
+      errorSpy.mock.calls.some(
+        (c) =>
+          (c[0] as { message?: string } | undefined)?.message ===
+          "notification_sms_provider_unconfigured",
+      ),
+    ).toBe(false);
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("PENDING");
+    expect(row!.attempts).toBe(0);
+  });
+
+  it("two logical drainers on the same candidate invoke the provider exactly once", async () => {
+    const n = await enqueueSms();
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    await withNodeEnv("production", () => Promise.all([deliverOne(n), deliverOne(n)]));
+
+    const providerCalls = errorSpy.mock.calls.filter(
+      (c) =>
+        (c[0] as { message?: string } | undefined)?.message ===
+        "notification_sms_provider_unconfigured",
+    ).length;
+    expect(providerCalls).toBe(1);
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.attempts).toBe(1);
+  });
+
+  it("T18: released provider fail-closed truth is preserved under reservation", async () => {
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    await enqueueSms();
+    await withNodeEnv("production", () => drainNotifications());
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).not.toBe("SENT");
+    expect(row!.status).toBe("PENDING");
+    expect(row!.last_error).toContain("provider not configured");
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "notification_sms_provider_unconfigured" }),
+    );
   });
 });

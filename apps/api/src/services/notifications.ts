@@ -7,6 +7,7 @@ import type {
 import {
   sharedNotificationRepo,
 } from "../repositories/shared";
+import { NOTIFICATION_MAX_ATTEMPTS } from "../repositories/notificationRepository";
 import type {
   EnqueueNotificationInput,
   NotificationDTO,
@@ -20,7 +21,7 @@ import type {
 // asynchronous drain. Failed sends are retried with exponential backoff.
 // ============================================
 
-const MAX_ATTEMPTS = 5;
+const MAX_ATTEMPTS = NOTIFICATION_MAX_ATTEMPTS;
 const BASE_BACKOFF_MS = 30_000;
 
 // No real SMS/email provider is wired in this build. Outside of test mode a
@@ -64,26 +65,34 @@ export async function drainNotifications(limit = 50): Promise<void> {
   }
 }
 
-async function deliverOne(n: NotificationDTO): Promise<void> {
+/**
+ * Attempt one delivery: atomically reserve the attempt BEFORE calling the
+ * provider, then CAS the terminal/retry transition from that exact reserved
+ * attempt. A concurrent worker that loses the reservation returns without
+ * touching the provider or the row. Exported for the concurrency unit tests.
+ */
+export async function deliverOne(n: NotificationDTO): Promise<void> {
+  const reserved = await sharedNotificationRepo.reserveAttempt(n.id, n.attempts, new Date());
+  if (!reserved) return;
   try {
     const ok =
-      n.channel === "sms"
-        ? await sendSmsMessage(n.to_address, n.body)
-        : await sendEmailMessage(n.to_address, n.body);
+      reserved.channel === "sms"
+        ? await sendSmsMessage(reserved.to_address, reserved.body)
+        : await sendEmailMessage(reserved.to_address, reserved.body);
     if (ok) {
-      await sharedNotificationRepo.markSent(n.id);
+      await sharedNotificationRepo.markSent(reserved.id, reserved.attempts);
       return;
     }
     throw new Error("send returned false");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const nextAttempts = n.attempts + 1;
-    if (nextAttempts >= MAX_ATTEMPTS) {
-      await sharedNotificationRepo.markDead(n.id, message);
+    if (reserved.attempts >= MAX_ATTEMPTS) {
+      await sharedNotificationRepo.markDead(reserved.id, reserved.attempts, message);
     } else {
-      const backoffMs = BASE_BACKOFF_MS * 2 ** n.attempts;
+      const backoffMs = BASE_BACKOFF_MS * 2 ** (reserved.attempts - 1);
       await sharedNotificationRepo.markRetryable(
-        n.id,
+        reserved.id,
+        reserved.attempts,
         message,
         new Date(Date.now() + backoffMs),
       );

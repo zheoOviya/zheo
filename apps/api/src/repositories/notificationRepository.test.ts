@@ -8,18 +8,21 @@ import {
 } from "./notificationRepository";
 
 // ============================================================
-// NOTIFICATION-PG-PARITY-A2 — memory/Postgres observable parity for
-// `attempts`. The Drizzle backend must apply the SAME attempt semantics as
-// the authoritative memory backend (attempts+1 on every terminal/retry
-// transition), and must do so with an atomic SQL increment rather than a
-// read-modify-write in application code.
+// NOTIFICATION-DELIVERY-CONCURRENCY-A2 — atomic attempt reservation and
+// terminal-state CAS for the notification outbox.
 //
-// The in-memory stand-in below interprets the two Postgres conditions the
-// repository builds (eq(status) + lte(next_attempt_at)) and the atomic
-// `attempts = attempts + 1` SQL expression produced by drizzle-orm, so these
-// tests exercise the real DrizzleNotificationRepository code path without a
-// live connection. Durable semantics are additionally proven against real
-// PostgreSQL by apps/api/integration/realPgNotificationParity.ts.
+// `attempts` now counts provider attempts RESERVED/INVOKED: `reserveAttempt`
+// atomically increments it (status=PENDING + due + attempts=expected + max
+// guard), and every terminal/retry write only mutates the exact reserved
+// attempt, so a stale worker can neither duplicate a send nor regress
+// SENT/FAILED.
+//
+// The in-memory stand-in below interprets the Postgres conditions the
+// repository builds (eq/lt/lte) and the atomic `attempts = attempts + 1` SQL
+// expression produced by drizzle-orm, so the same contract suite runs against
+// the real DrizzleNotificationRepository code path without a live connection.
+// Durable/concurrent atomicity is proven against real PostgreSQL by
+// apps/api/integration/realPgNotificationDeliveryConcurrency.ts.
 // ============================================================
 
 interface FakeDb {
@@ -30,7 +33,7 @@ interface FakeDb {
 
 interface Pair {
   col: string;
-  op: "=" | "<=";
+  op: "=" | "<=" | "<";
   val: unknown;
 }
 
@@ -66,11 +69,12 @@ function parsePairs(cond: unknown): Pair[] {
     const tok = tokens[i]!;
     if (tok.kind !== "col") continue;
     let j = i + 1;
-    let op: "=" | "<=" = "=";
+    let op: Pair["op"] = "=";
     while (j < tokens.length && tokens[j]!.kind !== "param" && tokens[j]!.kind !== "col") {
       const text = tokens[j]!.text;
       if (typeof text === "string") {
         if (text.includes("<=")) op = "<=";
+        else if (text.includes("<")) op = "<";
         else if (text.includes("=")) op = "=";
       }
       j += 1;
@@ -82,15 +86,19 @@ function parsePairs(cond: unknown): Pair[] {
   return pairs;
 }
 
+function compare(left: unknown, right: unknown): number {
+  const l = left instanceof Date ? left.getTime() : (left as number);
+  const r = right instanceof Date ? right.getTime() : (right as number);
+  if (typeof l === "number" && typeof r === "number") return l - r;
+  return String(l).localeCompare(String(r));
+}
+
 function predicate(cond: unknown): (row: Record<string, unknown>) => boolean {
   const pairs = parsePairs(cond);
   return (row) =>
     pairs.every(({ col, op, val }) => {
-      if (op === "<=") {
-        const left = (row[col] as Date).getTime();
-        const right = (val as Date).getTime();
-        return left <= right;
-      }
+      if (op === "<=") return compare(row[col], val) <= 0;
+      if (op === "<") return compare(row[col], val) < 0;
       return row[col] === val;
     });
 }
@@ -146,10 +154,18 @@ function createFakeDb(): FakeDb {
         return {
           where: (cond: unknown) => {
             const pred = predicate(cond);
+            const matched: Record<string, unknown>[] = [];
             for (const row of rows) {
-              if (pred(row)) applySet(row, values);
+              if (pred(row)) {
+                applySet(row, values);
+                matched.push({ ...row });
+              }
             }
-            return Promise.resolve([]);
+            const result = Promise.resolve(matched) as Promise<unknown[]> & {
+              returning: () => Promise<unknown[]>;
+            };
+            result.returning = () => Promise.resolve(matched);
+            return result;
           },
         };
       },
@@ -177,149 +193,229 @@ function snapshot(repo: NotificationRepository): Promise<NotificationDTO[]> {
   return repo.listAll();
 }
 
-describe("MemoryNotificationRepository attempts semantics (authoritative)", () => {
-  it("enqueue starts PENDING with attempts 0 and no error", async () => {
-    const repo = new MemoryNotificationRepository();
-    const n = await repo.enqueue(input());
-    expect(n.status).toBe("PENDING");
-    expect(n.attempts).toBe(0);
-    expect(n.last_error).toBeNull();
-  });
+// ============================================================
+// Shared contract suite — runs identically against the authoritative memory
+// backend and the Drizzle backend (over the fake SQL interpreter). This is
+// the T17 memory/Postgres semantic-parity proof at the unit level.
+// ============================================================
 
-  it("markSent increments attempts and clears last_error", async () => {
-    const repo = new MemoryNotificationRepository();
-    const n = await repo.enqueue(input());
-    await repo.markSent(n.id);
-    const [row] = await repo.listAll();
-    expect(row!.status).toBe("SENT");
-    expect(row!.attempts).toBe(1);
-    expect(row!.last_error).toBeNull();
-  });
+function reservationContract(label: string, make: () => NotificationRepository): void {
+  describe(`${label} reservation + terminal CAS contract`, () => {
+    it("T1: reserving an eligible PENDING row succeeds", async () => {
+      const repo = make();
+      const n = await repo.enqueue(input());
+      const r = await repo.reserveAttempt(n.id, 0, new Date());
+      expect(r).not.toBeNull();
+      expect(r!.status).toBe("PENDING");
+      expect(r!.attempts).toBe(1);
+    });
 
-  it("markRetryable increments attempts, keeps PENDING, records error + backoff", async () => {
-    const repo = new MemoryNotificationRepository();
-    const n = await repo.enqueue(input());
-    await repo.markRetryable(n.id, "boom", FUTURE);
-    const [row] = await repo.listAll();
-    expect(row!.status).toBe("PENDING");
-    expect(row!.attempts).toBe(1);
-    expect(row!.last_error).toBe("boom");
-    expect(row!.next_attempt_at).toBe(FUTURE.toISOString());
-  });
+    it("T2: reservation increments attempts exactly once", async () => {
+      const repo = make();
+      const n = await repo.enqueue(input());
+      const first = await repo.reserveAttempt(n.id, 0, new Date());
+      expect(first!.attempts).toBe(1);
+      const second = await repo.reserveAttempt(n.id, 0, new Date());
+      expect(second).toBeNull();
+      const [row] = await snapshot(repo);
+      expect(row!.attempts).toBe(1);
+    });
 
-  it("markDead increments attempts and records FAILED", async () => {
-    const repo = new MemoryNotificationRepository();
-    const n = await repo.enqueue(input());
-    await repo.markDead(n.id, "dead");
-    const [row] = await repo.listAll();
-    expect(row!.status).toBe("FAILED");
-    expect(row!.attempts).toBe(1);
-    expect(row!.last_error).toBe("dead");
-  });
-});
+    it("T3: reservation with a future next_attempt_at loses", async () => {
+      const repo = make();
+      const n = await repo.enqueue(input());
+      const r1 = await repo.reserveAttempt(n.id, 0, new Date());
+      await repo.markRetryable(n.id, r1!.attempts, "later", FUTURE);
+      const r2 = await repo.reserveAttempt(n.id, 1, new Date());
+      expect(r2).toBeNull();
+    });
 
-describe("DrizzleNotificationRepository attempts parity", () => {
-  it("enqueue returns PENDING/attempts 0 and persists the same", async () => {
+    it("T4: reservation on a SENT row loses", async () => {
+      const repo = make();
+      const n = await repo.enqueue(input());
+      const r1 = await repo.reserveAttempt(n.id, 0, new Date());
+      await repo.markSent(n.id, r1!.attempts);
+      expect(await repo.reserveAttempt(n.id, 1, new Date())).toBeNull();
+    });
+
+    it("T5: reservation on a FAILED row loses", async () => {
+      const repo = make();
+      const n = await repo.enqueue(input());
+      const r1 = await repo.reserveAttempt(n.id, 0, new Date());
+      await repo.markDead(n.id, r1!.attempts, "dead");
+      expect(await repo.reserveAttempt(n.id, 1, new Date())).toBeNull();
+    });
+
+    it("T6: a stale expectedAttempts token loses", async () => {
+      const repo = make();
+      const n = await repo.enqueue(input());
+      await repo.reserveAttempt(n.id, 0, new Date());
+      expect(await repo.reserveAttempt(n.id, 0, new Date())).toBeNull();
+      const [row] = await snapshot(repo);
+      expect(row!.attempts).toBe(1);
+    });
+
+    it("T7: markSent succeeds only for the matching reserved attempt", async () => {
+      const repo = make();
+      const n = await repo.enqueue(input());
+      const r1 = await repo.reserveAttempt(n.id, 0, new Date());
+      expect(await repo.markSent(n.id, 0)).toBeNull();
+      const sent = await repo.markSent(n.id, r1!.attempts);
+      expect(sent).not.toBeNull();
+      expect(sent!.status).toBe("SENT");
+      expect(sent!.attempts).toBe(1);
+    });
+
+    it("T8: a stale markRetryable cannot regress SENT", async () => {
+      const repo = make();
+      const n = await repo.enqueue(input());
+      const r1 = await repo.reserveAttempt(n.id, 0, new Date());
+      await repo.markSent(n.id, r1!.attempts);
+      expect(await repo.markRetryable(n.id, r1!.attempts, "stale", PAST)).toBeNull();
+      const [row] = await snapshot(repo);
+      expect(row!.status).toBe("SENT");
+    });
+
+    it("T9: a stale markDead cannot regress SENT", async () => {
+      const repo = make();
+      const n = await repo.enqueue(input());
+      const r1 = await repo.reserveAttempt(n.id, 0, new Date());
+      await repo.markSent(n.id, r1!.attempts);
+      expect(await repo.markDead(n.id, r1!.attempts, "stale")).toBeNull();
+      const [row] = await snapshot(repo);
+      expect(row!.status).toBe("SENT");
+    });
+
+    it("T10: a stale markSent cannot resurrect FAILED", async () => {
+      const repo = make();
+      const n = await repo.enqueue(input());
+      const r1 = await repo.reserveAttempt(n.id, 0, new Date());
+      await repo.markDead(n.id, r1!.attempts, "dead");
+      expect(await repo.markSent(n.id, r1!.attempts)).toBeNull();
+      const [row] = await snapshot(repo);
+      expect(row!.status).toBe("FAILED");
+    });
+
+    it("T11: retryable failure keeps attempts unchanged after reservation", async () => {
+      const repo = make();
+      const n = await repo.enqueue(input());
+      const r1 = await repo.reserveAttempt(n.id, 0, new Date());
+      const retried = await repo.markRetryable(n.id, r1!.attempts, "boom", PAST);
+      expect(retried).not.toBeNull();
+      expect(retried!.status).toBe("PENDING");
+      expect(retried!.attempts).toBe(1);
+      expect(retried!.last_error).toBe("boom");
+    });
+
+    it("T12: dead failure keeps attempts unchanged after reservation", async () => {
+      const repo = make();
+      const n = await repo.enqueue(input());
+      const r1 = await repo.reserveAttempt(n.id, 0, new Date());
+      const dead = await repo.markDead(n.id, r1!.attempts, "boom");
+      expect(dead).not.toBeNull();
+      expect(dead!.status).toBe("FAILED");
+      expect(dead!.attempts).toBe(1);
+    });
+
+    it("T13: the fifth failed attempt ends FAILED with attempts=5", async () => {
+      const repo = make();
+      const due = new Date();
+      const n = await repo.enqueue(input());
+      for (let i = 0; i < 4; i += 1) {
+        const r = await repo.reserveAttempt(n.id, i, due);
+        expect(r!.attempts).toBe(i + 1);
+        await repo.markRetryable(n.id, r!.attempts, "e", due);
+      }
+      const fifth = await repo.reserveAttempt(n.id, 4, due);
+      expect(fifth!.attempts).toBe(5);
+      await repo.markDead(n.id, fifth!.attempts, "final");
+      const [row] = await snapshot(repo);
+      expect(row!.status).toBe("FAILED");
+      expect(row!.attempts).toBe(5);
+    });
+
+    it("T14: a sixth reservation (and provider call) is impossible", async () => {
+      const repo = make();
+      const due = new Date();
+      const n = await repo.enqueue(input());
+      for (let i = 0; i < 5; i += 1) {
+        const r = await repo.reserveAttempt(n.id, i, due);
+        expect(r).not.toBeNull();
+        await repo.markRetryable(n.id, r!.attempts, "e", due);
+      }
+      expect(await repo.reserveAttempt(n.id, 5, due)).toBeNull();
+      const [row] = await snapshot(repo);
+      expect(row!.attempts).toBe(5);
+    });
+
+    it("reservation on an unknown id returns null (no throw)", async () => {
+      const repo = make();
+      const missing = "00000000-0000-4000-8000-0000000000ff";
+      expect(await repo.reserveAttempt(missing, 0, new Date())).toBeNull();
+      expect(await repo.markSent(missing, 1)).toBeNull();
+      expect(await repo.markRetryable(missing, 1, "e", PAST)).toBeNull();
+      expect(await repo.markDead(missing, 1, "e")).toBeNull();
+    });
+
+    it("concurrent reservation of one PENDING row has exactly one winner", async () => {
+      const repo = make();
+      const n = await repo.enqueue(input());
+      const results = await Promise.all(
+        Array.from({ length: 8 }, () => repo.reserveAttempt(n.id, 0, new Date())),
+      );
+      expect(results.filter((r) => r !== null)).toHaveLength(1);
+      const [row] = await snapshot(repo);
+      expect(row!.attempts).toBe(1);
+    });
+  });
+}
+
+reservationContract("MemoryNotificationRepository", () => new MemoryNotificationRepository());
+reservationContract(
+  "DrizzleNotificationRepository",
+  () => new DrizzleNotificationRepository(createFakeDb().db),
+);
+
+// ============================================================
+// Drizzle-specific write-shape assertions.
+// ============================================================
+
+describe("DrizzleNotificationRepository reservation write shape", () => {
+  it("reserveAttempt uses an atomic SQL increment; mark* never touch attempts", async () => {
     const fake = createFakeDb();
     const repo = new DrizzleNotificationRepository(fake.db);
     const n = await repo.enqueue(input());
-    expect(n.status).toBe("PENDING");
-    expect(n.attempts).toBe(0);
-    const [row] = await repo.listAll();
-    expect(row!.attempts).toBe(0);
-    expect(row!.status).toBe("PENDING");
-    expect(row!.last_error).toBeNull();
-  });
+    const r = await repo.reserveAttempt(n.id, 0, new Date());
+    expect(r).not.toBeNull();
 
-  it("markSent applies attempts+1, SENT, last_error=null", async () => {
-    const fake = createFakeDb();
-    const repo = new DrizzleNotificationRepository(fake.db);
-    const n = await repo.enqueue(input());
-    await repo.markSent(n.id);
-    const [row] = await repo.listAll();
-    expect(row!.status).toBe("SENT");
-    expect(row!.attempts).toBe(1);
-    expect(row!.last_error).toBeNull();
-  });
-
-  it("consecutive markSent calls accumulate attempts (1 then 2)", async () => {
-    const fake = createFakeDb();
-    const repo = new DrizzleNotificationRepository(fake.db);
-    const n = await repo.enqueue(input());
-    await repo.markSent(n.id);
-    await repo.markSent(n.id);
-    const [row] = await repo.listAll();
-    expect(row!.attempts).toBe(2);
-  });
-
-  it("markRetryable applies attempts+1, keeps PENDING, records error + backoff", async () => {
-    const fake = createFakeDb();
-    const repo = new DrizzleNotificationRepository(fake.db);
-    const n = await repo.enqueue(input());
-    await repo.markRetryable(n.id, "boom", FUTURE);
-    const [row] = await repo.listAll();
-    expect(row!.status).toBe("PENDING");
-    expect(row!.attempts).toBe(1);
-    expect(row!.last_error).toBe("boom");
-    expect(row!.next_attempt_at).toBe(FUTURE.toISOString());
-  });
-
-  it("markDead applies attempts+1 and records FAILED", async () => {
-    const fake = createFakeDb();
-    const repo = new DrizzleNotificationRepository(fake.db);
-    const n = await repo.enqueue(input());
-    await repo.markDead(n.id, "dead");
-    const [row] = await repo.listAll();
-    expect(row!.status).toBe("FAILED");
-    expect(row!.attempts).toBe(1);
-    expect(row!.last_error).toBe("dead");
-  });
-
-  it("mixed transitions accumulate attempts across retry then death", async () => {
-    const fake = createFakeDb();
-    const repo = new DrizzleNotificationRepository(fake.db);
-    const n = await repo.enqueue(input());
-    await repo.markRetryable(n.id, "e1", PAST);
-    await repo.markRetryable(n.id, "e2", PAST);
-    await repo.markDead(n.id, "e3");
-    const [row] = await repo.listAll();
-    expect(row!.attempts).toBe(3);
-    expect(row!.status).toBe("FAILED");
-    expect(row!.last_error).toBe("e3");
-  });
-
-  it("uses an atomic SQL increment expression, not an absolute app-computed value", async () => {
-    const fake = createFakeDb();
-    const repo = new DrizzleNotificationRepository(fake.db);
-    const n = await repo.enqueue(input());
-    await repo.markSent(n.id);
-    const sent = fake.setCalls().find((c) => c.status === "SENT");
-    expect(sent).toBeDefined();
-    expect(typeof sent!.attempts).not.toBe("number");
-    expect(sent!.attempts).toBeTruthy();
+    const reserveSet = fake.setCalls()[0]!;
+    expect(typeof reserveSet.attempts).not.toBe("number");
     expect(
-      Array.isArray((sent!.attempts as { queryChunks?: unknown[] }).queryChunks),
+      Array.isArray((reserveSet.attempts as { queryChunks?: unknown[] }).queryChunks),
     ).toBe(true);
 
-    await repo.markRetryable(n.id, "boom", FUTURE);
-    const retry = fake.setCalls().filter((c) => c.status === "PENDING").at(-1);
-    expect(typeof retry!.attempts).not.toBe("number");
-
-    await repo.markDead(n.id, "dead");
-    const dead = fake.setCalls().find((c) => c.status === "FAILED");
-    expect(typeof dead!.attempts).not.toBe("number");
+    await repo.markSent(r!.id, r!.attempts);
+    await repo.markRetryable(r!.id, r!.attempts, "boom", PAST);
+    await repo.markDead(r!.id, r!.attempts, "dead");
+    for (const call of fake.setCalls().slice(1)) {
+      expect(call).not.toHaveProperty("attempts");
+    }
   });
 
-  it("listPending filters PENDING + due, excluding SENT/FAILED and future backoff", async () => {
+  it("listPending filters PENDING + due, excluding terminal and backed-off rows", async () => {
     const fake = createFakeDb();
     const repo = new DrizzleNotificationRepository(fake.db);
     const due = await repo.enqueue(input());
     const backedOff = await repo.enqueue(input());
     const sent = await repo.enqueue(input());
     const failed = await repo.enqueue(input());
-    await repo.markRetryable(backedOff.id, "later", FUTURE);
-    await repo.markSent(sent.id);
-    await repo.markDead(failed.id, "dead");
+
+    const bo = await repo.reserveAttempt(backedOff.id, 0, new Date());
+    await repo.markRetryable(backedOff.id, bo!.attempts, "later", FUTURE);
+    const s = await repo.reserveAttempt(sent.id, 0, new Date());
+    await repo.markSent(sent.id, s!.attempts);
+    const f = await repo.reserveAttempt(failed.id, 0, new Date());
+    await repo.markDead(failed.id, f!.attempts, "dead");
 
     const pending = await repo.listPending();
     const ids = pending.map((p) => p.id);
@@ -330,22 +426,24 @@ describe("DrizzleNotificationRepository attempts parity", () => {
   });
 });
 
-describe("Memory/Postgres transition parity", () => {
-  it("identical operation sequence yields identical observable state", async () => {
+// ============================================================
+// T17: memory/Postgres observable parity for identical sequences.
+// ============================================================
+
+describe("Memory/Postgres reservation parity", () => {
+  it("identical operation sequences yield identical observable state", async () => {
     const memory = new MemoryNotificationRepository();
     const fake = createFakeDb();
     const drizzle = new DrizzleNotificationRepository(fake.db);
+    const due = new Date();
 
     const run = async (repo: NotificationRepository) => {
       const n = await repo.enqueue(input());
-      await repo.markRetryable(n.id, "e1", PAST);
-      await repo.markRetryable(n.id, "e2", PAST);
-      await repo.markDead(n.id, "e3");
-      const afterDead = await snapshot(repo);
-      expect(afterDead[0]!.attempts).toBe(3);
-      expect(afterDead[0]!.status).toBe("FAILED");
-      expect(afterDead[0]!.last_error).toBe("e3");
-      return afterDead.map((r) => ({
+      const r1 = await repo.reserveAttempt(n.id, 0, due);
+      await repo.markRetryable(n.id, r1!.attempts, "e1", due);
+      const r2 = await repo.reserveAttempt(n.id, 1, due);
+      await repo.markSent(n.id, r2!.attempts);
+      return (await snapshot(repo)).map((r) => ({
         status: r.status,
         attempts: r.attempts,
         last_error: r.last_error,
@@ -355,15 +453,7 @@ describe("Memory/Postgres transition parity", () => {
     const memoryState = await run(memory);
     const drizzleState = await run(drizzle);
     expect(drizzleState).toEqual(memoryState);
-  });
-
-  it("mark on an unknown id is a silent no-op in both backends", async () => {
-    const memory = new MemoryNotificationRepository();
-    const fake = createFakeDb();
-    const drizzle = new DrizzleNotificationRepository(fake.db);
-    await memory.markSent("00000000-0000-4000-8000-0000000000ff");
-    await drizzle.markSent("00000000-0000-4000-8000-0000000000ff");
-    expect(await memory.listAll()).toHaveLength(0);
-    expect(await drizzle.listAll()).toHaveLength(0);
+    expect(memoryState[0]!.status).toBe("SENT");
+    expect(memoryState[0]!.attempts).toBe(2);
   });
 });
