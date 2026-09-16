@@ -23,22 +23,25 @@ import type {
 const MAX_ATTEMPTS = 5;
 const BASE_BACKOFF_MS = 30_000;
 
-/** Seam so a real transactional SMS provider can be plugged in later. */
-async function sendSmsMessage(phone: string, message: string): Promise<boolean> {
+// No real SMS/email provider is wired in this build. Outside of test mode a
+// send therefore fails closed instead of reporting a delivery that never
+// happened: the caller's existing retry/backoff/dead policy applies and no
+// success log is emitted. NODE_ENV=test keeps a deterministic fake success so
+// the unit suite does not need a live provider. A real adapter may be plugged
+// into these two seams later; until then nothing may claim a message was sent.
+
+/** Provider seam: true only when a real (or test-fake) delivery succeeded. */
+export async function sendSmsMessage(phone: string, _message: string): Promise<boolean> {
   if (process.env.NODE_ENV === "test") return true;
-  // Integration point: call the transactional SMS provider here. The outbox
-  // already guarantees delivery semantics; this seam only needs to report
-  // success/failure for the drain loop.
-  logger.info({ message: "notification_sms_dispatched", phone, body: message });
-  return true;
+  logger.error({ message: "notification_sms_provider_unconfigured", phone });
+  throw new Error("sms provider not configured");
 }
 
-/** Seam so a real email provider can be plugged in later. */
-async function sendEmailMessage(to: string, body: string): Promise<boolean> {
+/** Provider seam: true only when a real (or test-fake) delivery succeeded. */
+export async function sendEmailMessage(to: string, _body: string): Promise<boolean> {
   if (process.env.NODE_ENV === "test") return true;
-  // Integration point: call the transactional email provider here.
-  logger.info({ message: "notification_email_dispatched", to, body });
-  return true;
+  logger.error({ message: "notification_email_provider_unconfigured", to });
+  throw new Error("email provider not configured");
 }
 
 let draining = false;

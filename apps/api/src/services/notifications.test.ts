@@ -1,8 +1,15 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emit, createEventEnvelope } from "../lib/eventBus";
+import { logger } from "../lib/logger";
 import { resetRedisForTests } from "../lib/redis";
-import { registerVendorNotificationHandlers, drainNotifications } from "./notifications";
+import {
+  registerVendorNotificationHandlers,
+  drainNotifications,
+  sendSmsMessage,
+  sendEmailMessage,
+} from "./notifications";
 import { sharedNotificationRepo } from "../repositories/shared";
+import type { NotificationStatus } from "../repositories/notificationRepository";
 import { MemoryNotificationRepository } from "../repositories/notificationRepository";
 
 // ============================================
@@ -103,5 +110,191 @@ describe("MemoryNotificationRepository retry semantics", () => {
     expect(all[0]!.status).toBe("FAILED");
     expect(all[0]!.attempts).toBe(3);
     expect(await repo.listPending()).toHaveLength(0);
+  });
+});
+
+// ============================================
+// NOTIFICATION-PROVIDER-TRUTH-A2
+// Production delivery must fail closed: without a real provider, an SMS/email
+// send may not report success, may not mark the row SENT, and may not emit a
+// dispatch-success log. NODE_ENV=test keeps a deterministic fake success.
+// ============================================
+
+const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
+
+async function withNodeEnv<T>(value: string, fn: () => Promise<T> | T): Promise<T> {
+  process.env.NODE_ENV = value;
+  try {
+    return await fn();
+  } finally {
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+  }
+}
+
+function enqueueSms() {
+  return sharedNotificationRepo.enqueue({
+    user_id: APPLICANT_ID,
+    channel: "sms",
+    to_address: "+9100000001",
+    body: "provider truth",
+  });
+}
+
+function enqueueEmail() {
+  return sharedNotificationRepo.enqueue({
+    user_id: APPLICANT_ID,
+    channel: "email",
+    to_address: "owner@example.com",
+    body: "provider truth",
+  });
+}
+
+describe("Provider truth (NOTIFICATION-PROVIDER-TRUTH-A2)", () => {
+  beforeEach(() => {
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+    resetRedisForTests();
+    sharedNotificationRepo._reset();
+  });
+
+  afterEach(() => {
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+    vi.restoreAllMocks();
+  });
+
+  it("T1: test-mode SMS fake path may succeed", async () => {
+    await withNodeEnv("test", async () => {
+      await expect(sendSmsMessage("+9100000001", "hello")).resolves.toBe(true);
+    });
+  });
+
+  it("T2: test-mode email fake path may succeed", async () => {
+    await withNodeEnv("test", async () => {
+      await expect(sendEmailMessage("owner@example.com", "hello")).resolves.toBe(true);
+    });
+  });
+
+  it("T3: production-like SMS with no provider does not return success", async () => {
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    await withNodeEnv("production", async () => {
+      await expect(sendSmsMessage("+9100000001", "hello")).rejects.toThrow(
+        /provider not configured/,
+      );
+    });
+  });
+
+  it("T4: production-like email with no provider does not return success", async () => {
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    await withNodeEnv("production", async () => {
+      await expect(sendEmailMessage("owner@example.com", "hello")).rejects.toThrow(
+        /provider not configured/,
+      );
+    });
+  });
+
+  it("T5: production-like SMS attempt does not mark notification SENT", async () => {
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    await enqueueSms();
+    await withNodeEnv("production", () => drainNotifications());
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).not.toBe("SENT");
+    expect(row!.status).toBe("PENDING");
+  });
+
+  it("T6: production-like email attempt does not mark notification SENT", async () => {
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    await enqueueEmail();
+    await withNodeEnv("production", () => drainNotifications());
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).not.toBe("SENT");
+    expect(row!.status).toBe("PENDING");
+  });
+
+  it("T7: unconfigured SMS schedules retry with existing exponential backoff", async () => {
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    const before = Date.now();
+    await enqueueSms();
+    await withNodeEnv("production", () => drainNotifications());
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("PENDING");
+    const delayMs = Date.parse(row!.next_attempt_at) - before;
+    expect(delayMs).toBeGreaterThanOrEqual(29_000);
+    expect(delayMs).toBeLessThanOrEqual(31_000);
+  });
+
+  it("T8: unconfigured email schedules retry with existing exponential backoff", async () => {
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    const before = Date.now();
+    await enqueueEmail();
+    await withNodeEnv("production", () => drainNotifications());
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("PENDING");
+    const delayMs = Date.parse(row!.next_attempt_at) - before;
+    expect(delayMs).toBeGreaterThanOrEqual(29_000);
+    expect(delayMs).toBeLessThanOrEqual(31_000);
+  });
+
+  it("T9: unconfigured attempt increments attempts exactly once", async () => {
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    await enqueueSms();
+    const [before] = await sharedNotificationRepo.listAll();
+    expect(before!.attempts).toBe(0);
+    await withNodeEnv("production", () => drainNotifications());
+    const [after] = await sharedNotificationRepo.listAll();
+    expect(after!.attempts).toBe(1);
+  });
+
+  it("T10: at MAX_ATTEMPTS boundary the unconfigured provider reaches FAILED, not SENT", async () => {
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    const n = await enqueueSms();
+    const due = new Date(Date.now() - 60_000);
+    for (let i = 0; i < 4; i += 1) {
+      await sharedNotificationRepo.markRetryable(n.id, "prior", due);
+    }
+    const [before] = await sharedNotificationRepo.listAll();
+    expect(before!.attempts).toBe(4);
+    await withNodeEnv("production", () => drainNotifications());
+    const [after] = await sharedNotificationRepo.listAll();
+    expect(after!.status).toBe("FAILED");
+    expect(after!.attempts).toBe(5);
+  });
+
+  it("T11: no SMS dispatch success log on the unconfigured production path", async () => {
+    const infoSpy = vi.spyOn(logger, "info").mockReturnValue(logger);
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    await enqueueSms();
+    await withNodeEnv("production", () => drainNotifications());
+    expect(infoSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "notification_sms_dispatched" }),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "notification_sms_provider_unconfigured" }),
+    );
+  });
+
+  it("T12: no email dispatch success log on the unconfigured production path", async () => {
+    const infoSpy = vi.spyOn(logger, "info").mockReturnValue(logger);
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    await enqueueEmail();
+    await withNodeEnv("production", () => drainNotifications());
+    expect(infoSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "notification_email_dispatched" }),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "notification_email_provider_unconfigured" }),
+    );
+  });
+
+  it("T13: existing test-mode delivery still marks SENT", async () => {
+    await enqueueSms();
+    await drainNotifications();
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("SENT");
+    expect(row!.attempts).toBe(1);
+  });
+
+  it("T14: status enum and drain API are unchanged", () => {
+    const statuses: NotificationStatus[] = ["PENDING", "SENT", "FAILED"];
+    expect(statuses).toHaveLength(3);
+    expect(drainNotifications.length).toBe(0);
   });
 });
