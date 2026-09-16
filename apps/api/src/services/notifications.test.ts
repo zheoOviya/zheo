@@ -8,6 +8,9 @@ import {
   deliverOne,
   sendSmsMessage,
   sendEmailMessage,
+  startNotificationRetrySweep,
+  stopNotificationRetrySweep,
+  NOTIFICATION_RETRY_SWEEP_INTERVAL_MS,
 } from "./notifications";
 import { sharedNotificationRepo } from "../repositories/shared";
 import type { NotificationStatus } from "../repositories/notificationRepository";
@@ -405,5 +408,249 @@ describe("Notification delivery concurrency (service flow)", () => {
     expect(errorSpy).toHaveBeenCalledWith(
       expect.objectContaining({ message: "notification_sms_provider_unconfigured" }),
     );
+  });
+});
+
+// ============================================
+// NOTIFICATION-RETRY-SWEEPER-A2 — retry liveness.
+// A due retryable row must be revisited without any unrelated vendor event:
+// once at startup and periodically thereafter, behind an unref'd timer with an
+// explicit stop. The repository reserveAttempt CAS remains the only guard.
+// ============================================
+
+describe("Notification retry sweep (NOTIFICATION-RETRY-SWEEPER-A2)", () => {
+  beforeEach(() => {
+    resetRedisForTests();
+    sharedNotificationRepo._reset();
+    vi.restoreAllMocks();
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+  });
+
+  afterEach(() => {
+    stopNotificationRetrySweep();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+  });
+
+  // Date must be faked so a scheduled next_attempt_at becomes due as fake time
+  // advances; otherwise the memory repo would compare against the real clock.
+  const useSweepFakeTimers = () =>
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    });
+
+  async function statusOf(id: string): Promise<string | undefined> {
+    return (await sharedNotificationRepo.listAll()).find((n) => n.id === id)?.status;
+  }
+
+  async function until(cond: () => Promise<boolean>, tries = 500): Promise<void> {
+    for (let i = 0; i < tries; i += 1) {
+      if (await cond()) return;
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    throw new Error("until: condition not met");
+  }
+
+  it("T1: startNotificationRetrySweep immediately triggers one drain", async () => {
+    const n = await enqueueSms();
+    startNotificationRetrySweep();
+    await until(async () => (await statusOf(n.id)) === "SENT");
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("SENT");
+    expect(row!.attempts).toBe(1);
+  });
+
+  it("T2: the periodic interval triggers subsequent drains", async () => {
+    useSweepFakeTimers();
+    startNotificationRetrySweep();
+    await vi.advanceTimersByTimeAsync(0);
+    const n = await enqueueSms();
+    expect(await statusOf(n.id)).toBe("PENDING");
+    await vi.advanceTimersByTimeAsync(NOTIFICATION_RETRY_SWEEP_INTERVAL_MS);
+    expect(await statusOf(n.id)).toBe("SENT");
+  });
+
+  it("T3: a due retry is attempted without any unrelated new event", async () => {
+    const n = await enqueueSms();
+    const r = await sharedNotificationRepo.reserveAttempt(n.id, 0, new Date());
+    await sharedNotificationRepo.markRetryable(
+      n.id,
+      r!.attempts,
+      "boom",
+      new Date(Date.now() - 1_000),
+    );
+    const [before] = await sharedNotificationRepo.listAll();
+    expect(before!.status).toBe("PENDING");
+    expect(before!.attempts).toBe(1);
+
+    startNotificationRetrySweep();
+    await until(async () => (await statusOf(n.id)) === "SENT");
+    const [after] = await sharedNotificationRepo.listAll();
+    expect(after!.status).toBe("SENT");
+    expect(after!.attempts).toBe(2);
+  });
+
+  it("T4: a future next_attempt_at row is not attempted early", async () => {
+    useSweepFakeTimers();
+    const n = await enqueueSms();
+    const r = await sharedNotificationRepo.reserveAttempt(n.id, 0, new Date());
+    await sharedNotificationRepo.markRetryable(
+      n.id,
+      r!.attempts,
+      "boom",
+      new Date(Date.now() + 2 * NOTIFICATION_RETRY_SWEEP_INTERVAL_MS),
+    );
+
+    startNotificationRetrySweep();
+    await vi.advanceTimersByTimeAsync(NOTIFICATION_RETRY_SWEEP_INTERVAL_MS);
+    expect(await statusOf(n.id)).toBe("PENDING");
+    const [mid] = await sharedNotificationRepo.listAll();
+    expect(mid!.attempts).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(NOTIFICATION_RETRY_SWEEP_INTERVAL_MS);
+    expect(await statusOf(n.id)).toBe("SENT");
+  });
+
+  it("T5: start drains a pre-existing due row (restart recovery)", async () => {
+    const n = await enqueueSms();
+    const r = await sharedNotificationRepo.reserveAttempt(n.id, 0, new Date());
+    await sharedNotificationRepo.markRetryable(
+      n.id,
+      r!.attempts,
+      "boom",
+      new Date(Date.now() - 1_000),
+    );
+    stopNotificationRetrySweep(); // no timer survives the simulated restart
+    startNotificationRetrySweep();
+    await until(async () => (await statusOf(n.id)) === "SENT");
+    expect(await statusOf(n.id)).toBe("SENT");
+  });
+
+  it("T6: start is idempotent — no duplicate intervals", () => {
+    const setSpy = vi.spyOn(globalThis, "setInterval");
+    startNotificationRetrySweep();
+    startNotificationRetrySweep();
+    expect(setSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("T7: stop clears the interval", async () => {
+    useSweepFakeTimers();
+    startNotificationRetrySweep();
+    await vi.advanceTimersByTimeAsync(0);
+    const n = await enqueueSms();
+    stopNotificationRetrySweep();
+    await vi.advanceTimersByTimeAsync(2 * NOTIFICATION_RETRY_SWEEP_INTERVAL_MS);
+    expect(await statusOf(n.id)).toBe("PENDING");
+  });
+
+  it("T8: stop is idempotent and safe when never started", () => {
+    expect(() => stopNotificationRetrySweep()).not.toThrow();
+    startNotificationRetrySweep();
+    expect(() => stopNotificationRetrySweep()).not.toThrow();
+    expect(() => stopNotificationRetrySweep()).not.toThrow();
+  });
+
+  it("T9: the timer is unref'd and cleared by stop", () => {
+    const unref = vi.fn();
+    const fakeTimer = { unref, ref: vi.fn() } as unknown as NodeJS.Timeout;
+    vi.spyOn(globalThis, "setInterval").mockReturnValue(fakeTimer);
+    const clearSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+    startNotificationRetrySweep();
+    expect(unref).toHaveBeenCalledTimes(1);
+    stopNotificationRetrySweep();
+    expect(clearSpy).toHaveBeenCalledWith(fakeTimer);
+  });
+
+  it("T10: overlapping same-process drains do not run concurrently", async () => {
+    const record = sharedNotificationRepo as unknown as Record<string, unknown>;
+    const original = record.listPending as (limit?: number) => Promise<unknown[]>;
+    let calls = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    record.listPending = vi.fn(async (limit?: number) => {
+      calls += 1;
+      await gate;
+      return original.call(sharedNotificationRepo, limit);
+    });
+    try {
+      const p1 = drainNotifications();
+      const p2 = drainNotifications();
+      release();
+      await Promise.all([p1, p2]);
+    } finally {
+      record.listPending = original;
+    }
+    expect(calls).toBe(1);
+  });
+
+  it("T11: an unconfigured notification reaches FAILED at MAX_ATTEMPTS under the sweep", async () => {
+    useSweepFakeTimers();
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    process.env.NODE_ENV = "production";
+    const n = await enqueueSms();
+    startNotificationRetrySweep();
+    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 20; i += 1) {
+      await vi.advanceTimersByTimeAsync(NOTIFICATION_RETRY_SWEEP_INTERVAL_MS);
+    }
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.id).toBe(n.id);
+    expect(row!.status).toBe("FAILED");
+    expect(row!.attempts).toBe(5);
+  });
+
+  it("T12: SENT/FAILED rows are not revisited by the sweep", async () => {
+    const sent = await enqueueSms();
+    const sentR = await sharedNotificationRepo.reserveAttempt(sent.id, 0, new Date());
+    await sharedNotificationRepo.markSent(sent.id, sentR!.attempts);
+    const failed = await enqueueSms();
+    const failedR = await sharedNotificationRepo.reserveAttempt(failed.id, 0, new Date());
+    await sharedNotificationRepo.markDead(failed.id, failedR!.attempts, "dead");
+
+    startNotificationRetrySweep();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+    const rows = await sharedNotificationRepo.listAll();
+    const s = rows.find((r) => r.id === sent.id)!;
+    const f = rows.find((r) => r.id === failed.id)!;
+    expect(s.status).toBe("SENT");
+    expect(s.attempts).toBe(1);
+    expect(f.status).toBe("FAILED");
+    expect(f.attempts).toBe(1);
+  });
+
+  it("T13: event-triggered immediate drain is preserved", async () => {
+    registerVendorNotificationHandlers();
+    await emit(
+      createEventEnvelope("VendorApplicationApproved", "app-sweep", {
+        applicant_id: APPLICANT_ID,
+        name: "Spice Route",
+        phone: "+9100000001",
+        contact_email: null,
+        vendor_id: VENDOR_ID,
+      }),
+    );
+    await until(async () => {
+      const all = await sharedNotificationRepo.listAll();
+      return all.length === 1 && all[0]!.status === "SENT";
+    });
+    const all = await sharedNotificationRepo.listAll();
+    expect(all[0]!.status).toBe("SENT");
+  });
+
+  it("T14: status enum, drain API, interval and provider truth are unchanged", async () => {
+    const statuses: NotificationStatus[] = ["PENDING", "SENT", "FAILED"];
+    expect(statuses).toHaveLength(3);
+    expect(drainNotifications.length).toBe(0);
+    expect(NOTIFICATION_RETRY_SWEEP_INTERVAL_MS).toBe(30_000);
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    await withNodeEnv("production", async () => {
+      await expect(sendSmsMessage("+9100000001", "x")).rejects.toThrow(
+        /provider not configured/,
+      );
+    });
   });
 });

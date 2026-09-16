@@ -83,6 +83,15 @@ async function main() {
   const { startGiftExpirySweep } = await import("./services/giftExpirySweep");
   startGiftExpirySweep();
 
+  // Notification retry sweep (NOTIFICATION-RETRY-SWEEPER-A2): drain due
+  // notification retries once on boot, then periodically, so a retryable row
+  // cannot stay dormant until an unrelated vendor event arrives. Unref'd timer;
+  // stopped explicitly during shutdown before DB teardown.
+  const { startNotificationRetrySweep, stopNotificationRetrySweep } = await import(
+    "./services/notifications"
+  );
+  startNotificationRetrySweep();
+
   // WebSocket upgrade handling on the same HTTP server (EOS Layer 1, P05)
   initWebSocketServer(server);
 
@@ -99,6 +108,7 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info({ message: "shutdown_initiated", signal });
+    stopNotificationRetrySweep();
     server.close(async () => {
       logger.info({ message: "http_server_closed" });
       await shutdownEventSubscriber();

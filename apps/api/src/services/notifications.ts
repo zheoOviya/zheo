@@ -24,6 +24,15 @@ import type {
 const MAX_ATTEMPTS = NOTIFICATION_MAX_ATTEMPTS;
 const BASE_BACKOFF_MS = 30_000;
 
+// Retry liveness (NOTIFICATION-RETRY-SWEEPER-A2). A retryable PENDING row
+// stores a future next_attempt_at, but nothing wakes it on its own: delivery
+// is otherwise only triggered by a new vendor event. A single unref'd periodic
+// wakeup plus an immediate startup drain guarantees a due retry is revisited
+// even when no unrelated event arrives. The repository reserveAttempt CAS
+// stays the only concurrency guard, so overlapping event/startup/periodic
+// drains remain safe and one winner calls the provider.
+export const NOTIFICATION_RETRY_SWEEP_INTERVAL_MS = 30_000;
+
 // No real SMS/email provider is wired in this build. Outside of test mode a
 // send therefore fails closed instead of reporting a delivery that never
 // happened: the caller's existing retry/backoff/dead policy applies and no
@@ -98,6 +107,31 @@ export async function deliverOne(n: NotificationDTO): Promise<void> {
       );
     }
   }
+}
+
+let retryTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Start the notification retry sweep: drain once immediately, then wake again
+ * every NOTIFICATION_RETRY_SWEEP_INTERVAL_MS. Idempotent — a second call while
+ * running is a no-op. The timer is unref'd so it never keeps the process alive.
+ * `drainNotifications` owns its own error handling, so starting the sweep never
+ * throws into server bootstrap.
+ */
+export function startNotificationRetrySweep(): void {
+  if (retryTimer) return;
+  void drainNotifications();
+  retryTimer = setInterval(() => {
+    void drainNotifications();
+  }, NOTIFICATION_RETRY_SWEEP_INTERVAL_MS);
+  retryTimer.unref();
+}
+
+/** Stop the retry sweep. Safe when not started, idempotent, no DB mutation. */
+export function stopNotificationRetrySweep(): void {
+  if (!retryTimer) return;
+  clearInterval(retryTimer);
+  retryTimer = null;
 }
 
 async function enqueue(input: EnqueueNotificationInput): Promise<void> {

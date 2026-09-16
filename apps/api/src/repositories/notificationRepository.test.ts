@@ -319,8 +319,8 @@ function reservationContract(label: string, make: () => NotificationRepository):
 
     it("T13: the fifth failed attempt ends FAILED with attempts=5", async () => {
       const repo = make();
-      const due = new Date();
       const n = await repo.enqueue(input());
+      const due = new Date();
       for (let i = 0; i < 4; i += 1) {
         const r = await repo.reserveAttempt(n.id, i, due);
         expect(r!.attempts).toBe(i + 1);
@@ -336,8 +336,8 @@ function reservationContract(label: string, make: () => NotificationRepository):
 
     it("T14: a sixth reservation (and provider call) is impossible", async () => {
       const repo = make();
-      const due = new Date();
       const n = await repo.enqueue(input());
+      const due = new Date();
       for (let i = 0; i < 5; i += 1) {
         const r = await repo.reserveAttempt(n.id, i, due);
         expect(r).not.toBeNull();
@@ -435,10 +435,10 @@ describe("Memory/Postgres reservation parity", () => {
     const memory = new MemoryNotificationRepository();
     const fake = createFakeDb();
     const drizzle = new DrizzleNotificationRepository(fake.db);
-    const due = new Date();
 
     const run = async (repo: NotificationRepository) => {
       const n = await repo.enqueue(input());
+      const due = new Date();
       const r1 = await repo.reserveAttempt(n.id, 0, due);
       await repo.markRetryable(n.id, r1!.attempts, "e1", due);
       const r2 = await repo.reserveAttempt(n.id, 1, due);
