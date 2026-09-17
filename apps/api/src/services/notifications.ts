@@ -10,6 +10,7 @@ import {
 import { NOTIFICATION_MAX_ATTEMPTS } from "../repositories/notificationRepository";
 import type {
   EnqueueNotificationInput,
+  NotificationChannel,
   NotificationDTO,
 } from "../repositories/notificationRepository";
 
@@ -40,18 +41,85 @@ export const NOTIFICATION_RETRY_SWEEP_INTERVAL_MS = 30_000;
 // the unit suite does not need a live provider. A real adapter may be plugged
 // into these two seams later; until then nothing may claim a message was sent.
 
-/** Provider seam: true only when a real (or test-fake) delivery succeeded. */
-export async function sendSmsMessage(phone: string, _message: string): Promise<boolean> {
-  if (process.env.NODE_ENV === "test") return true;
-  logger.error({ message: "notification_sms_provider_unconfigured", phone });
-  throw new Error("sms provider not configured");
+// --- Provider idempotency (NOTIFICATION-PROVIDER-IDEMPOTENCY-A2) ---
+// The deterministic provider idempotency key is the notification's own
+// immutable id. It is reused verbatim on every reserved attempt AND on the
+// single final same-key confirmation call, so a provider that honors the key
+// can collapse the at-least-once retry/ambiguity window into
+// effectively-once delivery. Exactly-once is never claimed: without a real
+// provider honoring the key (and a dedupe window covering the retry lifetime)
+// the guarantee degrades to at-least-once / best-effort. The key never carries
+// recipient PII: destination and body are passed as separate arguments and the
+// only value logged is the key itself.
+
+/** The four mandatory provider outcome semantics. */
+export type NotificationProviderOutcome =
+  | { kind: "ACCEPTED" }
+  | { kind: "DEFINITIVE_FAILURE"; error: string }
+  | { kind: "AMBIGUOUS"; error: string }
+  | { kind: "CONFIG_ERROR"; error: string };
+
+/**
+ * Internal provider adapter seam: destination, body and idempotencyKey.
+ * Scriptable in tests without wiring a real provider.
+ */
+export type NotificationProvider = (
+  channel: NotificationChannel,
+  toAddress: string,
+  body: string,
+  idempotencyKey: string,
+) => Promise<NotificationProviderOutcome>;
+
+/**
+ * SMS seam. Test mode returns a deterministic fake ACCEPTED; without a real
+ * adapter every other environment is fail-closed as CONFIG_ERROR. Never
+ * ACCEPTED, and never throws for a missing provider.
+ */
+export async function sendSmsMessage(
+  _phone: string,
+  _message: string,
+  idempotencyKey: string,
+): Promise<NotificationProviderOutcome> {
+  if (process.env.NODE_ENV === "test") return { kind: "ACCEPTED" };
+  logger.error({ message: "notification_sms_provider_unconfigured", idempotencyKey });
+  return { kind: "CONFIG_ERROR", error: "sms provider not configured" };
 }
 
-/** Provider seam: true only when a real (or test-fake) delivery succeeded. */
-export async function sendEmailMessage(to: string, _body: string): Promise<boolean> {
-  if (process.env.NODE_ENV === "test") return true;
-  logger.error({ message: "notification_email_provider_unconfigured", to });
-  throw new Error("email provider not configured");
+/**
+ * Email seam. Same contract as the SMS seam: deterministic fake ACCEPTED in
+ * tests, fail-closed CONFIG_ERROR everywhere else.
+ */
+export async function sendEmailMessage(
+  _to: string,
+  _body: string,
+  idempotencyKey: string,
+): Promise<NotificationProviderOutcome> {
+  if (process.env.NODE_ENV === "test") return { kind: "ACCEPTED" };
+  logger.error({ message: "notification_email_provider_unconfigured", idempotencyKey });
+  return { kind: "CONFIG_ERROR", error: "email provider not configured" };
+}
+
+/** Default adapter dispatching to the channel seams. */
+async function defaultNotificationProvider(
+  channel: NotificationChannel,
+  toAddress: string,
+  body: string,
+  idempotencyKey: string,
+): Promise<NotificationProviderOutcome> {
+  return channel === "sms"
+    ? sendSmsMessage(toAddress, body, idempotencyKey)
+    : sendEmailMessage(toAddress, body, idempotencyKey);
+}
+
+let provider: NotificationProvider = defaultNotificationProvider;
+
+/**
+ * Test-only injection point for scripting provider outcomes. Pass `null` to
+ * restore the default adapter. Never exposed over HTTP/API. Tests MUST restore
+ * it in afterEach/finally so no seam leak survives a suite.
+ */
+export function __setNotificationProviderForTests(next: NotificationProvider | null): void {
+  provider = next ?? defaultNotificationProvider;
 }
 
 let draining = false;
@@ -79,33 +147,83 @@ export async function drainNotifications(limit = 50): Promise<void> {
  * provider, then CAS the terminal/retry transition from that exact reserved
  * attempt. A concurrent worker that loses the reservation returns without
  * touching the provider or the row. Exported for the concurrency unit tests.
+ *
+ * `attempts` counts RESERVED application delivery attempts, not raw provider
+ * invocations: a single final reserved attempt may issue one same-key
+ * confirmation call, so provider calls are not always equal to attempts.
  */
 export async function deliverOne(n: NotificationDTO): Promise<void> {
   const reserved = await sharedNotificationRepo.reserveAttempt(n.id, n.attempts, new Date());
   if (!reserved) return;
+
+  // Same key for every attempt and for the final same-key confirmation.
+  const idempotencyKey = reserved.id;
+
+  const outcome = await invokeProvider(reserved, idempotencyKey);
+
+  if (outcome.kind === "ACCEPTED") {
+    await sharedNotificationRepo.markSent(reserved.id, reserved.attempts);
+    return;
+  }
+
+  if (outcome.kind !== "AMBIGUOUS") {
+    // DEFINITIVE_FAILURE / CONFIG_ERROR: definitive, no confirmation call.
+    await retryOrDead(reserved, outcome.error);
+    return;
+  }
+
+  if (reserved.attempts < MAX_ATTEMPTS) {
+    // Ordinary ambiguity before the cap: schedule a retry that reuses the key.
+    await retryOrDead(reserved, outcome.error);
+    return;
+  }
+
+  // Final reserved attempt, first AMBIGUOUS result: MUST NOT markDead yet.
+  // Exactly one immediate same-key confirmation call, no second reserveAttempt,
+  // attempts stays MAX_ATTEMPTS, no unbounded loop.
+  const confirmation = await invokeProvider(reserved, idempotencyKey);
+  if (confirmation.kind === "ACCEPTED") {
+    await sharedNotificationRepo.markSent(reserved.id, reserved.attempts);
+    return;
+  }
+  const finalError =
+    confirmation.kind === "AMBIGUOUS"
+      ? `${outcome.error}; provider outcome ambiguous after final same-key confirmation`
+      : confirmation.error;
+  await sharedNotificationRepo.markDead(reserved.id, reserved.attempts, finalError);
+}
+
+/**
+ * Invoke the provider adapter. A structured outcome is passed through; an
+ * unexpected throw is treated as AMBIGUOUS because the request may already have
+ * been transmitted (never as ACCEPTED).
+ */
+async function invokeProvider(
+  reserved: NotificationDTO,
+  idempotencyKey: string,
+): Promise<NotificationProviderOutcome> {
   try {
-    const ok =
-      reserved.channel === "sms"
-        ? await sendSmsMessage(reserved.to_address, reserved.body)
-        : await sendEmailMessage(reserved.to_address, reserved.body);
-    if (ok) {
-      await sharedNotificationRepo.markSent(reserved.id, reserved.attempts);
-      return;
-    }
-    throw new Error("send returned false");
+    return await provider(reserved.channel, reserved.to_address, reserved.body, idempotencyKey);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (reserved.attempts >= MAX_ATTEMPTS) {
-      await sharedNotificationRepo.markDead(reserved.id, reserved.attempts, message);
-    } else {
-      const backoffMs = BASE_BACKOFF_MS * 2 ** (reserved.attempts - 1);
-      await sharedNotificationRepo.markRetryable(
-        reserved.id,
-        reserved.attempts,
-        message,
-        new Date(Date.now() + backoffMs),
-      );
-    }
+    return {
+      kind: "AMBIGUOUS",
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/** Existing retry/backoff/dead policy, driven by the reserved attempt. */
+async function retryOrDead(reserved: NotificationDTO, error: string): Promise<void> {
+  if (reserved.attempts >= MAX_ATTEMPTS) {
+    await sharedNotificationRepo.markDead(reserved.id, reserved.attempts, error);
+  } else {
+    const backoffMs = BASE_BACKOFF_MS * 2 ** (reserved.attempts - 1);
+    await sharedNotificationRepo.markRetryable(
+      reserved.id,
+      reserved.attempts,
+      error,
+      new Date(Date.now() + backoffMs),
+    );
   }
 }
 

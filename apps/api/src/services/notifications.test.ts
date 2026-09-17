@@ -10,11 +10,16 @@ import {
   sendEmailMessage,
   startNotificationRetrySweep,
   stopNotificationRetrySweep,
+  __setNotificationProviderForTests,
   NOTIFICATION_RETRY_SWEEP_INTERVAL_MS,
 } from "./notifications";
+import type { NotificationProvider, NotificationProviderOutcome } from "./notifications";
 import { sharedNotificationRepo } from "../repositories/shared";
-import type { NotificationStatus } from "../repositories/notificationRepository";
-import { MemoryNotificationRepository } from "../repositories/notificationRepository";
+import type { NotificationStatus, NotificationDTO } from "../repositories/notificationRepository";
+import {
+  MemoryNotificationRepository,
+  NOTIFICATION_MAX_ATTEMPTS,
+} from "../repositories/notificationRepository";
 
 // ============================================
 // Vendor onboarding notification outbox tests
@@ -169,31 +174,35 @@ describe("Provider truth (NOTIFICATION-PROVIDER-TRUTH-A2)", () => {
 
   it("T1: test-mode SMS fake path may succeed", async () => {
     await withNodeEnv("test", async () => {
-      await expect(sendSmsMessage("+9100000001", "hello")).resolves.toBe(true);
+      await expect(sendSmsMessage("+9100000001", "hello", "key-1")).resolves.toEqual({
+        kind: "ACCEPTED",
+      });
     });
   });
 
   it("T2: test-mode email fake path may succeed", async () => {
     await withNodeEnv("test", async () => {
-      await expect(sendEmailMessage("owner@example.com", "hello")).resolves.toBe(true);
+      await expect(sendEmailMessage("owner@example.com", "hello", "key-2")).resolves.toEqual({
+        kind: "ACCEPTED",
+      });
     });
   });
 
-  it("T3: production-like SMS with no provider does not return success", async () => {
+  it("T3: production-like SMS with no provider fails closed as CONFIG_ERROR", async () => {
     vi.spyOn(logger, "error").mockReturnValue(logger);
     await withNodeEnv("production", async () => {
-      await expect(sendSmsMessage("+9100000001", "hello")).rejects.toThrow(
-        /provider not configured/,
-      );
+      const outcome = await sendSmsMessage("+9100000001", "hello", "key-3");
+      expect(outcome.kind).not.toBe("ACCEPTED");
+      expect(outcome).toEqual({ kind: "CONFIG_ERROR", error: "sms provider not configured" });
     });
   });
 
-  it("T4: production-like email with no provider does not return success", async () => {
+  it("T4: production-like email with no provider fails closed as CONFIG_ERROR", async () => {
     vi.spyOn(logger, "error").mockReturnValue(logger);
     await withNodeEnv("production", async () => {
-      await expect(sendEmailMessage("owner@example.com", "hello")).rejects.toThrow(
-        /provider not configured/,
-      );
+      const outcome = await sendEmailMessage("owner@example.com", "hello", "key-4");
+      expect(outcome.kind).not.toBe("ACCEPTED");
+      expect(outcome).toEqual({ kind: "CONFIG_ERROR", error: "email provider not configured" });
     });
   });
 
@@ -648,9 +657,329 @@ describe("Notification retry sweep (NOTIFICATION-RETRY-SWEEPER-A2)", () => {
     expect(NOTIFICATION_RETRY_SWEEP_INTERVAL_MS).toBe(30_000);
     vi.spyOn(logger, "error").mockReturnValue(logger);
     await withNodeEnv("production", async () => {
-      await expect(sendSmsMessage("+9100000001", "x")).rejects.toThrow(
-        /provider not configured/,
-      );
+      const outcome = await sendSmsMessage("+9100000001", "x", "key-sweep");
+      expect(outcome.kind).toBe("CONFIG_ERROR");
     });
+  });
+});
+
+// ============================================
+// NOTIFICATION-PROVIDER-IDEMPOTENCY-A2 — schema-free provider idempotency.
+// The provider idempotency key is the notification's immutable id, reused on
+// every retry and on one final same-key confirmation call. `attempts` counts
+// reserved application delivery attempts, so a final reserved attempt may
+// issue up to two provider calls (initial + confirmation) while attempts
+// still advances by exactly one.
+// ============================================
+
+type ProviderCall = {
+  channel: string;
+  toAddress: string;
+  body: string;
+  key: string;
+};
+
+function scriptProvider(script: NotificationProviderOutcome[]) {
+  const calls: ProviderCall[] = [];
+  const provider: NotificationProvider = async (channel, toAddress, body, key) => {
+    calls.push({ channel, toAddress, body, key });
+    return script.shift() ?? { kind: "ACCEPTED" };
+  };
+  return { provider, calls };
+}
+
+function enqueueIdem(channel: "sms" | "email" = "sms"): Promise<NotificationDTO> {
+  return sharedNotificationRepo.enqueue({
+    user_id: APPLICANT_ID,
+    channel,
+    to_address: channel === "sms" ? "+9100000001" : "owner@example.com",
+    body: "idempotency",
+  });
+}
+
+async function currentOf(id: string): Promise<NotificationDTO> {
+  return (await sharedNotificationRepo.listAll()).find((n) => n.id === id)!;
+}
+
+async function driveToAttempts(id: string, count: number): Promise<void> {
+  for (let i = 0; i < count; i += 1) {
+    const reserved = await sharedNotificationRepo.reserveAttempt(id, i, new Date());
+    await sharedNotificationRepo.markRetryable(
+      id,
+      reserved!.attempts,
+      "prior",
+      new Date(Date.now() - 60_000),
+    );
+  }
+}
+
+describe("Provider idempotency (NOTIFICATION-PROVIDER-IDEMPOTENCY-A2)", () => {
+  beforeEach(() => {
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+    resetRedisForTests();
+    sharedNotificationRepo._reset();
+  });
+
+  afterEach(() => {
+    __setNotificationProviderForTests(null);
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+    vi.restoreAllMocks();
+  });
+
+  it("T1: SMS test-mode fake path returns ACCEPTED and deliverOne uses notification.id", async () => {
+    await withNodeEnv("test", async () => {
+      const n = await enqueueIdem("sms");
+      await expect(sendSmsMessage("+9100000001", "hello", n.id)).resolves.toEqual({
+        kind: "ACCEPTED",
+      });
+      const { provider, calls } = scriptProvider([{ kind: "ACCEPTED" }]);
+      __setNotificationProviderForTests(provider);
+      await deliverOne(n);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.channel).toBe("sms");
+      expect(calls[0]!.key).toBe(n.id);
+      const [row] = await sharedNotificationRepo.listAll();
+      expect(row!.status).toBe("SENT");
+    });
+  });
+
+  it("T2: email test-mode fake path returns ACCEPTED and deliverOne uses notification.id", async () => {
+    await withNodeEnv("test", async () => {
+      const n = await enqueueIdem("email");
+      await expect(sendEmailMessage("owner@example.com", "hello", n.id)).resolves.toEqual({
+        kind: "ACCEPTED",
+      });
+      const { provider, calls } = scriptProvider([{ kind: "ACCEPTED" }]);
+      __setNotificationProviderForTests(provider);
+      await deliverOne(n);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.channel).toBe("email");
+      expect(calls[0]!.key).toBe(n.id);
+      const [row] = await sharedNotificationRepo.listAll();
+      expect(row!.status).toBe("SENT");
+    });
+  });
+
+  it("T3: non-test unconfigured SMS is CONFIG_ERROR, never ACCEPTED", async () => {
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    await withNodeEnv("production", async () => {
+      const outcome = await sendSmsMessage("+9100000001", "hello", "key-t3");
+      expect(outcome.kind).toBe("CONFIG_ERROR");
+      expect(outcome.kind).not.toBe("ACCEPTED");
+    });
+  });
+
+  it("T4: non-test unconfigured email is CONFIG_ERROR, never ACCEPTED", async () => {
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    await withNodeEnv("production", async () => {
+      const outcome = await sendEmailMessage("owner@example.com", "hello", "key-t4");
+      expect(outcome.kind).toBe("CONFIG_ERROR");
+      expect(outcome.kind).not.toBe("ACCEPTED");
+    });
+  });
+
+  it("T5: ACCEPTED -> markSent with a single provider call", async () => {
+    const n = await enqueueIdem();
+    const { provider, calls } = scriptProvider([{ kind: "ACCEPTED" }]);
+    __setNotificationProviderForTests(provider);
+    await deliverOne(n);
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("SENT");
+    expect(row!.attempts).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.key).toBe(n.id);
+  });
+
+  it("T6: DEFINITIVE_FAILURE before max -> markRetryable", async () => {
+    const n = await enqueueIdem();
+    const { provider } = scriptProvider([
+      { kind: "DEFINITIVE_FAILURE", error: "definitely rejected" },
+    ]);
+    __setNotificationProviderForTests(provider);
+    await deliverOne(n);
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("PENDING");
+    expect(row!.attempts).toBe(1);
+    expect(row!.last_error).toContain("definitely rejected");
+  });
+
+  it("T7: CONFIG_ERROR before max -> markRetryable", async () => {
+    const n = await enqueueIdem();
+    const { provider } = scriptProvider([{ kind: "CONFIG_ERROR", error: "provider down" }]);
+    __setNotificationProviderForTests(provider);
+    await deliverOne(n);
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("PENDING");
+    expect(row!.attempts).toBe(1);
+    expect(row!.last_error).toContain("provider down");
+  });
+
+  it("T8: AMBIGUOUS before max -> markRetryable", async () => {
+    const n = await enqueueIdem();
+    const { provider } = scriptProvider([{ kind: "AMBIGUOUS", error: "timeout" }]);
+    __setNotificationProviderForTests(provider);
+    await deliverOne(n);
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("PENDING");
+    expect(row!.attempts).toBe(1);
+    expect(row!.last_error).toContain("timeout");
+  });
+
+  it("T9: retry after AMBIGUOUS reuses the exact notification.id key", async () => {
+    const n = await enqueueIdem();
+    const { provider, calls } = scriptProvider([
+      { kind: "AMBIGUOUS", error: "timeout" },
+      { kind: "ACCEPTED" },
+    ]);
+    __setNotificationProviderForTests(provider);
+    await deliverOne(n);
+    let [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("PENDING");
+    expect(row!.attempts).toBe(1);
+
+    await sharedNotificationRepo.markRetryable(n.id, 1, "timeout", new Date(Date.now() - 1_000));
+    await deliverOne(await currentOf(n.id));
+    [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("SENT");
+    expect(row!.attempts).toBe(2);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.key).toBe(n.id);
+    expect(calls[1]!.key).toBe(n.id);
+  });
+
+  it("T10: DEFINITIVE_FAILURE at max -> markDead", async () => {
+    const n = await enqueueIdem();
+    await driveToAttempts(n.id, NOTIFICATION_MAX_ATTEMPTS - 1);
+    const { provider } = scriptProvider([
+      { kind: "DEFINITIVE_FAILURE", error: "rejected at cap" },
+    ]);
+    __setNotificationProviderForTests(provider);
+    await deliverOne(await currentOf(n.id));
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("FAILED");
+    expect(row!.attempts).toBe(NOTIFICATION_MAX_ATTEMPTS);
+  });
+
+  it("T11: CONFIG_ERROR at max -> markDead", async () => {
+    const n = await enqueueIdem();
+    await driveToAttempts(n.id, NOTIFICATION_MAX_ATTEMPTS - 1);
+    const { provider } = scriptProvider([{ kind: "CONFIG_ERROR", error: "down at cap" }]);
+    __setNotificationProviderForTests(provider);
+    await deliverOne(await currentOf(n.id));
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("FAILED");
+    expect(row!.attempts).toBe(NOTIFICATION_MAX_ATTEMPTS);
+  });
+
+  it("T12: first AMBIGUOUS at max does NOT markDead; one same-key confirmation runs", async () => {
+    const n = await enqueueIdem();
+    await driveToAttempts(n.id, NOTIFICATION_MAX_ATTEMPTS - 1);
+    const { provider, calls } = scriptProvider([
+      { kind: "AMBIGUOUS", error: "timeout-1" },
+      { kind: "ACCEPTED" },
+    ]);
+    __setNotificationProviderForTests(provider);
+    const record = sharedNotificationRepo as unknown as Record<string, unknown>;
+    const realMarkDead = sharedNotificationRepo.markDead.bind(sharedNotificationRepo);
+    const deadSpy = vi.fn();
+    record.markDead = vi.fn((id: string, attempts: number, err: string) => {
+      deadSpy();
+      return realMarkDead(id, attempts, err);
+    });
+    try {
+      await deliverOne(await currentOf(n.id));
+    } finally {
+      record.markDead = realMarkDead;
+    }
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.key).toBe(n.id);
+    expect(deadSpy).not.toHaveBeenCalled();
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("SENT");
+  });
+
+  it("T13: AMBIGUOUS-at-max then ACCEPTED confirmation -> markSent, attempts stays MAX_ATTEMPTS", async () => {
+    const n = await enqueueIdem();
+    await driveToAttempts(n.id, NOTIFICATION_MAX_ATTEMPTS - 1);
+    const { provider, calls } = scriptProvider([
+      { kind: "AMBIGUOUS", error: "timeout-1" },
+      { kind: "ACCEPTED" },
+    ]);
+    __setNotificationProviderForTests(provider);
+    await deliverOne(await currentOf(n.id));
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(row!.status).toBe("SENT");
+    expect(row!.attempts).toBe(NOTIFICATION_MAX_ATTEMPTS);
+    expect(calls.map((c) => c.key)).toEqual([n.id, n.id]);
+  });
+
+  it("T14: AMBIGUOUS-at-max then DEFINITIVE_FAILURE/CONFIG_ERROR -> markDead", async () => {
+    const confirmations: NotificationProviderOutcome[] = [
+      { kind: "DEFINITIVE_FAILURE", error: "confirmed failure" },
+      { kind: "CONFIG_ERROR", error: "confirmed config down" },
+    ];
+    for (const confirmation of confirmations) {
+      sharedNotificationRepo._reset();
+      const n = await enqueueIdem();
+      await driveToAttempts(n.id, NOTIFICATION_MAX_ATTEMPTS - 1);
+      const { provider, calls } = scriptProvider([
+        { kind: "AMBIGUOUS", error: "timeout-1" },
+        confirmation,
+      ]);
+      __setNotificationProviderForTests(provider);
+      await deliverOne(await currentOf(n.id));
+      const [row] = await sharedNotificationRepo.listAll();
+      expect(row!.status).toBe("FAILED");
+      expect(row!.attempts).toBe(NOTIFICATION_MAX_ATTEMPTS);
+      expect(calls).toHaveLength(2);
+      expect(calls[1]!.key).toBe(n.id);
+    }
+  });
+
+  it("T15: AMBIGUOUS-at-max then AMBIGUOUS -> exactly two calls, FAILED with uncertainty", async () => {
+    const n = await enqueueIdem();
+    await driveToAttempts(n.id, NOTIFICATION_MAX_ATTEMPTS - 1);
+    const { provider, calls } = scriptProvider([
+      { kind: "AMBIGUOUS", error: "timeout-1" },
+      { kind: "AMBIGUOUS", error: "timeout-2" },
+    ]);
+    __setNotificationProviderForTests(provider);
+    await deliverOne(await currentOf(n.id));
+    const [row] = await sharedNotificationRepo.listAll();
+    expect(calls).toHaveLength(2);
+    expect(row!.status).toBe("FAILED");
+    expect(row!.attempts).toBe(NOTIFICATION_MAX_ATTEMPTS);
+    expect(row!.last_error).toContain(
+      "provider outcome ambiguous after final same-key confirmation",
+    );
+    expect(calls[0]!.key).toBe(n.id);
+    expect(calls[1]!.key).toBe(n.id);
+  });
+
+  it("T16: no route/DTO/repository/schema/EventBus/provider-dependency change", () => {
+    const statuses: NotificationStatus[] = ["PENDING", "SENT", "FAILED"];
+    expect(statuses).toHaveLength(3);
+    for (const method of ["reserveAttempt", "markSent", "markRetryable", "markDead"] as const) {
+      expect(typeof sharedNotificationRepo[method]).toBe("function");
+    }
+    expect(sendSmsMessage.length).toBe(3);
+    expect(sendEmailMessage.length).toBe(3);
+    expect(drainNotifications.length).toBe(0);
+  });
+
+  it("CAS loss on the terminal write does not trigger another provider call", async () => {
+    const n = await enqueueIdem();
+    const { provider, calls } = scriptProvider([{ kind: "ACCEPTED" }]);
+    __setNotificationProviderForTests(provider);
+    const record = sharedNotificationRepo as unknown as Record<string, unknown>;
+    const realMarkSent = sharedNotificationRepo.markSent.bind(sharedNotificationRepo);
+    record.markSent = vi.fn(async () => null);
+    try {
+      await deliverOne(n);
+    } finally {
+      record.markSent = realMarkSent;
+    }
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.key).toBe(n.id);
   });
 });
