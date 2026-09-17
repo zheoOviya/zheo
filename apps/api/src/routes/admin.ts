@@ -837,6 +837,29 @@ adminRouter.get(
 );
 
 // ============================================
+// Notification channel health (NOTIFICATION-OPERABILITY-READMODEL-A2) —
+// read-only, aggregate-only operator view. Adds per-channel
+// pending/due/failed/sent counts and a closed-enum safe failure-category
+// breakdown. It deliberately exposes no raw provider/error text, recipient,
+// body, user_id, per-record id, pagination, rate, SLA, or age bucket, and
+// performs no mutation. The existing /notifications/metrics contract is
+// unchanged and remains authoritative for backlog-age truth.
+// ============================================
+
+adminRouter.get(
+  "/notifications/health",
+  adminReadOnly,
+  asyncHandler(async (_req, res) => {
+    const now = new Date();
+    const health = await sharedNotificationRepo.getOperabilityHealth(now);
+    ok(res, {
+      channels: health.channels,
+      failure_categories: health.failure_categories,
+    });
+  }),
+);
+
+// ============================================
 // Revenue Analytics (A-12) — daily series, payment split, top vendors
 // ============================================
 

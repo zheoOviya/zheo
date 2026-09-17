@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, lt, lte, sql } from "drizzle-orm";
+import { and, eq, isNotNull, lt, lte, sql } from "drizzle-orm";
 import { notifications } from "@snakzap/db";
 import type { DrizzleDb } from "../lib/dbType";
 
@@ -20,6 +20,25 @@ type ReturningUpdate = {
 type AggregateSelect = {
   select: (fields: Record<string, unknown>) => {
     from: (table: unknown) => Promise<Record<string, unknown>[]>;
+  };
+};
+
+/**
+ * Drizzle aggregate select chain that also supports `GROUP BY`. `.where()`,
+ * `.groupBy()`, and `.orderBy()` each return the same awaitable query, so a
+ * `group by` aggregate is reached through one bounded cast instead of
+ * materializing rows. Used by the PII-free channel/failure-category health
+ * read model.
+ */
+type AggregateGroupQuery = Promise<Record<string, unknown>[]> & {
+  where: (condition: unknown) => AggregateGroupQuery;
+  groupBy: (...columns: unknown[]) => AggregateGroupQuery;
+  orderBy: (...columns: unknown[]) => AggregateGroupQuery;
+};
+
+type AggregateGroupSelect = {
+  select: (fields: Record<string, unknown>) => {
+    from: (table: unknown) => AggregateGroupQuery;
   };
 };
 
@@ -86,6 +105,66 @@ export interface NotificationOperabilityMetrics {
   max_attempt_pending: number | null;
 }
 
+/**
+ * Closed, privacy-safe failure taxonomy (NOTIFICATION-OPERABILITY-READMODEL-A2
+ * V1). Raw provider/error text never leaves the server. `PROVIDER_UNCONFIGURED`
+ * is the only grounded category today; anything not provably in it is `UNKNOWN`.
+ * Speculative categories (timeout/rejected/transient/DB-conflict) are deliberately
+ * absent because no real persisted production path produces them yet.
+ */
+export type SafeErrorCategory = "PROVIDER_UNCONFIGURED" | "UNKNOWN";
+
+/**
+ * Exact persisted `CONFIG_ERROR` texts emitted by the delivery service when no
+ * provider adapter is configured. Keep in sync with the SQL `CASE` in
+ * `DrizzleNotificationRepository.getOperabilityHealth`; memory/Drizzle parity
+ * tests guard against drift. Membership is exact equality on purpose: substring
+ * families would pretend a provider adapter exists.
+ */
+const PROVIDER_UNCONFIGURED_ERRORS: ReadonlySet<string> = new Set([
+  "sms provider not configured",
+  "email provider not configured",
+]);
+
+/**
+ * Normalize a persisted `last_error` into the closed safe enum. `null` means the
+ * row has no recorded failure and contributes no category. Exported so the
+ * mapping is directly unit-testable.
+ */
+export function classifyNotificationError(lastError: string | null): SafeErrorCategory | null {
+  if (lastError === null) return null;
+  return PROVIDER_UNCONFIGURED_ERRORS.has(lastError) ? "PROVIDER_UNCONFIGURED" : "UNKNOWN";
+}
+
+/** Per-channel aggregate delivery state. Counts are non-negative integers. */
+export interface NotificationChannelHealth {
+  channel: NotificationChannel;
+  pending: number;
+  due: number;
+  failed: number;
+  sent: number;
+}
+
+/** Per-channel safe failure-category aggregate. Never carries raw error text. */
+export interface NotificationFailureCategoryHealth {
+  channel: NotificationChannel;
+  safe_error_category: SafeErrorCategory;
+  count: number;
+}
+
+/**
+ * PII-free aggregate operator health read model. `channels` covers every
+ * channel actually represented in storage (never fabricated) and
+ * `failure_categories` counts only records with a recorded failure (terminal
+ * FAILED rows and currently-retryable PENDING rows carrying `last_error`).
+ * Ordering is deterministic (channel asc, then category asc) so responses are
+ * stable. No row identifiers, recipients, bodies, or raw errors are included.
+ */
+export interface NotificationOperabilityHealth {
+  channels: NotificationChannelHealth[];
+  failure_categories: NotificationFailureCategoryHealth[];
+}
+
 export interface NotificationRepository {
   enqueue(input: EnqueueNotificationInput): Promise<NotificationDTO>;
   listAll(limit?: number): Promise<NotificationDTO[]>;
@@ -98,6 +177,14 @@ export interface NotificationRepository {
    * counts as DUE, not future.
    */
   getOperabilityMetrics(now: Date): Promise<NotificationOperabilityMetrics>;
+  /**
+   * Read-only, PII-free aggregate channel/failure health for operators. Counts
+   * the same due partition as `getOperabilityMetrics` against the single
+   * supplied `now` (a `next_attempt_at` exactly equal to `now` is DUE) and
+   * reports safe, closed-enum failure categories. Performs no mutation and
+   * exposes no per-record data.
+   */
+  getOperabilityHealth(now: Date): Promise<NotificationOperabilityHealth>;
   /**
    * Atomically reserve one delivery attempt: CAS over
    * id + status=PENDING + next_attempt_at<=now + attempts=expectedAttempts +
@@ -198,6 +285,52 @@ export class MemoryNotificationRepository implements NotificationRepository {
       oldest_pending_at,
       max_attempt_pending,
     };
+  }
+
+  async getOperabilityHealth(now: Date): Promise<NotificationOperabilityHealth> {
+    const nowMs = now.getTime();
+    const byChannel = new Map<NotificationChannel, NotificationChannelHealth>();
+    // Keyed `${channel}\u0000${category}` so the two aggregate dimensions stay
+    // independent without nested maps.
+    const failureCounts = new Map<string, number>();
+    for (const n of this.items.values()) {
+      let health = byChannel.get(n.channel);
+      if (!health) {
+        health = { channel: n.channel, pending: 0, due: 0, failed: 0, sent: 0 };
+        byChannel.set(n.channel, health);
+      }
+      if (n.status === "PENDING") {
+        health.pending += 1;
+        if (new Date(n.next_attempt_at).getTime() <= nowMs) health.due += 1;
+      } else if (n.status === "FAILED") {
+        health.failed += 1;
+      } else if (n.status === "SENT") {
+        health.sent += 1;
+      }
+
+      const category = classifyNotificationError(n.last_error);
+      if (category !== null) {
+        const key = `${n.channel}\u0000${category}`;
+        failureCounts.set(key, (failureCounts.get(key) ?? 0) + 1);
+      }
+    }
+    const channels = Array.from(byChannel.values()).sort((a, b) =>
+      a.channel.localeCompare(b.channel),
+    );
+    const failure_categories = Array.from(failureCounts.entries())
+      .map(([key, count]) => {
+        const [channel, safe_error_category] = key.split("\u0000") as [
+          NotificationChannel,
+          SafeErrorCategory,
+        ];
+        return { channel, safe_error_category, count };
+      })
+      .sort(
+        (a, b) =>
+          a.channel.localeCompare(b.channel) ||
+          a.safe_error_category.localeCompare(b.safe_error_category),
+      );
+    return { channels, failure_categories };
   }
 
   async reserveAttempt(
@@ -360,6 +493,52 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       oldest_pending_at: oldest ? new Date(oldest as string | Date).toISOString() : null,
       max_attempt_pending:
         maxAttempts === null || maxAttempts === undefined ? null : Number(maxAttempts),
+    };
+  }
+
+  async getOperabilityHealth(now: Date): Promise<NotificationOperabilityHealth> {
+    // Two bounded DB-side aggregates: one groups delivery state by channel, the
+    // other groups failure records by channel + closed-enum safe category. The
+    // CASE keeps raw `last_error` in the database: only the normalized enum and
+    // integer counts cross into application memory, and no row is materialized.
+    const safeErrorCategory = sql<string>`case when ${notifications.last_error} in (${"sms provider not configured"}, ${"email provider not configured"}) then ${"PROVIDER_UNCONFIGURED"} else ${"UNKNOWN"} end`;
+
+    const channelRows = (await (this.db as unknown as AggregateGroupSelect)
+      .select({
+        channel: notifications.channel,
+        pending: sql<number>`count(*) filter (where ${notifications.status} = ${"PENDING"})`,
+        due: sql<number>`count(*) filter (where ${notifications.status} = ${"PENDING"} and ${notifications.next_attempt_at} <= ${now})`,
+        failed: sql<number>`count(*) filter (where ${notifications.status} = ${"FAILED"})`,
+        sent: sql<number>`count(*) filter (where ${notifications.status} = ${"SENT"})`,
+      })
+      .from(notifications)
+      .groupBy(notifications.channel)
+      .orderBy(notifications.channel)) as Record<string, unknown>[];
+
+    const failureRows = (await (this.db as unknown as AggregateGroupSelect)
+      .select({
+        channel: notifications.channel,
+        safe_error_category: safeErrorCategory,
+        count: sql<number>`count(*)`,
+      })
+      .from(notifications)
+      .where(isNotNull(notifications.last_error))
+      .groupBy(notifications.channel, safeErrorCategory)
+      .orderBy(notifications.channel, safeErrorCategory)) as Record<string, unknown>[];
+
+    return {
+      channels: channelRows.map((row) => ({
+        channel: row.channel as NotificationChannel,
+        pending: Number(row.pending ?? 0),
+        due: Number(row.due ?? 0),
+        failed: Number(row.failed ?? 0),
+        sent: Number(row.sent ?? 0),
+      })),
+      failure_categories: failureRows.map((row) => ({
+        channel: row.channel as NotificationChannel,
+        safe_error_category: row.safe_error_category as SafeErrorCategory,
+        count: Number(row.count ?? 0),
+      })),
     };
   }
 

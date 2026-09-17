@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DrizzleDb, SelectQuery } from "../lib/dbType";
 import {
+  classifyNotificationError,
   DrizzleNotificationRepository,
   MemoryNotificationRepository,
   type NotificationDTO,
@@ -32,6 +33,13 @@ interface FakeDb {
   seed: (row: Record<string, unknown>) => void;
   aggregateColumns: () => string[];
   aggregateSelectCalls: () => number;
+}
+
+/** Awaitable + chainable shape the repository casts its grouped aggregate to. */
+interface AggregateGroupQuery extends Promise<Record<string, unknown>[]> {
+  where: (condition: unknown) => AggregateGroupQuery;
+  groupBy: (...columns: unknown[]) => AggregateGroupQuery;
+  orderBy: (...columns: unknown[]) => AggregateGroupQuery;
 }
 
 interface Pair {
@@ -105,9 +113,25 @@ function compare(left: unknown, right: unknown): number {
   return String(l).localeCompare(String(r));
 }
 
+function notNullColumns(cond: unknown): string[] {
+  const tokens: Array<Record<string, unknown>> = [];
+  flattenChunks(cond, tokens);
+  const cols: string[] = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const tok = tokens[i]!;
+    if (tok.kind !== "col") continue;
+    const next = tokens[i + 1];
+    const text = next && next.kind === "text" ? (next.text as string) : "";
+    if (/is\s+not\s+null/i.test(text)) cols.push(tok.col as string);
+  }
+  return cols;
+}
+
 function predicate(cond: unknown): (row: Record<string, unknown>) => boolean {
   const pairs = parsePairs(cond);
+  const notNull = notNullColumns(cond);
   return (row) =>
+    notNull.every((col) => row[col] !== null && row[col] !== undefined) &&
     pairs.every(({ col, op, val }) => {
       if (op === "<=") return compare(row[col], val) <= 0;
       if (op === "<") return compare(row[col], val) < 0;
@@ -221,6 +245,90 @@ function runAggregate(
   return out;
 }
 
+// ---- Bounded interpreter for the GROUP BY aggregate produced by
+// `getOperabilityHealth`: `SELECT channel, count(*) FILTER (...), CASE ... END
+// ... GROUP BY channel[, case] ORDER BY ...`. It executes the real query
+// semantics against the fake rows so the Drizzle path is proven, not merely
+// shape-inspected. `isNotNull` filtering is handled by `predicate`.
+
+function columnNameOf(expr: unknown): string | null {
+  if (!expr || typeof expr !== "object") return null;
+  const c = expr as { name?: unknown; queryChunks?: unknown };
+  if (typeof c.name === "string" && !Array.isArray(c.queryChunks)) return c.name;
+  return null;
+}
+
+function isCaseExpr(field: unknown): boolean {
+  return aggTokens(field).some(
+    (t) => t.kind === "text" && t.text.toLowerCase().includes("case when"),
+  );
+}
+
+function evalCaseCategory(row: Record<string, unknown>, field: unknown): string {
+  const tokens = aggTokens(field);
+  const colTok = tokens.find((t) => t.kind === "col") as { col: string } | undefined;
+  if (!colTok) throw new Error("case expression is missing its source column");
+  const thenIdx = tokens.findIndex((t) => t.kind === "text" && /then/i.test(t.text));
+  const elseIdx = tokens.findIndex((t) => t.kind === "text" && /else/i.test(t.text));
+  const inParams = tokens
+    .filter((t, i) => t.kind === "param" && i < thenIdx)
+    .map((t) => (t as { val: unknown }).val);
+  const thenVal = tokens.find((t, i) => t.kind === "param" && i > thenIdx && i < elseIdx) as
+    | { val: unknown }
+    | undefined;
+  const elseVal = tokens.find((t, i) => t.kind === "param" && i > elseIdx) as
+    | { val: unknown }
+    | undefined;
+  return inParams.includes(row[colTok.col]) ? String(thenVal?.val) : String(elseVal?.val);
+}
+
+function evalGroupExpr(row: Record<string, unknown>, expr: unknown): unknown {
+  const col = columnNameOf(expr);
+  if (col !== null) return row[col];
+  if (isCaseExpr(expr)) return evalCaseCategory(row, expr);
+  throw new Error("unsupported group expression");
+}
+
+function runGroupedAggregate(
+  rows: Record<string, unknown>[],
+  fields: Record<string, unknown>,
+  whereCond: unknown,
+  groupExprs: unknown[],
+  orderExprs: unknown[],
+): Record<string, unknown>[] {
+  const filtered = whereCond === undefined ? rows : rows.filter(predicate(whereCond));
+  const groups = new Map<string, { keyVals: unknown[]; rows: Record<string, unknown>[] }>();
+  for (const row of filtered) {
+    const keyVals = groupExprs.map((expr) => evalGroupExpr(row, expr));
+    const key = JSON.stringify(keyVals);
+    const existing = groups.get(key);
+    if (existing) existing.rows.push(row);
+    else groups.set(key, { keyVals, rows: [row] });
+  }
+
+  const records = Array.from(groups.values()).map((group) => {
+    const rec: Record<string, unknown> = {};
+    for (const [key, field] of Object.entries(fields)) {
+      const col = columnNameOf(field);
+      if (col !== null) rec[key] = group.rows[0]![col];
+      else if (isCaseExpr(field)) rec[key] = evalCaseCategory(group.rows[0]!, field);
+      else rec[key] = evalAggregateField(group.rows, field);
+    }
+    return { rec, keyVals: group.keyVals };
+  });
+
+  const orderIndexes = orderExprs.map((expr) => groupExprs.findIndex((g) => g === expr));
+  records.sort((a, b) => {
+    for (const idx of orderIndexes) {
+      if (idx < 0) continue;
+      const c = compare(a.keyVals[idx], b.keyVals[idx]);
+      if (c !== 0) return c;
+    }
+    return 0;
+  });
+  return records.map((r) => r.rec);
+}
+
 function createFakeDb(): FakeDb {
   const rows: Record<string, unknown>[] = [];
   const setCalls: Array<Record<string, unknown>> = [];
@@ -244,7 +352,31 @@ function createFakeDb(): FakeDb {
         aggregateSelectCalls += 1;
         aggregateColumnsSeen = referencedColumns(fields);
         return {
-          from: () => Promise.resolve([runAggregate(rows, fields)]),
+          from: () => {
+            let whereCond: unknown;
+            let groupExprs: unknown[] = [];
+            let orderExprs: unknown[] = [];
+            // Deferred so the synchronous `.where().groupBy().orderBy()` chain
+            // is fully collected before the aggregate executes.
+            const exec = (): Record<string, unknown>[] =>
+              groupExprs.length === 0
+                ? [runAggregate(rows, fields)]
+                : runGroupedAggregate(rows, fields, whereCond, groupExprs, orderExprs);
+            const p = Promise.resolve().then(exec) as AggregateGroupQuery;
+            p.where = (cond) => {
+              whereCond = cond;
+              return p;
+            };
+            p.groupBy = (...cols) => {
+              groupExprs = cols;
+              return p;
+            };
+            p.orderBy = (...cols) => {
+              orderExprs = cols;
+              return p;
+            };
+            return p;
+          },
         };
       }
       return rowSelect();
@@ -764,5 +896,280 @@ describe("Notification operability metrics (NOTIFICATION-OPERABILITY-A2)", () =>
     expect(m2.pending_total).toBe(1);
     expect(m2.due_pending).toBe(1);
     (repo as unknown as { listAll: typeof original }).listAll = original;
+  });
+});
+
+// ============================================================
+// NOTIFICATION-OPERABILITY-READMODEL-A2 — PII-safe channel/failure-category
+// aggregate health read model. R1-R14 repository-level; A1-A18 live in the
+// admin route suite.
+// ============================================================
+
+describe("Notification operability health read model (NOTIFICATION-OPERABILITY-READMODEL-A2)", () => {
+  const NOW = new Date("2030-01-01T00:00:00.000Z");
+  const FUTURE_AT = new Date("2999-01-01T00:00:00.000Z");
+  const RAW_UNKNOWN_ERROR = "RAW_PROVIDER_SECRET_TEXT";
+  const RAW_CONFIG_ERROR_SMS = "sms provider not configured";
+  const RAW_CONFIG_ERROR_EMAIL = "email provider not configured";
+
+  const EXPECTED_CHANNELS = [
+    { channel: "email", pending: 1, due: 0, failed: 2, sent: 0 },
+    { channel: "sms", pending: 2, due: 1, failed: 1, sent: 1 },
+  ];
+  const EXPECTED_FAILURE_CATEGORIES = [
+    { channel: "email", safe_error_category: "PROVIDER_UNCONFIGURED", count: 1 },
+    { channel: "email", safe_error_category: "UNKNOWN", count: 2 },
+    { channel: "sms", safe_error_category: "PROVIDER_UNCONFIGURED", count: 1 },
+    { channel: "sms", safe_error_category: "UNKNOWN", count: 1 },
+  ];
+
+  function enqueueFor(repo: MemoryNotificationRepository, channel: "sms" | "email") {
+    return repo.enqueue({ ...input(), channel });
+  }
+
+  async function driveToFailed(
+    repo: MemoryNotificationRepository,
+    channel: "sms" | "email",
+    error: string,
+  ): Promise<NotificationDTO> {
+    const n = await enqueueFor(repo, channel);
+    const r = await repo.reserveAttempt(n.id, 0, new Date());
+    return (await repo.markDead(n.id, r!.attempts, error))!;
+  }
+
+  async function driveToRetry(
+    repo: MemoryNotificationRepository,
+    channel: "sms" | "email",
+    error: string,
+    next: Date,
+  ): Promise<NotificationDTO> {
+    const n = await enqueueFor(repo, channel);
+    const r = await repo.reserveAttempt(n.id, 0, new Date());
+    return (await repo.markRetryable(n.id, r!.attempts, error, next))!;
+  }
+
+  async function driveToSent(
+    repo: MemoryNotificationRepository,
+    channel: "sms" | "email",
+  ): Promise<NotificationDTO> {
+    const n = await enqueueFor(repo, channel);
+    const r = await repo.reserveAttempt(n.id, 0, new Date());
+    return (await repo.markSent(n.id, r!.attempts))!;
+  }
+
+  interface HealthFixture {
+    repo: MemoryNotificationRepository;
+    smsDue: NotificationDTO;
+    smsFuture: NotificationDTO;
+    smsFailedConfig: NotificationDTO;
+    smsSent: NotificationDTO;
+    emailFuture: NotificationDTO;
+    emailFailedConfig: NotificationDTO;
+    emailFailedUnknown: NotificationDTO;
+  }
+
+  async function buildHealthFixture(): Promise<HealthFixture> {
+    const repo = new MemoryNotificationRepository();
+    const smsDue = await enqueueFor(repo, "sms");
+    const smsFuture = await driveToRetry(repo, "sms", RAW_UNKNOWN_ERROR, FUTURE_AT);
+    const smsFailedConfig = await driveToFailed(repo, "sms", RAW_CONFIG_ERROR_SMS);
+    const smsSent = await driveToSent(repo, "sms");
+    const emailFuture = await driveToRetry(repo, "email", RAW_UNKNOWN_ERROR, FUTURE_AT);
+    const emailFailedConfig = await driveToFailed(repo, "email", RAW_CONFIG_ERROR_EMAIL);
+    const emailFailedUnknown = await driveToFailed(repo, "email", RAW_UNKNOWN_ERROR);
+    return {
+      repo,
+      smsDue,
+      smsFuture,
+      smsFailedConfig,
+      smsSent,
+      emailFuture,
+      emailFailedConfig,
+      emailFailedUnknown,
+    };
+  }
+
+  function seedDrizzle(fake: FakeDb, dtos: NotificationDTO[]): void {
+    for (const dto of dtos) {
+      fake.seed({
+        id: dto.id,
+        user_id: dto.user_id,
+        channel: dto.channel,
+        to_address: dto.to_address,
+        body: dto.body,
+        status: dto.status,
+        attempts: dto.attempts,
+        last_error: dto.last_error,
+        next_attempt_at: new Date(dto.next_attempt_at),
+        created_at: new Date(dto.created_at),
+      });
+    }
+  }
+
+  it("R1: empty dataset yields deterministic empty aggregates", async () => {
+    const repo = new MemoryNotificationRepository();
+    expect(await repo.getOperabilityHealth(NOW)).toEqual({ channels: [], failure_categories: [] });
+  });
+
+  it("R2: PENDING is counted as pending", async () => {
+    const { repo } = await buildHealthFixture();
+    const h = await repo.getOperabilityHealth(NOW);
+    expect(h.channels.find((c) => c.channel === "sms")!.pending).toBe(2);
+    expect(h.channels.find((c) => c.channel === "email")!.pending).toBe(1);
+  });
+
+  it("R3: due PENDING is counted as both pending and due", async () => {
+    const { repo } = await buildHealthFixture();
+    const h = await repo.getOperabilityHealth(NOW);
+    const sms = h.channels.find((c) => c.channel === "sms")!;
+    expect(sms.pending).toBe(2);
+    expect(sms.due).toBe(1);
+    expect(sms.due).toBeLessThanOrEqual(sms.pending);
+  });
+
+  it("R4: future PENDING is counted pending but NOT due", async () => {
+    const { repo } = await buildHealthFixture();
+    const h = await repo.getOperabilityHealth(NOW);
+    const email = h.channels.find((c) => c.channel === "email")!;
+    expect(email.pending).toBe(1);
+    expect(email.due).toBe(0);
+  });
+
+  it("R5: FAILED is counted as failed", async () => {
+    const { repo } = await buildHealthFixture();
+    const h = await repo.getOperabilityHealth(NOW);
+    expect(h.channels.find((c) => c.channel === "sms")!.failed).toBe(1);
+    expect(h.channels.find((c) => c.channel === "email")!.failed).toBe(2);
+  });
+
+  it("R6: SENT is counted as sent", async () => {
+    const { repo } = await buildHealthFixture();
+    const h = await repo.getOperabilityHealth(NOW);
+    expect(h.channels.find((c) => c.channel === "sms")!.sent).toBe(1);
+    expect(h.channels.find((c) => c.channel === "email")!.sent).toBe(0);
+  });
+
+  it("R7: channel separation is exact and deterministic", async () => {
+    const { repo } = await buildHealthFixture();
+    const h = await repo.getOperabilityHealth(NOW);
+    expect(h.channels).toEqual(EXPECTED_CHANNELS);
+    expect(h.channels.map((c) => c.channel)).toEqual(["email", "sms"]);
+    // No fabricated channels: only channels actually represented appear.
+    expect(h.channels).toHaveLength(2);
+  });
+
+  it("R8: multiple records aggregate exactly across both dimensions", async () => {
+    const { repo } = await buildHealthFixture();
+    expect(await repo.getOperabilityHealth(NOW)).toEqual({
+      channels: EXPECTED_CHANNELS,
+      failure_categories: EXPECTED_FAILURE_CATEGORIES,
+    });
+  });
+
+  it("R9: known unconfigured CONFIG_ERROR maps to PROVIDER_UNCONFIGURED", async () => {
+    expect(classifyNotificationError(RAW_CONFIG_ERROR_SMS)).toBe("PROVIDER_UNCONFIGURED");
+    expect(classifyNotificationError(RAW_CONFIG_ERROR_EMAIL)).toBe("PROVIDER_UNCONFIGURED");
+    const { repo } = await buildHealthFixture();
+    const h = await repo.getOperabilityHealth(NOW);
+    const smsConfig = h.failure_categories.find(
+      (c) => c.channel === "sms" && c.safe_error_category === "PROVIDER_UNCONFIGURED",
+    );
+    expect(smsConfig!.count).toBe(1);
+  });
+
+  it("R10: unknown/unmapped error maps to UNKNOWN", async () => {
+    expect(classifyNotificationError(RAW_UNKNOWN_ERROR)).toBe("UNKNOWN");
+    expect(classifyNotificationError(null)).toBeNull();
+    const { repo } = await buildHealthFixture();
+    const h = await repo.getOperabilityHealth(NOW);
+    const emailUnknown = h.failure_categories.find(
+      (c) => c.channel === "email" && c.safe_error_category === "UNKNOWN",
+    );
+    expect(emailUnknown!.count).toBe(2);
+  });
+
+  it("R11: raw last_error never appears in the returned aggregate model", async () => {
+    const { repo } = await buildHealthFixture();
+    const serialized = JSON.stringify(await repo.getOperabilityHealth(NOW));
+    expect(serialized).not.toContain(RAW_UNKNOWN_ERROR);
+    expect(serialized).not.toContain(RAW_CONFIG_ERROR_SMS);
+    expect(serialized).not.toContain(RAW_CONFIG_ERROR_EMAIL);
+    expect(serialized).not.toContain("last_error");
+  });
+
+  it("R12: health aggregation performs no mutation", async () => {
+    const { repo } = await buildHealthFixture();
+    const before = JSON.stringify(await repo.listAll());
+    await repo.getOperabilityHealth(NOW);
+    expect(JSON.stringify(await repo.listAll())).toBe(before);
+
+    const fake = createFakeDb();
+    const drizzle = new DrizzleNotificationRepository(fake.db);
+    seedDrizzle(fake, await repo.listAll());
+    const rowsBefore = JSON.stringify(fake.rows());
+    await drizzle.getOperabilityHealth(NOW);
+    expect(fake.setCalls()).toHaveLength(0);
+    expect(JSON.stringify(fake.rows())).toBe(rowsBefore);
+  });
+
+  it("R13: existing listPending semantics are unchanged", async () => {
+    const { repo, smsDue } = await buildHealthFixture();
+    const pending = await repo.listPending();
+    expect(pending.map((n) => n.id)).toEqual([smsDue.id]);
+    expect(pending.every((n) => n.status === "PENDING")).toBe(true);
+
+    const limited = new MemoryNotificationRepository();
+    for (let i = 0; i < 3; i += 1) await enqueueFor(limited, "sms");
+    expect((await limited.listPending(2)).map((n) => n.status)).toEqual(["PENDING", "PENDING"]);
+    expect(await limited.listPending(2)).toHaveLength(2);
+  });
+
+  it("R14: existing metrics semantics are unchanged", async () => {
+    const { repo, smsDue, smsFuture, emailFuture } = await buildHealthFixture();
+    const m = await repo.getOperabilityMetrics(NOW);
+    const expectedOldest = [smsDue.created_at, smsFuture.created_at, emailFuture.created_at].sort()[0]!;
+    expect(m).toEqual({
+      pending_total: 3,
+      due_pending: 1,
+      future_retry: 2,
+      failed_total: 3,
+      sent_total: 1,
+      oldest_pending_at: expectedOldest,
+      max_attempt_pending: 1,
+    });
+  });
+
+  it("parity: Memory and Drizzle health semantics match on identical rows", async () => {
+    const fixture = await buildHealthFixture();
+    const memory = await fixture.repo.getOperabilityHealth(NOW);
+
+    const fake = createFakeDb();
+    const drizzle = new DrizzleNotificationRepository(fake.db);
+    seedDrizzle(fake, [
+      fixture.smsDue,
+      fixture.smsFuture,
+      fixture.smsFailedConfig,
+      fixture.smsSent,
+      fixture.emailFuture,
+      fixture.emailFailedConfig,
+      fixture.emailFailedUnknown,
+    ]);
+
+    expect(await drizzle.getOperabilityHealth(NOW)).toEqual(memory);
+  });
+
+  it("health query is bounded (two group reads) and never materializes full rows", async () => {
+    const fake = createFakeDb();
+    const repo = new DrizzleNotificationRepository(fake.db);
+    const built = await buildHealthFixture();
+    seedDrizzle(fake, await built.repo.listAll());
+
+    const h = await repo.getOperabilityHealth(NOW);
+    expect(fake.aggregateSelectCalls()).toBe(2);
+    const cols = fake.aggregateColumns();
+    expect(cols).not.toContain("body");
+    expect(cols).not.toContain("to_address");
+    expect(cols).not.toContain("user_id");
+    expect(JSON.stringify(h)).not.toContain("last_error");
   });
 });

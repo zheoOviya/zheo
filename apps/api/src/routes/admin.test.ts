@@ -47,6 +47,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
       { method: "get" as const, path: "/api/v1/admin/vendors/metrics" },
       { method: "get" as const, path: "/api/v1/admin/revenue" },
       { method: "get" as const, path: "/api/v1/admin/notifications/metrics" },
+      { method: "get" as const, path: "/api/v1/admin/notifications/health" },
     ];
 
     for (const ep of readEndpoints) {
@@ -279,6 +280,281 @@ describe("Admin RBAC (A-01, A-11)", () => {
         vi.useRealTimers();
       }
       sharedNotificationRepo._reset();
+    });
+  });
+
+  describe("Notification operability health (NOTIFICATION-OPERABILITY-READMODEL-A2)", () => {
+    const USER_ID = "00000000-0000-4000-8000-0000000000b2";
+    const TO_ADDRESS = "operator-probe@example.com";
+    const BODY_TEXT = "RAW_BODY_MUST_NOT_LEAK";
+    const FUTURE_AT = new Date("2999-01-01T00:00:00.000Z");
+    const RAW_UNKNOWN_ERROR = "RAW_PROVIDER_SECRET_TEXT";
+    const RAW_CONFIG_ERROR_SMS = "sms provider not configured";
+    const RAW_CONFIG_ERROR_EMAIL = "email provider not configured";
+
+    const EXPECTED_CHANNELS = [
+      { channel: "email", pending: 1, due: 0, failed: 2, sent: 0 },
+      { channel: "sms", pending: 2, due: 1, failed: 1, sent: 1 },
+    ];
+    const EXPECTED_FAILURE_CATEGORIES = [
+      { channel: "email", safe_error_category: "PROVIDER_UNCONFIGURED", count: 1 },
+      { channel: "email", safe_error_category: "UNKNOWN", count: 2 },
+      { channel: "sms", safe_error_category: "PROVIDER_UNCONFIGURED", count: 1 },
+      { channel: "sms", safe_error_category: "UNKNOWN", count: 1 },
+    ];
+
+    function enqueueFor(channel: "sms" | "email") {
+      return sharedNotificationRepo.enqueue({
+        user_id: USER_ID,
+        channel,
+        to_address: TO_ADDRESS,
+        body: BODY_TEXT,
+      });
+    }
+
+    async function driveToFailed(channel: "sms" | "email", error: string) {
+      const n = await enqueueFor(channel);
+      const r = await sharedNotificationRepo.reserveAttempt(n.id, 0, new Date());
+      return (await sharedNotificationRepo.markDead(n.id, r!.attempts, error))!;
+    }
+
+    async function driveToRetry(channel: "sms" | "email", error: string, next: Date) {
+      const n = await enqueueFor(channel);
+      const r = await sharedNotificationRepo.reserveAttempt(n.id, 0, new Date());
+      return (await sharedNotificationRepo.markRetryable(n.id, r!.attempts, error, next))!;
+    }
+
+    async function driveToSent(channel: "sms" | "email") {
+      const n = await enqueueFor(channel);
+      const r = await sharedNotificationRepo.reserveAttempt(n.id, 0, new Date());
+      return (await sharedNotificationRepo.markSent(n.id, r!.attempts))!;
+    }
+
+    function collectKeys(value: unknown, keys: Set<string>): void {
+      if (Array.isArray(value)) {
+        for (const v of value) collectKeys(v, keys);
+        return;
+      }
+      if (value && typeof value === "object") {
+        for (const [k, v] of Object.entries(value)) {
+          keys.add(k);
+          collectKeys(v, keys);
+        }
+      }
+    }
+
+    async function getHealth() {
+      return request(app)
+        .get("/api/v1/admin/notifications/health")
+        .set("Authorization", adminToken("OPS_AGENT"));
+    }
+
+    beforeAll(async () => {
+      sharedNotificationRepo._reset();
+      await enqueueFor("sms");
+      await driveToRetry("sms", RAW_UNKNOWN_ERROR, FUTURE_AT);
+      await driveToFailed("sms", RAW_CONFIG_ERROR_SMS);
+      await driveToSent("sms");
+      await driveToRetry("email", RAW_UNKNOWN_ERROR, FUTURE_AT);
+      await driveToFailed("email", RAW_CONFIG_ERROR_EMAIL);
+      await driveToFailed("email", RAW_UNKNOWN_ERROR);
+    });
+
+    afterAll(() => {
+      sharedNotificationRepo._reset();
+    });
+
+    it("A1: admin can GET /api/v1/admin/notifications/health", async () => {
+      const res = await getHealth();
+      expect(res.status).toBe(200);
+    });
+
+    it("A2: non-admin and unauthenticated callers are denied under existing policy", async () => {
+      const forbidden = await request(app)
+        .get("/api/v1/admin/notifications/health")
+        .set("Authorization", consumerToken());
+      expect(forbidden.status).toBe(403);
+      const unauthenticated = await request(app).get("/api/v1/admin/notifications/health");
+      expect(unauthenticated.status).toBe(401);
+    });
+
+    it("A3: response is aggregate-only with the exact deterministic shape", async () => {
+      const res = await getHealth();
+      expect(res.status).toBe(200);
+      expect(Object.keys(res.body.data).sort()).toEqual(["channels", "failure_categories"]);
+      expect(res.body.data.channels).toHaveLength(2);
+      const keys = new Set<string>();
+      collectKeys(res.body.data, keys);
+      expect([...keys].sort()).toEqual(
+        [
+          "channel",
+          "channels",
+          "count",
+          "due",
+          "failed",
+          "failure_categories",
+          "pending",
+          "safe_error_category",
+          "sent",
+        ].sort(),
+      );
+    });
+
+    it("A4: channel pending/due/failed/sent counts are exact", async () => {
+      const res = await getHealth();
+      expect(res.body.data.channels).toEqual(EXPECTED_CHANNELS);
+    });
+
+    it("A5: failure-category counts are exact", async () => {
+      const res = await getHealth();
+      expect(res.body.data.failure_categories).toEqual(EXPECTED_FAILURE_CATEGORIES);
+    });
+
+    it("A6: PROVIDER_UNCONFIGURED is exposed safely as a closed-enum value", async () => {
+      const res = await getHealth();
+      const row = res.body.data.failure_categories.find(
+        (c: { channel: string; safe_error_category: string }) =>
+          c.channel === "sms" && c.safe_error_category === "PROVIDER_UNCONFIGURED",
+      );
+      expect(row).toEqual({
+        channel: "sms",
+        safe_error_category: "PROVIDER_UNCONFIGURED",
+        count: 1,
+      });
+    });
+
+    it("A7: UNKNOWN fallback is exposed safely", async () => {
+      const res = await getHealth();
+      const row = res.body.data.failure_categories.find(
+        (c: { channel: string; safe_error_category: string }) => c.safe_error_category === "UNKNOWN",
+      );
+      expect(row).toBeDefined();
+      expect(["PROVIDER_UNCONFIGURED", "UNKNOWN"]).toContain(row.safe_error_category);
+    });
+
+    it("A8: raw last_error is absent", async () => {
+      const res = await getHealth();
+      const serialized = JSON.stringify(res.body);
+      expect(serialized).not.toContain("last_error");
+      for (const raw of [RAW_UNKNOWN_ERROR, RAW_CONFIG_ERROR_SMS, RAW_CONFIG_ERROR_EMAIL]) {
+        expect(serialized).not.toContain(raw);
+      }
+    });
+
+    it("A9: to_address is absent", async () => {
+      const res = await getHealth();
+      const keys = new Set<string>();
+      collectKeys(res.body.data, keys);
+      expect([...keys]).not.toContain("to_address");
+      expect(JSON.stringify(res.body)).not.toContain(TO_ADDRESS);
+    });
+
+    it("A10: body is absent", async () => {
+      const res = await getHealth();
+      const keys = new Set<string>();
+      collectKeys(res.body.data, keys);
+      expect([...keys]).not.toContain("body");
+      expect(JSON.stringify(res.body)).not.toContain(BODY_TEXT);
+    });
+
+    it("A11: user_id is absent", async () => {
+      const res = await getHealth();
+      const keys = new Set<string>();
+      collectKeys(res.body.data, keys);
+      expect([...keys]).not.toContain("user_id");
+      expect(JSON.stringify(res.body)).not.toContain(USER_ID);
+    });
+
+    it("A12: no notification id is present", async () => {
+      const res = await getHealth();
+      const keys = new Set<string>();
+      collectKeys(res.body.data, keys);
+      expect([...keys]).not.toContain("id");
+      expect([...keys]).not.toContain("notification_id");
+      expect(JSON.stringify(res.body)).not.toMatch(
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+      );
+    });
+
+    it("A13: no failure/success/delivery rate field exists", async () => {
+      const res = await getHealth();
+      const keys = new Set<string>();
+      collectKeys(res.body.data, keys);
+      for (const forbidden of ["failure_rate", "success_rate", "delivery_rate", "rate"]) {
+        expect([...keys]).not.toContain(forbidden);
+      }
+    });
+
+    it("A14: no SLA state exists", async () => {
+      const res = await getHealth();
+      const keys = new Set<string>();
+      collectKeys(res.body.data, keys);
+      for (const forbidden of [
+        "sla",
+        "sla_status",
+        "health_state",
+        "healthy",
+        "unhealthy",
+        "breached",
+        "warning",
+        "critical",
+      ]) {
+        expect([...keys]).not.toContain(forbidden);
+      }
+    });
+
+    it("A15: no age buckets exist", async () => {
+      const res = await getHealth();
+      const keys = new Set<string>();
+      collectKeys(res.body.data, keys);
+      for (const forbidden of [
+        "age",
+        "age_bucket",
+        "age_buckets",
+        "oldest_pending_at",
+        "oldest_pending_age_seconds",
+      ]) {
+        expect([...keys]).not.toContain(forbidden);
+      }
+    });
+
+    it("A16: existing /notifications/metrics 8-key contract is unchanged", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/notifications/metrics")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      expect(Object.keys(res.body.data).sort()).toEqual(
+        [
+          "pending_total",
+          "due_pending",
+          "future_retry",
+          "failed_total",
+          "sent_total",
+          "oldest_pending_at",
+          "oldest_pending_age_seconds",
+          "max_attempt_pending",
+        ].sort(),
+      );
+      expect(Number.isInteger(res.body.data.oldest_pending_age_seconds)).toBe(true);
+      expect(res.body.data.oldest_pending_age_seconds).toBeGreaterThanOrEqual(0);
+      expect(res.body.data.pending_total).toBe(3);
+      expect(res.body.data.failed_total).toBe(3);
+    });
+
+    it("A17: route performs no state mutation", async () => {
+      const before = JSON.stringify(await sharedNotificationRepo.listAll());
+      const res = await getHealth();
+      expect(res.status).toBe(200);
+      expect(JSON.stringify(await sharedNotificationRepo.listAll())).toBe(before);
+    });
+
+    it("A18: no inspection pagination or cursor is introduced", async () => {
+      const res = await getHealth();
+      const keys = new Set<string>();
+      collectKeys(res.body.data, keys);
+      for (const forbidden of ["cursor", "next_cursor", "page", "limit", "offset", "items", "has_more"]) {
+        expect([...keys]).not.toContain(forbidden);
+      }
     });
   });
 
