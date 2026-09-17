@@ -1,9 +1,9 @@
 import type { Express } from "express";
 import request from "supertest";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { jwtService } from "../services/jwt";
-import { sharedKillSwitchRepo, sharedIdentityRepo, sharedSupportRepo, sharedRoleRepo, sharedOrderRepo, sharedPaymentRepo, sharedLoyaltyRepo, sharedAuditRepo, sharedVendorApplicationRepo } from "../repositories/shared";
+import { sharedKillSwitchRepo, sharedIdentityRepo, sharedSupportRepo, sharedRoleRepo, sharedOrderRepo, sharedPaymentRepo, sharedLoyaltyRepo, sharedAuditRepo, sharedVendorApplicationRepo, sharedNotificationRepo } from "../repositories/shared";
 import type { OrderDTO } from "../repositories/orderRepository";
 import type { OrderStatus } from "@snakzap/types";
 import { resetRedisForTests } from "../lib/redis";
@@ -46,6 +46,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
       { method: "get" as const, path: "/api/v1/admin/vendors" },
       { method: "get" as const, path: "/api/v1/admin/vendors/metrics" },
       { method: "get" as const, path: "/api/v1/admin/revenue" },
+      { method: "get" as const, path: "/api/v1/admin/notifications/metrics" },
     ];
 
     for (const ep of readEndpoints) {
@@ -131,6 +132,153 @@ describe("Admin RBAC (A-01, A-11)", () => {
         .put("/api/v1/admin/kill-switches/vendor_churn_protection")
         .send({ enabled: true });
       expect(res.status).toBe(401);
+    });
+  });
+
+  describe("Notification operability metrics (NOTIFICATION-OPERABILITY-A2)", () => {
+    const USER_ID = "00000000-0000-4000-8000-0000000000a2";
+    const FUTURE_AT = new Date("2999-01-01T00:00:00.000Z");
+
+    function enqueueInput() {
+      return {
+        user_id: USER_ID,
+        channel: "sms" as const,
+        to_address: "+9100000000",
+        body: "operability",
+      };
+    }
+
+    let expectedOldest: string;
+
+    beforeAll(async () => {
+      sharedNotificationRepo._reset();
+      // FAILED first (older + more attempts) so it is provably excluded from the
+      // PENDING-only oldest/max extrema.
+      const failed0 = await sharedNotificationRepo.enqueue(enqueueInput());
+      const rf1 = await sharedNotificationRepo.reserveAttempt(failed0.id, 0, new Date());
+      await sharedNotificationRepo.markRetryable(failed0.id, rf1!.attempts, "e1", new Date(0));
+      const rf2 = await sharedNotificationRepo.reserveAttempt(failed0.id, 1, new Date());
+      await sharedNotificationRepo.markDead(failed0.id, rf2!.attempts, "dead");
+
+      await new Promise<void>((r) => setTimeout(r, 5));
+      const due = await sharedNotificationRepo.enqueue(enqueueInput());
+
+      const future0 = await sharedNotificationRepo.enqueue(enqueueInput());
+      const rfu = await sharedNotificationRepo.reserveAttempt(future0.id, 0, new Date());
+      const future = (await sharedNotificationRepo.markRetryable(
+        future0.id,
+        rfu!.attempts,
+        "later",
+        FUTURE_AT,
+      ))!;
+
+      const sent0 = await sharedNotificationRepo.enqueue(enqueueInput());
+      const rs = await sharedNotificationRepo.reserveAttempt(sent0.id, 0, new Date());
+      await sharedNotificationRepo.markSent(sent0.id, rs!.attempts);
+
+      expectedOldest = [due.created_at, future.created_at].sort()[0]!;
+    });
+
+    afterAll(() => {
+      sharedNotificationRepo._reset();
+    });
+
+    it("O13: adminReadOnly caller gets 200 with the exact PII-free shape", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/notifications/metrics")
+        .set("Authorization", adminToken("OPS_AGENT"));
+      expect(res.status).toBe(200);
+      // Exact object equality: extra/missing/renamed keys all fail.
+      expect(res.body.data).toEqual({
+        pending_total: 2,
+        due_pending: 1,
+        future_retry: 1,
+        failed_total: 1,
+        sent_total: 1,
+        oldest_pending_at: expectedOldest,
+        oldest_pending_age_seconds: expect.any(Number),
+        max_attempt_pending: 1,
+      });
+      expect(Number.isInteger(res.body.data.oldest_pending_age_seconds)).toBe(true);
+      expect(res.body.data.oldest_pending_age_seconds as number).toBeGreaterThanOrEqual(0);
+    });
+
+    it("O14: unauthorised and unauthenticated callers are denied by existing auth", async () => {
+      const forbidden = await request(app)
+        .get("/api/v1/admin/notifications/metrics")
+        .set("Authorization", consumerToken());
+      expect(forbidden.status).toBe(403);
+      const unauthenticated = await request(app).get("/api/v1/admin/notifications/metrics");
+      expect(unauthenticated.status).toBe(401);
+    });
+
+    it("O15: response contains no body/to_address/last_error/user_id", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/notifications/metrics")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      for (const forbidden of ["body", "to_address", "last_error", "user_id"]) {
+        expect(res.body.data).not.toHaveProperty(forbidden);
+      }
+      expect(JSON.stringify(res.body)).not.toMatch(/\+91|@example\.com/);
+    });
+
+    it("O16: failure_rate/success_rate/delivery_rate absent", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/notifications/metrics")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      for (const forbidden of ["failure_rate", "success_rate", "delivery_rate"]) {
+        expect(res.body.data).not.toHaveProperty(forbidden);
+      }
+    });
+
+    it("introduces no notification mutation endpoint", async () => {
+      const mutations = [
+        request(app)
+          .post("/api/v1/admin/notifications/retry")
+          .set("Authorization", adminToken("SUPER_ADMIN")),
+        request(app)
+          .post("/api/v1/admin/notifications/reset")
+          .set("Authorization", adminToken("SUPER_ADMIN")),
+        request(app)
+          .delete("/api/v1/admin/notifications/x")
+          .set("Authorization", adminToken("SUPER_ADMIN")),
+      ];
+      for (const m of mutations) {
+        const res = await m;
+        expect(res.status).toBe(404);
+      }
+    });
+  });
+
+  describe("Notification operability age clamp (NOTIFICATION-OPERABILITY-A2)", () => {
+    it("O8: age uses the same now and never returns negative", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const t0 = new Date("2026-06-01T12:00:00.000Z");
+        vi.setSystemTime(t0);
+        sharedNotificationRepo._reset();
+        await sharedNotificationRepo.enqueue({
+          user_id: "00000000-0000-4000-8000-0000000000a2",
+          channel: "email",
+          to_address: "owner@example.com",
+          body: "age",
+        });
+        // Rewind the clock so the stored created_at is in the future; the age
+        // must clamp to 0 rather than go negative.
+        vi.setSystemTime(new Date(t0.getTime() - 5000));
+        const token = adminToken("ADMIN");
+        const res = await request(app)
+          .get("/api/v1/admin/notifications/metrics")
+          .set("Authorization", token);
+        expect(res.status).toBe(200);
+        expect(res.body.data.oldest_pending_at).toBe(t0.toISOString());
+        expect(res.body.data.oldest_pending_age_seconds).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+      sharedNotificationRepo._reset();
     });
   });
 

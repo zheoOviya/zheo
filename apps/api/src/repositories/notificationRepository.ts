@@ -12,6 +12,17 @@ type ReturningUpdate = {
   returning: () => Promise<unknown[]>;
 };
 
+/**
+ * Drizzle aggregate select chain. The shared `DrizzleDb` facade only models
+ * plain `select()` row reads, so the DB-side aggregate query is reached through
+ * the same targeted cast used for `.returning()` above.
+ */
+type AggregateSelect = {
+  select: (fields: Record<string, unknown>) => {
+    from: (table: unknown) => Promise<Record<string, unknown>[]>;
+  };
+};
+
 // ============================================
 // Notification outbox repository (transactional messaging)
 // Best-effort delivery: subscribers enqueue here; a drain step reserves an
@@ -52,10 +63,41 @@ export interface EnqueueNotificationInput {
   body: string;
 }
 
+/**
+ * PII-free aggregate operability metrics (NOTIFICATION-OPERABILITY-A2).
+ *
+ * Counts and extrema only. The shape deliberately excludes `body`,
+ * `to_address`, `last_error`, and `user_id` so an operator read surface can
+ * never leak row-level notification content. `oldest_pending_at` and
+ * `max_attempt_pending` are nullable because an empty PENDING set has no
+ * minimum/maximum; they must never be fabricated as 0/null-adjacent values.
+ *
+ * All classification is resolved against ONE caller-supplied `now` so
+ * `pending_total = due_pending + future_retry` holds for a single evaluation
+ * instant.
+ */
+export interface NotificationOperabilityMetrics {
+  pending_total: number;
+  due_pending: number;
+  future_retry: number;
+  failed_total: number;
+  sent_total: number;
+  oldest_pending_at: string | null;
+  max_attempt_pending: number | null;
+}
+
 export interface NotificationRepository {
   enqueue(input: EnqueueNotificationInput): Promise<NotificationDTO>;
   listAll(limit?: number): Promise<NotificationDTO[]>;
   listPending(limit?: number): Promise<NotificationDTO[]>;
+  /**
+   * PII-free aggregate backlog/failure health for operators. Resolves every
+   * metric against the single supplied `now` (never an internal `new Date()`),
+   * so `pending_total === due_pending + future_retry` and the oldest-pending
+   * age share one consistent clock. A `next_attempt_at` exactly equal to `now`
+   * counts as DUE, not future.
+   */
+  getOperabilityMetrics(now: Date): Promise<NotificationOperabilityMetrics>;
   /**
    * Atomically reserve one delivery attempt: CAS over
    * id + status=PENDING + next_attempt_at<=now + attempts=expectedAttempts +
@@ -119,6 +161,43 @@ export class MemoryNotificationRepository implements NotificationRepository {
       .filter((n) => n.status === "PENDING" && new Date(n.next_attempt_at).getTime() <= now)
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .slice(0, limit);
+  }
+
+  async getOperabilityMetrics(now: Date): Promise<NotificationOperabilityMetrics> {
+    const nowMs = now.getTime();
+    let pending_total = 0;
+    let due_pending = 0;
+    let future_retry = 0;
+    let failed_total = 0;
+    let sent_total = 0;
+    let oldest_pending_at: string | null = null;
+    let max_attempt_pending: number | null = null;
+    for (const n of this.items.values()) {
+      if (n.status === "PENDING") {
+        pending_total += 1;
+        if (new Date(n.next_attempt_at).getTime() <= nowMs) due_pending += 1;
+        else future_retry += 1;
+        if (oldest_pending_at === null || n.created_at < oldest_pending_at) {
+          oldest_pending_at = n.created_at;
+        }
+        if (max_attempt_pending === null || n.attempts > max_attempt_pending) {
+          max_attempt_pending = n.attempts;
+        }
+      } else if (n.status === "FAILED") {
+        failed_total += 1;
+      } else if (n.status === "SENT") {
+        sent_total += 1;
+      }
+    }
+    return {
+      pending_total,
+      due_pending,
+      future_retry,
+      failed_total,
+      sent_total,
+      oldest_pending_at,
+      max_attempt_pending,
+    };
   }
 
   async reserveAttempt(
@@ -248,6 +327,40 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       .map((r) => this.mapRow(r))
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .slice(0, limit);
+  }
+
+  async getOperabilityMetrics(now: Date): Promise<NotificationOperabilityMetrics> {
+    // Single database-side aggregate: counts are computed with
+    // `count(*) FILTER`, extrema with MIN/MAX, so no notification row (and no
+    // PII column) is ever selected into application memory. The one fixed
+    // `now` parameter classifies due vs. future for the whole read.
+    const rows = (await (
+      this.db as unknown as AggregateSelect
+    )
+      .select({
+        pending_total: sql<number>`count(*) filter (where ${notifications.status} = ${"PENDING"})`,
+        due_pending: sql<number>`count(*) filter (where ${notifications.status} = ${"PENDING"} and ${notifications.next_attempt_at} <= ${now})`,
+        future_retry: sql<number>`count(*) filter (where ${notifications.status} = ${"PENDING"} and ${notifications.next_attempt_at} > ${now})`,
+        failed_total: sql<number>`count(*) filter (where ${notifications.status} = ${"FAILED"})`,
+        sent_total: sql<number>`count(*) filter (where ${notifications.status} = ${"SENT"})`,
+        oldest_pending_at: sql<Date | null>`min(${notifications.created_at}) filter (where ${notifications.status} = ${"PENDING"})`,
+        max_attempt_pending: sql<number | null>`max(${notifications.attempts}) filter (where ${notifications.status} = ${"PENDING"})`,
+      })
+      .from(notifications)) as Record<string, unknown>[];
+
+    const row = rows[0] ?? {};
+    const oldest = row.oldest_pending_at;
+    const maxAttempts = row.max_attempt_pending;
+    return {
+      pending_total: Number(row.pending_total ?? 0),
+      due_pending: Number(row.due_pending ?? 0),
+      future_retry: Number(row.future_retry ?? 0),
+      failed_total: Number(row.failed_total ?? 0),
+      sent_total: Number(row.sent_total ?? 0),
+      oldest_pending_at: oldest ? new Date(oldest as string | Date).toISOString() : null,
+      max_attempt_pending:
+        maxAttempts === null || maxAttempts === undefined ? null : Number(maxAttempts),
+    };
   }
 
   async reserveAttempt(

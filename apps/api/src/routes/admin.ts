@@ -15,6 +15,7 @@ import {
   sharedVendorApplicationRepo,
   sharedUserRoleRepo,
   sharedChainRepo,
+  sharedNotificationRepo,
   getStorageMode,
 } from "../repositories/shared";
 import { getRedis } from "../lib/redis";
@@ -799,6 +800,39 @@ adminRouter.get(
   asyncHandler(async (_req, res) => {
     const metrics = await computeAdminMetrics(sharedOrderRepo);
     ok(res, metrics);
+  }),
+);
+
+// ============================================
+// Notification operability (NOTIFICATION-OPERABILITY-A2) — read-only, PII-free
+// aggregate backlog/failure health. Counts + extrema only: no bodies,
+// destinations, last_error, user_id, or per-row notification data, and no
+// retry/reset/archive mutation. One fixed `now` classifies due vs. future and
+// measures the oldest-pending age so the pending partition stays consistent.
+// ============================================
+
+adminRouter.get(
+  "/notifications/metrics",
+  adminReadOnly,
+  asyncHandler(async (_req, res) => {
+    const now = new Date();
+    const metrics = await sharedNotificationRepo.getOperabilityMetrics(now);
+    const oldestMs = metrics.oldest_pending_at
+      ? new Date(metrics.oldest_pending_at).getTime()
+      : null;
+    // Clamp at zero: a clock/fixture anomaly must never yield a negative age.
+    const oldest_pending_age_seconds =
+      oldestMs === null ? null : Math.floor(Math.max(0, now.getTime() - oldestMs) / 1000);
+    ok(res, {
+      pending_total: metrics.pending_total,
+      due_pending: metrics.due_pending,
+      future_retry: metrics.future_retry,
+      failed_total: metrics.failed_total,
+      sent_total: metrics.sent_total,
+      oldest_pending_at: metrics.oldest_pending_at,
+      oldest_pending_age_seconds,
+      max_attempt_pending: metrics.max_attempt_pending,
+    });
   }),
 );
 

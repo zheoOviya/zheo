@@ -29,6 +29,9 @@ interface FakeDb {
   db: DrizzleDb;
   rows: () => Record<string, unknown>[];
   setCalls: () => Array<Record<string, unknown>>;
+  seed: (row: Record<string, unknown>) => void;
+  aggregateColumns: () => string[];
+  aggregateSelectCalls: () => number;
 }
 
 interface Pair {
@@ -42,7 +45,14 @@ function flattenChunks(cond: unknown, out: Array<Record<string, unknown>>): void
   const chunks = (cond as { queryChunks?: unknown[] }).queryChunks;
   if (!Array.isArray(chunks)) return;
   for (const chunk of chunks) {
-    if (!chunk || typeof chunk !== "object") continue;
+    if (chunk === null || chunk === undefined) continue;
+    // The `sql` template pushes raw interpolated values (strings, Dates, ...)
+    // as-is, while condition helpers wrap values in `Param`. Treat both as
+    // parameters.
+    if (typeof chunk !== "object") {
+      out.push({ kind: "param", val: chunk });
+      continue;
+    }
     const c = chunk as {
       queryChunks?: unknown[];
       encoder?: unknown;
@@ -57,6 +67,8 @@ function flattenChunks(cond: unknown, out: Array<Record<string, unknown>>): void
       out.push({ kind: "col", col: c.name });
     } else if (Array.isArray(c.value)) {
       out.push({ kind: "text", text: c.value.join("") });
+    } else {
+      out.push({ kind: "param", val: chunk });
     }
   }
 }
@@ -114,21 +126,129 @@ function applySet(row: Record<string, unknown>, values: Record<string, unknown>)
   }
 }
 
+type AggToken =
+  | { kind: "text"; text: string }
+  | { kind: "col"; col: string }
+  | { kind: "param"; val: unknown };
+
+function aggTokens(field: unknown): AggToken[] {
+  const out: Array<Record<string, unknown>> = [];
+  flattenChunks(field, out);
+  return out as unknown as AggToken[];
+}
+
+function referencedColumns(fields: Record<string, unknown>): string[] {
+  const cols: string[] = [];
+  for (const field of Object.values(fields)) {
+    for (const tok of aggTokens(field)) if (tok.kind === "col") cols.push(tok.col);
+  }
+  return cols;
+}
+
+// Bounded interpreter for the single PII-free aggregate query produced by
+// `getOperabilityMetrics`: `count(*) FILTER (WHERE ...)`, `MIN(created_at)`,
+// `MAX(attempts)`. It executes the real query semantics against the fake rows
+// so the Drizzle code path is proven, not merely shape-inspected.
+function evalAggregateField(rows: Record<string, unknown>[], field: unknown): unknown {
+  const tokens = aggTokens(field);
+  const text = tokens
+    .filter((t): t is { kind: "text"; text: string } => t.kind === "text")
+    .map((t) => t.text)
+    .join("");
+  const func = text.includes("count(")
+    ? "count"
+    : text.includes("min(")
+      ? "min"
+      : text.includes("max(")
+        ? "max"
+        : null;
+  if (!func) throw new Error(`unsupported aggregate field: ${text}`);
+
+  const statusParam = tokens.find(
+    (t) => t.kind === "param" && ["PENDING", "FAILED", "SENT"].includes(t.val as string),
+  );
+  const statusFilter =
+    statusParam && statusParam.kind === "param" ? (statusParam.val as string) : null;
+
+  let dateCmp: { val: unknown; op: "<=" | ">" } | null = null;
+  const naIdx = tokens.findIndex((t) => t.kind === "col" && t.col === "next_attempt_at");
+  if (naIdx >= 0) {
+    let op: "<=" | ">" = "<=";
+    for (let j = naIdx + 1; j < tokens.length; j += 1) {
+      const tok = tokens[j]!;
+      if (tok.kind === "text") {
+        if (tok.text.includes("<=")) op = "<=";
+        else if (tok.text.includes(">")) op = ">";
+      } else if (tok.kind === "param") {
+        dateCmp = { val: tok.val, op };
+        break;
+      }
+    }
+  }
+
+  const matched = rows.filter((r) => {
+    if (statusFilter !== null && r.status !== statusFilter) return false;
+    if (dateCmp) {
+      const c = compare(r.next_attempt_at, dateCmp.val);
+      if (dateCmp.op === ">" ? !(c > 0) : !(c <= 0)) return false;
+    }
+    return true;
+  });
+
+  if (func === "count") return matched.length;
+  if (func === "min") {
+    if (matched.length === 0) return null;
+    return matched.reduce(
+      (min, r) => (compare(r.created_at, min) < 0 ? r.created_at : min),
+      matched[0]!.created_at,
+    );
+  }
+  if (matched.length === 0) return null;
+  return matched.reduce(
+    (mx, r) => Math.max(mx, Number(r.attempts)),
+    Number.NEGATIVE_INFINITY,
+  );
+}
+
+function runAggregate(
+  rows: Record<string, unknown>[],
+  fields: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(fields)) {
+    out[key] = evalAggregateField(rows, field);
+  }
+  return out;
+}
+
 function createFakeDb(): FakeDb {
   const rows: Record<string, unknown>[] = [];
   const setCalls: Array<Record<string, unknown>> = [];
+  let aggregateSelectCalls = 0;
+  let aggregateColumnsSeen: string[] = [];
 
-  const db: DrizzleDb = {
-    select: () => ({
-      from: () => ({
-        where: (cond) => {
-          const exec = () => rows.filter(predicate(cond));
-          const p = Promise.resolve().then(exec) as unknown as SelectQuery;
-          p.for = () => p;
-          return p;
-        },
-      }),
+  const rowSelect = () => ({
+    from: () => ({
+      where: (cond: unknown) => {
+        const exec = () => rows.filter(predicate(cond));
+        const p = Promise.resolve().then(exec) as unknown as SelectQuery;
+        p.for = () => p;
+        return p;
+      },
     }),
+  });
+
+  const db = {
+    select: (fields?: Record<string, unknown>) => {
+      if (fields) {
+        aggregateSelectCalls += 1;
+        aggregateColumnsSeen = referencedColumns(fields);
+        return {
+          from: () => Promise.resolve([runAggregate(rows, fields)]),
+        };
+      }
+      return rowSelect();
+    },
     insert: () => ({
       values: async (values: Record<string, unknown>) => {
         const now = new Date();
@@ -170,11 +290,20 @@ function createFakeDb(): FakeDb {
         };
       },
     }),
-    transaction: async (fn) => fn(db),
+    transaction: async (fn: (tx: DrizzleDb) => Promise<unknown>) => fn(db as unknown as DrizzleDb),
     delete: () => ({ where: () => Promise.resolve([]) }),
-  };
+  } as unknown as DrizzleDb;
 
-  return { db, rows: () => rows, setCalls: () => setCalls };
+  return {
+    db,
+    rows: () => rows,
+    setCalls: () => setCalls,
+    seed: (row) => {
+      rows.push(row);
+    },
+    aggregateColumns: () => aggregateColumnsSeen,
+    aggregateSelectCalls: () => aggregateSelectCalls,
+  };
 }
 
 const PAST = new Date("2020-01-01T00:00:00.000Z");
@@ -455,5 +584,185 @@ describe("Memory/Postgres reservation parity", () => {
     expect(drizzleState).toEqual(memoryState);
     expect(memoryState[0]!.status).toBe("SENT");
     expect(memoryState[0]!.attempts).toBe(2);
+  });
+});
+
+// ============================================================
+// NOTIFICATION-OPERABILITY-A2 — PII-free aggregate backlog/failure metrics.
+// O1-O7 and O9-O12 repository-level (O8 and O13-O16 live in the admin route suite).
+// ============================================================
+
+describe("Notification operability metrics (NOTIFICATION-OPERABILITY-A2)", () => {
+  const NOW = new Date("2030-01-01T00:00:00.000Z");
+  const FUTURE_AT = new Date("2999-01-01T00:00:00.000Z");
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 5));
+
+  interface Mixed {
+    repo: MemoryNotificationRepository;
+    due: NotificationDTO;
+    future: NotificationDTO;
+    sent: NotificationDTO;
+    failed: NotificationDTO;
+  }
+
+  // Deterministic mixed dataset. FAILED is created (and driven to attempts=3)
+  // BEFORE any PENDING row so the oldest/max-attempt exclusions are provable.
+  async function buildMixed(): Promise<Mixed> {
+    const repo = new MemoryNotificationRepository();
+    const failed0 = await repo.enqueue(input());
+    const rf1 = await repo.reserveAttempt(failed0.id, 0, new Date());
+    await repo.markRetryable(failed0.id, rf1!.attempts, "e1", PAST);
+    const rf2 = await repo.reserveAttempt(failed0.id, 1, new Date());
+    await repo.markRetryable(failed0.id, rf2!.attempts, "e2", PAST);
+    const rf3 = await repo.reserveAttempt(failed0.id, 2, new Date());
+    const failed = (await repo.markDead(failed0.id, rf3!.attempts, "dead"))!;
+
+    await tick();
+    const due = await repo.enqueue(input());
+
+    const future0 = await repo.enqueue(input());
+    const rfu = await repo.reserveAttempt(future0.id, 0, new Date());
+    const future = (await repo.markRetryable(future0.id, rfu!.attempts, "later", FUTURE_AT))!;
+
+    const sent0 = await repo.enqueue(input());
+    const rs = await repo.reserveAttempt(sent0.id, 0, new Date());
+    const sent = (await repo.markSent(sent0.id, rs!.attempts))!;
+
+    return { repo, due, future, sent, failed };
+  }
+
+  it("O1: empty store returns truthful zero/null metrics", async () => {
+    const repo = new MemoryNotificationRepository();
+    expect(await repo.getOperabilityMetrics(NOW)).toEqual({
+      pending_total: 0,
+      due_pending: 0,
+      future_retry: 0,
+      failed_total: 0,
+      sent_total: 0,
+      oldest_pending_at: null,
+      max_attempt_pending: null,
+    });
+  });
+
+  it("O2: pending_total counts all PENDING only", async () => {
+    const { repo } = await buildMixed();
+    const m = await repo.getOperabilityMetrics(NOW);
+    expect(m.pending_total).toBe(2);
+  });
+
+  it("O3: due_pending counts PENDING with next_attempt_at <= now", async () => {
+    const { repo, due, future } = await buildMixed();
+    const m = await repo.getOperabilityMetrics(NOW);
+    expect(m.due_pending).toBe(1);
+    expect(new Date(due.next_attempt_at).getTime()).toBeLessThanOrEqual(NOW.getTime());
+    expect(new Date(future.next_attempt_at).getTime()).toBeGreaterThan(NOW.getTime());
+  });
+
+  it("O4: future_retry counts PENDING with next_attempt_at > now", async () => {
+    const { repo } = await buildMixed();
+    const m = await repo.getOperabilityMetrics(NOW);
+    expect(m.future_retry).toBe(1);
+  });
+
+  it("O5: FAILED is counted separately", async () => {
+    const { repo } = await buildMixed();
+    const m = await repo.getOperabilityMetrics(NOW);
+    expect(m.failed_total).toBe(1);
+  });
+
+  it("O6: SENT is counted separately", async () => {
+    const { repo } = await buildMixed();
+    const m = await repo.getOperabilityMetrics(NOW);
+    expect(m.sent_total).toBe(1);
+  });
+
+  it("O10: pending_total = due_pending + future_retry", async () => {
+    const { repo } = await buildMixed();
+    const m = await repo.getOperabilityMetrics(NOW);
+    expect(m.pending_total).toBe(m.due_pending + m.future_retry);
+  });
+
+  it("O7: oldest_pending_at is MIN(created_at) among PENDING only", async () => {
+    const { repo, due, future, failed } = await buildMixed();
+    const expected = [due.created_at, future.created_at].sort()[0]!;
+    const m = await repo.getOperabilityMetrics(NOW);
+    expect(m.oldest_pending_at).toBe(expected);
+    // The FAILED row is strictly older yet excluded from the PENDING minimum.
+    expect(failed.created_at.localeCompare(expected)).toBeLessThan(0);
+    expect(m.oldest_pending_at).not.toBe(failed.created_at);
+  });
+
+  it("O9: max_attempt_pending is MAX(attempts) among PENDING only", async () => {
+    const { repo, failed } = await buildMixed();
+    const m = await repo.getOperabilityMetrics(NOW);
+    expect(m.max_attempt_pending).toBe(1);
+    expect(failed.attempts).toBe(3);
+  });
+
+  it("O11: next_attempt_at === now is DUE; now + 1ms is FUTURE", async () => {
+    const repo = new MemoryNotificationRepository();
+    const equal = await repo.enqueue(input());
+    const at = new Date(equal.next_attempt_at);
+    expect((await repo.getOperabilityMetrics(at)).due_pending).toBe(1);
+
+    const plus = await repo.enqueue(input());
+    const r = await repo.reserveAttempt(plus.id, 0, new Date());
+    await repo.markRetryable(plus.id, r!.attempts, "later", new Date(at.getTime() + 1));
+    const m = await repo.getOperabilityMetrics(at);
+    expect(m.due_pending).toBe(1);
+    expect(m.future_retry).toBe(1);
+  });
+
+  it("O12: Memory and Drizzle observable semantics match on identical rows", async () => {
+    const { repo: memory, due, future, sent, failed } = await buildMixed();
+    const fake = createFakeDb();
+    const drizzle = new DrizzleNotificationRepository(fake.db);
+    for (const dto of [due, future, sent, failed]) {
+      fake.seed({
+        id: dto.id,
+        user_id: dto.user_id,
+        channel: dto.channel,
+        to_address: dto.to_address,
+        body: dto.body,
+        status: dto.status,
+        attempts: dto.attempts,
+        last_error: dto.last_error,
+        next_attempt_at: new Date(dto.next_attempt_at),
+        created_at: new Date(dto.created_at),
+      });
+    }
+    const memoryMetrics = await memory.getOperabilityMetrics(NOW);
+    const drizzleMetrics = await drizzle.getOperabilityMetrics(NOW);
+    expect(drizzleMetrics).toEqual(memoryMetrics);
+  });
+
+  it("aggregate query is one DB-side read, selects no PII columns, and never calls listAll", async () => {
+    const fake = createFakeDb();
+    const repo = new DrizzleNotificationRepository(fake.db);
+    await repo.enqueue(input());
+
+    const m = await repo.getOperabilityMetrics(new Date());
+    expect(fake.aggregateSelectCalls()).toBe(1);
+    const cols = fake.aggregateColumns();
+    expect(cols).not.toContain("body");
+    expect(cols).not.toContain("to_address");
+    expect(cols).not.toContain("last_error");
+    expect(cols).not.toContain("user_id");
+    expect(new Set(cols)).toEqual(
+      new Set(["status", "next_attempt_at", "created_at", "attempts"]),
+    );
+
+    // Independence: the metric path must not depend on the full-row listAll.
+    let listAllCalled = false;
+    const original = repo.listAll.bind(repo);
+    (repo as unknown as { listAll: () => Promise<unknown[]> }).listAll = async () => {
+      listAllCalled = true;
+      return [];
+    };
+    const m2 = await repo.getOperabilityMetrics(new Date());
+    expect(listAllCalled).toBe(false);
+    expect(m2.pending_total).toBe(1);
+    expect(m2.due_pending).toBe(1);
+    (repo as unknown as { listAll: typeof original }).listAll = original;
   });
 });
