@@ -983,3 +983,365 @@ describe("Provider idempotency (NOTIFICATION-PROVIDER-IDEMPOTENCY-A2)", () => {
     expect(calls[0]!.key).toBe(n.id);
   });
 });
+
+// ============================================
+// NOTIFICATION-DRAIN-RESILIENCE-A2 — per-item batch isolation.
+// A single item's reservation/state-persistence failure must not abort the
+// remaining eligible items in the same drain cycle, and must be logged
+// truthfully at item level (no PII, no fabricated success). Batch-level
+// listPending failures stay on the existing notification_drain_error path.
+// ============================================
+
+describe("Notification drain resilience (NOTIFICATION-DRAIN-RESILIENCE-A2)", () => {
+  beforeEach(() => {
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+    resetRedisForTests();
+    sharedNotificationRepo._reset();
+  });
+
+  afterEach(() => {
+    __setNotificationProviderForTests(null);
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+    vi.restoreAllMocks();
+  });
+
+  function patchRepoMethod(
+    method: string,
+    impl: (...args: unknown[]) => unknown,
+  ): () => void {
+    const record = sharedNotificationRepo as unknown as Record<string, unknown>;
+    const original = record[method];
+    const hadOwn = Object.prototype.hasOwnProperty.call(record, method);
+    record[method] = impl;
+    return () => {
+      if (hadOwn) record[method] = original;
+      else delete record[method];
+    };
+  }
+
+  function throwOnceFor(method: string, id: string, message: string): () => void {
+    const record = sharedNotificationRepo as unknown as Record<string, unknown>;
+    const original = record[method] as (...args: unknown[]) => unknown;
+    let armed = true;
+    return patchRepoMethod(method, (...args: unknown[]) => {
+      if (armed && args[0] === id) {
+        armed = false;
+        throw new Error(message);
+      }
+      return original.apply(sharedNotificationRepo, args);
+    });
+  }
+
+  function providerByKey(outcomes: Map<string, NotificationProviderOutcome>) {
+    const calls: ProviderCall[] = [];
+    const provider: NotificationProvider = async (channel, toAddress, body, key) => {
+      calls.push({ channel, toAddress, body, key });
+      return outcomes.get(key) ?? { kind: "ACCEPTED" };
+    };
+    return { provider, calls };
+  }
+
+  function itemErrors(calls: unknown[][]): { notification_id?: string }[] {
+    return calls
+      .map((c) => c[0] as { message?: string; notification_id?: string } | undefined)
+      .filter(
+        (a): a is { message?: string; notification_id?: string } =>
+          a?.message === "notification_delivery_item_error",
+      );
+  }
+
+  it("T1: two eligible notifications both process normally", async () => {
+    const a = await enqueueIdem();
+    const b = await enqueueIdem();
+    await drainNotifications();
+    expect((await currentOf(a.id)).status).toBe("SENT");
+    expect((await currentOf(b.id)).status).toBe("SENT");
+  });
+
+  it("T2: first item reserveAttempt failure does not stop the second item", async () => {
+    const a = await enqueueIdem();
+    const b = await enqueueIdem();
+    const restore = throwOnceFor("reserveAttempt", a.id, "reserve boom");
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    const aRow = await currentOf(a.id);
+    expect(aRow.status).toBe("PENDING");
+    expect(aRow.attempts).toBe(0);
+    expect((await currentOf(b.id)).status).toBe("SENT");
+    expect(itemErrors(errorSpy.mock.calls as unknown[][])).toHaveLength(1);
+  });
+
+  it("T3: markSent failure after ACCEPTED does not stop the second item", async () => {
+    const a = await enqueueIdem();
+    const b = await enqueueIdem();
+    const restore = throwOnceFor("markSent", a.id, "markSent boom");
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    const aRow = await currentOf(a.id);
+    expect(aRow.status).toBe("PENDING");
+    expect(aRow.attempts).toBe(1);
+    expect(aRow.last_error).toBeNull();
+    expect((await currentOf(b.id)).status).toBe("SENT");
+  });
+
+  it("T4: markRetryable failure does not stop the second item", async () => {
+    const a = await enqueueIdem();
+    const b = await enqueueIdem();
+    const { provider } = providerByKey(
+      new Map<string, NotificationProviderOutcome>([
+        [a.id, { kind: "DEFINITIVE_FAILURE", error: "def" }],
+        [b.id, { kind: "ACCEPTED" }],
+      ]),
+    );
+    __setNotificationProviderForTests(provider);
+    const restore = throwOnceFor("markRetryable", a.id, "markRetryable boom");
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    const aRow = await currentOf(a.id);
+    expect(aRow.status).toBe("PENDING");
+    expect(aRow.attempts).toBe(1);
+    expect((await currentOf(b.id)).status).toBe("SENT");
+  });
+
+  it("T5: markDead failure at max does not stop the second item", async () => {
+    const a = await enqueueIdem();
+    const b = await enqueueIdem();
+    await driveToAttempts(a.id, NOTIFICATION_MAX_ATTEMPTS - 1);
+    const { provider } = providerByKey(
+      new Map<string, NotificationProviderOutcome>([
+        [a.id, { kind: "DEFINITIVE_FAILURE", error: "def at cap" }],
+        [b.id, { kind: "ACCEPTED" }],
+      ]),
+    );
+    __setNotificationProviderForTests(provider);
+    const restore = throwOnceFor("markDead", a.id, "markDead boom");
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    const aRow = await currentOf(a.id);
+    expect(aRow.status).toBe("PENDING");
+    expect(aRow.attempts).toBe(NOTIFICATION_MAX_ATTEMPTS);
+    expect((await currentOf(b.id)).status).toBe("SENT");
+  });
+
+  it("T6: item failure emits exactly one truthful item-level error log", async () => {
+    const a = await enqueueIdem();
+    await enqueueIdem();
+    const restore = throwOnceFor("reserveAttempt", a.id, "boom");
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    const items = itemErrors(errorSpy.mock.calls as unknown[][]);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.notification_id).toBe(a.id);
+  });
+
+  it("T7: item error log includes notification_id", async () => {
+    const a = await enqueueIdem();
+    await enqueueIdem();
+    const restore = throwOnceFor("reserveAttempt", a.id, "boom");
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "notification_delivery_item_error",
+        notification_id: a.id,
+      }),
+    );
+  });
+
+  it("T8: item error log excludes body and destination PII", async () => {
+    const a = await enqueueIdem();
+    await enqueueIdem();
+    const restore = throwOnceFor("reserveAttempt", a.id, "boom");
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    const call = errorSpy.mock.calls.find(
+      (c) => (c[0] as { message?: string } | undefined)?.message === "notification_delivery_item_error",
+    )!;
+    const arg = call[0] as Record<string, unknown>;
+    expect(arg.notification_id).toBe(a.id);
+    expect("to_address" in arg).toBe(false);
+    expect("body" in arg).toBe(false);
+    const serialized = JSON.stringify(arg);
+    expect(serialized).not.toContain("+9100000001");
+    expect(serialized).not.toContain("idempotency");
+  });
+
+  it("T9: item-level failure does not emit a fake success/delivery log", async () => {
+    const a = await enqueueIdem();
+    await enqueueIdem();
+    const restore = throwOnceFor("reserveAttempt", a.id, "boom");
+    const infoSpy = vi.spyOn(logger, "info").mockReturnValue(logger);
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    expect(infoSpy).not.toHaveBeenCalled();
+    const messages = errorSpy.mock.calls.map(
+      (c) => (c[0] as { message?: string } | undefined)?.message,
+    );
+    expect(messages).toEqual(["notification_delivery_item_error"]);
+  });
+
+  it("T10: listPending failure still uses notification_drain_error", async () => {
+    const restore = patchRepoMethod("listPending", async () => {
+      throw new Error("list boom");
+    });
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "notification_drain_error" }),
+    );
+  });
+
+  it("T11: listPending failure emits no item-level error without an item", async () => {
+    const restore = patchRepoMethod("listPending", async () => {
+      throw new Error("list boom");
+    });
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    expect(itemErrors(errorSpy.mock.calls as unknown[][])).toHaveLength(0);
+  });
+
+  it("T12: draining guard is released after item failures", async () => {
+    const a = await enqueueIdem();
+    const restore = throwOnceFor("reserveAttempt", a.id, "boom");
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    expect((await currentOf(a.id)).status).toBe("PENDING");
+    await drainNotifications();
+    expect((await currentOf(a.id)).status).toBe("SENT");
+  });
+
+  it("T13: a later drain processes work after a prior item failure", async () => {
+    const a = await enqueueIdem();
+    const restore = throwOnceFor("reserveAttempt", a.id, "boom");
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    const c = await enqueueIdem();
+    await drainNotifications();
+    expect((await currentOf(a.id)).status).toBe("SENT");
+    expect((await currentOf(c.id)).status).toBe("SENT");
+  });
+
+  it("T14: limit argument remains honored", async () => {
+    await enqueueIdem();
+    await enqueueIdem();
+    await enqueueIdem();
+    await drainNotifications(2);
+    const rows = await sharedNotificationRepo.listAll();
+    expect(rows.filter((r) => r.status === "SENT")).toHaveLength(2);
+    expect(rows.filter((r) => r.status === "PENDING")).toHaveLength(1);
+  });
+
+  it("T15: provider idempotency key remains notification.id", async () => {
+    const a = await enqueueIdem();
+    const { provider, calls } = scriptProvider([{ kind: "ACCEPTED" }]);
+    __setNotificationProviderForTests(provider);
+    await drainNotifications();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.key).toBe(a.id);
+  });
+
+  it("T16: same-key retry semantics unchanged", async () => {
+    const a = await enqueueIdem();
+    const { provider, calls } = scriptProvider([
+      { kind: "AMBIGUOUS", error: "timeout" },
+      { kind: "ACCEPTED" },
+    ]);
+    __setNotificationProviderForTests(provider);
+    await drainNotifications();
+    await sharedNotificationRepo.markRetryable(a.id, 1, "timeout", new Date(Date.now() - 1_000));
+    await drainNotifications();
+    expect(calls.map((c) => c.key)).toEqual([a.id, a.id]);
+    expect((await currentOf(a.id)).status).toBe("SENT");
+  });
+
+  it("T17: retry sweep cadence unchanged", () => {
+    expect(NOTIFICATION_RETRY_SWEEP_INTERVAL_MS).toBe(30_000);
+    expect(NOTIFICATION_MAX_ATTEMPTS).toBe(5);
+    expect(typeof startNotificationRetrySweep).toBe("function");
+    expect(typeof stopNotificationRetrySweep).toBe("function");
+  });
+
+  it("T18: repository/schema/EventBus untouched", () => {
+    const statuses: NotificationStatus[] = ["PENDING", "SENT", "FAILED"];
+    expect(statuses).toHaveLength(3);
+    for (const method of [
+      "reserveAttempt",
+      "markSent",
+      "markRetryable",
+      "markDead",
+      "listPending",
+    ] as const) {
+      expect(typeof sharedNotificationRepo[method]).toBe("function");
+    }
+  });
+
+  it("A/B/C: one item persistence failure does not abort later items in the same batch", async () => {
+    const a = await enqueueIdem();
+    const b = await enqueueIdem();
+    const c = await enqueueIdem();
+    const restore = throwOnceFor("reserveAttempt", a.id, "A persistence boom");
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    const aRow = await currentOf(a.id);
+    expect(aRow.status).toBe("PENDING");
+    expect(aRow.attempts).toBe(0);
+    expect((await currentOf(b.id)).status).toBe("SENT");
+    expect((await currentOf(c.id)).status).toBe("SENT");
+    const aErrors = itemErrors(errorSpy.mock.calls as unknown[][]).filter(
+      (e) => e.notification_id === a.id,
+    );
+    expect(aErrors).toHaveLength(1);
+  });
+});

@@ -124,13 +124,37 @@ export function __setNotificationProviderForTests(next: NotificationProvider | n
 
 let draining = false;
 
+/**
+ * Drain the pending outbox. The process-local `draining` guard keeps overlapping
+ * same-process drains from fanning out concurrently.
+ *
+ * Failure boundaries (NOTIFICATION-DRAIN-RESILIENCE-A2):
+ * - listPending is batch-level: if it throws, that whole drain aborts and is
+ *   reported once via `notification_drain_error`.
+ * - Each `deliverOne` is item-level: an unexpected exception from a single
+ *   item's reservation/state-persistence path is logged as
+ *   `notification_delivery_item_error` and the loop continues, so one bad item
+ *   can never starve the later eligible items in the same batch. No fabricated
+ *   success, no forced FAILED, and no second state mutation are performed here;
+ *   the existing provider-idempotency/retry protocol owns recovery.
+ */
 export async function drainNotifications(limit = 50): Promise<void> {
   if (draining) return;
   draining = true;
   try {
     const pending = await sharedNotificationRepo.listPending(limit);
     for (const n of pending) {
-      await deliverOne(n);
+      try {
+        await deliverOne(n);
+      } catch (err) {
+        logger.error({
+          message: "notification_delivery_item_error",
+          notification_id: n.id,
+          channel: n.channel,
+          attempts: n.attempts,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   } catch (err) {
     logger.error({
