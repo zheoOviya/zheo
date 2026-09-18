@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, isNotNull, lt, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNotNull, lt, lte, or, sql, type SQL } from "drizzle-orm";
 import { notifications } from "@snakzap/db";
 import type { DrizzleDb } from "../lib/dbType";
 
@@ -58,6 +58,26 @@ type BoundedSelectQuery = Promise<Record<string, unknown>[]> & {
 type BoundedSelect = {
   select: () => {
     from: (table: unknown) => BoundedSelectQuery;
+  };
+};
+
+/**
+ * Drizzle projected bounded row-select chain. Unlike the aggregate chains, the
+ * per-record inspection read selects an explicit safe field projection, so the
+ * chain starts from `select(fields)`. It still requires the database to apply
+ * `.where()`/`.orderBy()`/`.limit()` (limit = requested + 1 for `hasMore`), so
+ * the full eligible set is never materialized. Reached through a local cast for
+ * the same reason as `BoundedSelect`/`AggregateSelect`.
+ */
+type ProjectedBoundedQuery = Promise<Record<string, unknown>[]> & {
+  where: (condition: unknown) => ProjectedBoundedQuery;
+  orderBy: (...columns: unknown[]) => ProjectedBoundedQuery;
+  limit: (count: number) => ProjectedBoundedQuery;
+};
+
+type ProjectedBoundedSelect = {
+  select: (fields: Record<string, unknown>) => {
+    from: (table: unknown) => ProjectedBoundedQuery;
   };
 };
 
@@ -184,6 +204,99 @@ export interface NotificationOperabilityHealth {
   failure_categories: NotificationFailureCategoryHealth[];
 }
 
+/**
+ * Bounded, PII-safe per-notification projection for operator drill-down
+ * (NOTIFICATION-OPERABILITY-INSPECTION-A2). Exactly seven fields: the opaque
+ * notification id is allowed for correlation, and `safe_error_category` is the
+ * closed taxonomy derived DB-side from `last_error`. Raw `last_error`,
+ * `to_address`, `body`, `user_id`, and any idempotency material must never
+ * appear here.
+ */
+export interface NotificationInspectionItem {
+  id: string;
+  status: NotificationStatus;
+  channel: NotificationChannel;
+  attempts: number;
+  created_at: string;
+  next_attempt_at: string;
+  safe_error_category: SafeErrorCategory | null;
+}
+
+/** Opaque keyset position: `(created_at, id)` of the final returned item. */
+export interface NotificationInspectionCursor {
+  created_at: string;
+  id: string;
+}
+
+export type NotificationInspectionDue = "due" | "future" | "all";
+
+/**
+ * Typed input for the bounded inspection read. `now` is supplied by the caller
+ * exactly once so due/future classification shares one clock. `cursor` is
+ * already-decoded and cursor comparison is exclusive.
+ */
+export interface NotificationInspectionQuery {
+  now: Date;
+  limit: number;
+  status?: NotificationStatus;
+  channel?: NotificationChannel;
+  due?: NotificationInspectionDue;
+  safe_error_category?: SafeErrorCategory;
+  cursor?: NotificationInspectionCursor;
+}
+
+/** Bounded page: at most `limit` safe items plus the internal `hasMore` flag. */
+export interface NotificationInspectionPage {
+  items: NotificationInspectionItem[];
+  hasMore: boolean;
+}
+
+/**
+ * Encode a decoded cursor into the opaque base64url(JSON) wire form
+ * (`{"c": <created_at ISO>, "i": <id>}`). No signing: the payload is a position,
+ * not an authorization token, and every read is re-scoped by the SQL filters.
+ */
+export function encodeNotificationInspectionCursor(cursor: NotificationInspectionCursor): string {
+  return Buffer.from(
+    JSON.stringify({ c: cursor.created_at, i: cursor.id }),
+    "utf8",
+  ).toString("base64url");
+}
+
+/**
+ * Decode an opaque cursor. Returns null for any malformed input (bad base64url,
+ * non-JSON, non-object, missing/blank id, invalid ISO timestamp) so the route
+ * can answer a single 400 VALIDATION_ERROR without leaking the parse failure.
+ */
+export function decodeNotificationInspectionCursor(raw: string): NotificationInspectionCursor | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object") return null;
+  const { c, i } = parsed as { c?: unknown; i?: unknown };
+  if (typeof c !== "string" || typeof i !== "string" || i.length === 0) return null;
+  const ms = Date.parse(c);
+  if (Number.isNaN(ms)) return null;
+  return { created_at: new Date(ms).toISOString(), id: i };
+}
+
+/** Map a full DTO to the safe 7-field projection (PII-free). */
+function toInspectionItem(n: NotificationDTO): NotificationInspectionItem {
+  return {
+    id: n.id,
+    status: n.status,
+    channel: n.channel,
+    attempts: n.attempts,
+    created_at: n.created_at,
+    next_attempt_at: n.next_attempt_at,
+    safe_error_category: classifyNotificationError(n.last_error),
+  };
+}
+
 export interface NotificationRepository {
   enqueue(input: EnqueueNotificationInput): Promise<NotificationDTO>;
   listAll(limit?: number): Promise<NotificationDTO[]>;
@@ -204,6 +317,17 @@ export interface NotificationRepository {
    * exposes no per-record data.
    */
   getOperabilityHealth(now: Date): Promise<NotificationOperabilityHealth>;
+  /**
+   * Bounded, read-only, PII-safe per-notification drill-down for operators.
+   * Applies status/channel/due/safe-category filters and an exclusive
+   * `(created_at, id)` keyset cursor in a single bounded read (`limit + 1`
+   * rows max), ordered `created_at ASC, id ASC`. Never materializes the full
+   * eligible set and never selects raw recipient/body/error/user columns. The
+   * caller supplies the one `now` used for due/future classification.
+   */
+  listForOperabilityInspection(
+    query: NotificationInspectionQuery,
+  ): Promise<NotificationInspectionPage>;
   /**
    * Atomically reserve one delivery attempt: CAS over
    * id + status=PENDING + next_attempt_at<=now + attempts=expectedAttempts +
@@ -352,6 +476,41 @@ export class MemoryNotificationRepository implements NotificationRepository {
           a.safe_error_category.localeCompare(b.safe_error_category),
       );
     return { channels, failure_categories };
+  }
+
+  async listForOperabilityInspection(
+    query: NotificationInspectionQuery,
+  ): Promise<NotificationInspectionPage> {
+    const nowMs = query.now.getTime();
+    const cursorMs = query.cursor ? Date.parse(query.cursor.created_at) : null;
+    const eligible = Array.from(this.items.values()).filter((n) => {
+      if (query.status !== undefined && n.status !== query.status) return false;
+      if (query.channel !== undefined && n.channel !== query.channel) return false;
+      const nextMs = Date.parse(n.next_attempt_at);
+      if (query.due === "due" && (n.status !== "PENDING" || nextMs > nowMs)) return false;
+      if (query.due === "future" && (n.status !== "PENDING" || nextMs <= nowMs)) return false;
+      if (
+        query.safe_error_category !== undefined &&
+        classifyNotificationError(n.last_error) !== query.safe_error_category
+      ) {
+        return false;
+      }
+      if (query.cursor && cursorMs !== null) {
+        const createdMs = Date.parse(n.created_at);
+        const afterCursor =
+          createdMs > cursorMs || (createdMs === cursorMs && n.id > query.cursor.id);
+        if (!afterCursor) return false;
+      }
+      return true;
+    });
+    eligible.sort((a, b) => {
+      const diff = Date.parse(a.created_at) - Date.parse(b.created_at);
+      return diff !== 0 ? diff : a.id.localeCompare(b.id);
+    });
+    return {
+      items: eligible.slice(0, query.limit).map(toInspectionItem),
+      hasMore: eligible.length > query.limit,
+    };
   }
 
   async reserveAttempt(
@@ -564,6 +723,88 @@ export class DrizzleNotificationRepository implements NotificationRepository {
         safe_error_category: row.safe_error_category as SafeErrorCategory,
         count: Number(row.count ?? 0),
       })),
+    };
+  }
+
+  private mapInspectionRow(row: Record<string, unknown>): NotificationInspectionItem {
+    return {
+      id: row.id as string,
+      status: row.status as NotificationStatus,
+      channel: row.channel as NotificationChannel,
+      attempts: Number(row.attempts ?? 0),
+      created_at: new Date(row.created_at as string | Date).toISOString(),
+      next_attempt_at: new Date(row.next_attempt_at as string | Date).toISOString(),
+      safe_error_category: (row.safe_error_category as SafeErrorCategory | null) ?? null,
+    };
+  }
+
+  async listForOperabilityInspection(
+    query: NotificationInspectionQuery,
+  ): Promise<NotificationInspectionPage> {
+    // One database-side safe projection + bounded read. `last_error` is
+    // referenced ONLY inside the CASE that derives the closed safe category
+    // (`null` maps to `null`, never `UNKNOWN`); it is never selected as a
+    // column, so no raw error text, recipient, body, or user id crosses into
+    // application memory. All filters and the exclusive keyset cursor are
+    // applied in SQL, and `limit + 1` lets `hasMore` be derived without a count.
+    const safeErrorCategory = sql<string | null>`case when ${notifications.last_error} is null then null when ${notifications.last_error} in (${"sms provider not configured"}, ${"email provider not configured"}) then ${"PROVIDER_UNCONFIGURED"} else ${"UNKNOWN"} end`;
+    const conditions: SQL[] = [];
+    if (query.status !== undefined) {
+      conditions.push(eq(notifications.status, query.status));
+    }
+    if (query.channel !== undefined) {
+      conditions.push(eq(notifications.channel, query.channel));
+    }
+    if (query.due === "due") {
+      conditions.push(
+        and(
+          eq(notifications.status, "PENDING"),
+          lte(notifications.next_attempt_at, query.now),
+        )!,
+      );
+    } else if (query.due === "future") {
+      conditions.push(
+        and(
+          eq(notifications.status, "PENDING"),
+          gt(notifications.next_attempt_at, query.now),
+        )!,
+      );
+    }
+    if (query.safe_error_category !== undefined) {
+      conditions.push(eq(safeErrorCategory, query.safe_error_category));
+    }
+    if (query.cursor) {
+      const cursorCreatedAt = new Date(query.cursor.created_at);
+      conditions.push(
+        or(
+          gt(notifications.created_at, cursorCreatedAt),
+          and(
+            eq(notifications.created_at, cursorCreatedAt),
+            gt(notifications.id, query.cursor.id),
+          ),
+        )!,
+      );
+    }
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const rows = (await (this.db as unknown as ProjectedBoundedSelect)
+      .select({
+        id: notifications.id,
+        status: notifications.status,
+        channel: notifications.channel,
+        attempts: notifications.attempts,
+        created_at: notifications.created_at,
+        next_attempt_at: notifications.next_attempt_at,
+        safe_error_category: safeErrorCategory,
+      })
+      .from(notifications)
+      .where(where)
+      .orderBy(asc(notifications.created_at), asc(notifications.id))
+      .limit(query.limit + 1)) as Record<string, unknown>[];
+
+    return {
+      items: rows.slice(0, query.limit).map((row) => this.mapInspectionRow(row)),
+      hasMore: rows.length > query.limit,
     };
   }
 

@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { DrizzleDb } from "../lib/dbType";
 import {
   classifyNotificationError,
+  decodeNotificationInspectionCursor,
   DrizzleNotificationRepository,
+  encodeNotificationInspectionCursor,
   MemoryNotificationRepository,
   type NotificationDTO,
   type NotificationRepository,
@@ -34,6 +36,24 @@ interface FakeDb {
   aggregateColumns: () => string[];
   aggregateSelectCalls: () => number;
   rowQueries: () => RowQueryTrace[];
+  projectedQueries: () => ProjectedQueryTrace[];
+}
+
+/**
+ * Captured shape of one projected bounded row-select
+ * (`select(fields).from().where().orderBy().limit()`) used by the OPER_2
+ * inspection contract. Records the exact selected keys, the referenced DB
+ * columns (so PII and DB-side CASE usage are provable), and the DB-side
+ * where/orderBy/limit chain plus how many rows the database emitted.
+ */
+interface ProjectedQueryTrace {
+  keys: string[];
+  columns: string[];
+  usesSafeCase: boolean;
+  where: unknown;
+  orderBy: unknown[];
+  limit: number | undefined;
+  emitted: number;
 }
 
 /**
@@ -361,12 +381,210 @@ function runGroupedAggregate(
   return records.map((r) => r.rec);
 }
 
+// ---- Bounded interpreter for the OPER_2 inspection projection: one projected
+// row read with all filters + the exclusive keyset cursor in SQL. `last_error`
+// is evaluated only inside the DB-side safe-category CASE (`null` -> `null`),
+// and reversed to prove null never collapses into UNKNOWN.
+
+function evalSafeCategoryTokens(
+  tokens: Array<Record<string, unknown>>,
+  row: Record<string, unknown>,
+): string | null {
+  const srcCol = tokens.find((t) => t.kind === "col")?.col as string | undefined;
+  if (srcCol === undefined) throw new Error("safe-category case is missing its source column");
+  const value = row[srcCol];
+  let hasNullBranch = false;
+  let expectIn = false;
+  let expectThen = false;
+  let expectElse = false;
+  const inList: unknown[] = [];
+  let thenVal: unknown;
+  let elseVal: unknown;
+  for (const t of tokens) {
+    if (t.kind === "text") {
+      const s = String(t.text).toLowerCase();
+      if (s.includes("is null") && s.includes("then null")) hasNullBranch = true;
+      else if (s.includes("in (")) expectIn = true;
+      else if (s.includes("then")) {
+        expectIn = false;
+        expectThen = true;
+      } else if (s.includes("else")) {
+        expectThen = false;
+        expectElse = true;
+      }
+    } else if (t.kind === "param") {
+      if (expectIn) inList.push(t.val);
+      else if (expectThen) {
+        thenVal = t.val;
+        expectThen = false;
+      } else if (expectElse) {
+        elseVal = t.val;
+        expectElse = false;
+      }
+    }
+  }
+  if (hasNullBranch && (value === null || value === undefined)) return null;
+  if (inList.includes(value)) return String(thenVal);
+  return String(elseVal);
+}
+
+function evalSafeCategoryCase(row: Record<string, unknown>, field: unknown): string | null {
+  return evalSafeCategoryTokens(aggTokens(field) as Array<Record<string, unknown>>, row);
+}
+
+function projectRow(
+  row: Record<string, unknown>,
+  fields: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(fields)) {
+    const col = columnNameOf(field);
+    if (col !== null) out[key] = row[col];
+    else if (isCaseExpr(field)) out[key] = evalSafeCategoryCase(row, field);
+    else throw new Error(`unsupported projected field: ${key}`);
+  }
+  return out;
+}
+
+function inspectionPredicate(cond: unknown): (row: Record<string, unknown>) => boolean {
+  const tokens: Array<Record<string, unknown>> = [];
+  flattenChunks(cond, tokens);
+  let pos = 0;
+
+  const skipEmpty = (): void => {
+    while (pos < tokens.length) {
+      const t = tokens[pos]!;
+      if (t.kind === "text" && String(t.text).trim() === "") pos += 1;
+      else break;
+    }
+  };
+  const isText = (re: RegExp): boolean => {
+    const t = tokens[pos];
+    return !!t && t.kind === "text" && re.test(String(t.text));
+  };
+  const textValue = (): string =>
+    String((tokens[pos] as { text: unknown }).text).trim().toLowerCase();
+
+  function parseOr(): (row: Record<string, unknown>) => boolean {
+    let left = parseAnd();
+    for (;;) {
+      skipEmpty();
+      if (!isText(/\bor\b/i)) break;
+      pos += 1;
+      const right = parseAnd();
+      const l = left;
+      left = (row) => l(row) || right(row);
+    }
+    return left;
+  }
+
+  function parseAnd(): (row: Record<string, unknown>) => boolean {
+    let left = parseFactor();
+    for (;;) {
+      skipEmpty();
+      if (!isText(/\band\b/i)) break;
+      pos += 1;
+      const right = parseFactor();
+      const l = left;
+      left = (row) => l(row) && right(row);
+    }
+    return left;
+  }
+
+  function parseFactor(): (row: Record<string, unknown>) => boolean {
+    skipEmpty();
+    if (isText(/^\($/)) {
+      pos += 1;
+      const inner = parseOr();
+      skipEmpty();
+      if (isText(/^\)$/)) pos += 1;
+      return inner;
+    }
+    if (isText(/case when/i)) return parseCaseComparison();
+    return parseColumnPredicate();
+  }
+
+  function parseColumnPredicate(): (row: Record<string, unknown>) => boolean {
+    skipEmpty();
+    const colTok = tokens[pos];
+    if (!colTok || colTok.kind !== "col") {
+      throw new Error("inspection predicate: expected a column");
+    }
+    pos += 1;
+    skipEmpty();
+    const opTok = tokens[pos];
+    if (!opTok || opTok.kind !== "text") {
+      throw new Error("inspection predicate: expected an operator");
+    }
+    const opText = textValue();
+    const col = colTok.col as string;
+    if (opText === "is null") {
+      pos += 1;
+      return (row) => row[col] === null || row[col] === undefined;
+    }
+    if (opText === "is not null") {
+      pos += 1;
+      return (row) => row[col] !== null && row[col] !== undefined;
+    }
+    pos += 1;
+    skipEmpty();
+    const valTok = tokens[pos];
+    if (!valTok || valTok.kind !== "param") {
+      throw new Error("inspection predicate: expected a parameter");
+    }
+    pos += 1;
+    const val = valTok.val;
+    if (opText === "=") return (row) => compare(row[col], val) === 0;
+    if (opText === ">") return (row) => compare(row[col], val) > 0;
+    if (opText === "<") return (row) => compare(row[col], val) < 0;
+    if (opText === "<=") return (row) => compare(row[col], val) <= 0;
+    if (opText === ">=") return (row) => compare(row[col], val) >= 0;
+    if (opText === "<>" || opText === "!=") return (row) => compare(row[col], val) !== 0;
+    throw new Error(`inspection predicate: unsupported operator ${opText}`);
+  }
+
+  function parseCaseComparison(): (row: Record<string, unknown>) => boolean {
+    const start = pos;
+    let end = pos;
+    while (end < tokens.length) {
+      const t = tokens[end]!;
+      if (t.kind === "text" && /\bend\b/i.test(String(t.text))) {
+        end += 1;
+        break;
+      }
+      end += 1;
+    }
+    const caseTokens = tokens.slice(start, end);
+    pos = end;
+    skipEmpty();
+    const opTok = tokens[pos];
+    if (!opTok || opTok.kind !== "text") {
+      throw new Error("inspection predicate: expected a case comparator");
+    }
+    pos += 1;
+    skipEmpty();
+    const valTok = tokens[pos];
+    if (!valTok || valTok.kind !== "param") {
+      throw new Error("inspection predicate: expected a case comparator parameter");
+    }
+    pos += 1;
+    const target = valTok.val;
+    return (row) => evalSafeCategoryTokens(caseTokens, row) === target;
+  }
+
+  const predicateFn = parseOr();
+  skipEmpty();
+  if (pos < tokens.length) throw new Error("inspection predicate: trailing tokens");
+  return predicateFn;
+}
+
 function createFakeDb(): FakeDb {
   const rows: Record<string, unknown>[] = [];
   const setCalls: Array<Record<string, unknown>> = [];
   let aggregateSelectCalls = 0;
   let aggregateColumnsSeen: string[] = [];
   const rowQueries: RowQueryTrace[] = [];
+  const projectedQueries: ProjectedQueryTrace[] = [];
 
   const rowSelect = () => ({
     from: () => {
@@ -427,20 +645,63 @@ function createFakeDb(): FakeDb {
   const db = {
     select: (fields?: Record<string, unknown>) => {
       if (fields) {
-        aggregateSelectCalls += 1;
-        aggregateColumnsSeen = referencedColumns(fields);
         return {
           from: () => {
             let whereCond: unknown;
             let groupExprs: unknown[] = [];
             let orderExprs: unknown[] = [];
-            // Deferred so the synchronous `.where().groupBy().orderBy()` chain
-            // is fully collected before the aggregate executes.
-            const exec = (): Record<string, unknown>[] =>
-              groupExprs.length === 0
-                ? [runAggregate(rows, fields)]
-                : runGroupedAggregate(rows, fields, whereCond, groupExprs, orderExprs);
-            const p = Promise.resolve().then(exec) as AggregateGroupQuery;
+            let limitValue: number | undefined;
+            const trace: ProjectedQueryTrace = {
+              keys: Object.keys(fields),
+              columns: referencedColumns(fields),
+              usesSafeCase: Object.values(fields).some((f) => isCaseExpr(f)),
+              where: undefined,
+              orderBy: [],
+              limit: undefined,
+              emitted: 0,
+            };
+            // Deferred so the synchronous chain is fully collected before the
+            // read executes. A projected row read (OPER_2 inspection) is
+            // distinguished from an aggregate by `.limit()`: aggregates never
+            // truncate in SQL, while the inspection path always asks for
+            // `requested + 1` rows. Applying order/limit here (not in the
+            // repository) makes app-side full-set materialization observable.
+            const exec = (): Record<string, unknown>[] => {
+              if (groupExprs.length > 0) {
+                aggregateSelectCalls += 1;
+                aggregateColumnsSeen = referencedColumns(fields);
+                return runGroupedAggregate(rows, fields, whereCond, groupExprs, orderExprs);
+              }
+              if (limitValue !== undefined) {
+                trace.where = whereCond;
+                trace.orderBy = orderExprs;
+                trace.limit = limitValue;
+                let result =
+                  whereCond === undefined
+                    ? [...rows]
+                    : rows.filter(inspectionPredicate(whereCond));
+                if (orderExprs.length > 0) {
+                  const specs = orderExprs.map(parseOrder);
+                  result = [...result].sort((a, b) => {
+                    for (const spec of specs) {
+                      const c = compare(a[spec.col], b[spec.col]);
+                      if (c !== 0) return spec.dir === "asc" ? c : -c;
+                    }
+                    return 0;
+                  });
+                }
+                result = result.slice(0, limitValue).map((row) => projectRow(row, fields));
+                trace.emitted = result.length;
+                projectedQueries.push(trace);
+                return result;
+              }
+              aggregateSelectCalls += 1;
+              aggregateColumnsSeen = referencedColumns(fields);
+              return [runAggregate(rows, fields)];
+            };
+            const p = Promise.resolve().then(exec) as AggregateGroupQuery & {
+              limit: (count: number) => AggregateGroupQuery;
+            };
             p.where = (cond) => {
               whereCond = cond;
               return p;
@@ -451,6 +712,10 @@ function createFakeDb(): FakeDb {
             };
             p.orderBy = (...cols) => {
               orderExprs = cols;
+              return p;
+            };
+            p.limit = (count: number) => {
+              limitValue = count;
               return p;
             };
             return p;
@@ -514,6 +779,7 @@ function createFakeDb(): FakeDb {
     aggregateColumns: () => aggregateColumnsSeen,
     aggregateSelectCalls: () => aggregateSelectCalls,
     rowQueries: () => rowQueries,
+    projectedQueries: () => projectedQueries,
   };
 }
 
@@ -1469,5 +1735,294 @@ describe("Notification listPending boundedness (NOTIFICATION-OPERABILITY-BOUNDED
       await memory.getOperabilityHealth(READ_NOW),
     );
     expect(fake.setCalls()).toHaveLength(0);
+  });
+});
+
+// ============================================================
+// NOTIFICATION-OPERABILITY-INSPECTION-A2 (OPER_2) — bounded, PII-safe
+// per-record operator drill-down. O26-O28 live here (O23-O25 are route-level in
+// admin.test.ts). Both backends run over identical rows and the Drizzle query
+// chain is asserted to keep where/orderBy/limit+1 + the safe CASE in SQL.
+// ============================================================
+
+describe("Notification inspection (NOTIFICATION-OPERABILITY-INSPECTION-A2)", () => {
+  const NOW = new Date("2030-01-01T00:00:00.000Z");
+  const PAST = new Date("2029-01-01T00:00:00.000Z");
+  const FUTURE = new Date("2031-01-01T00:00:00.000Z");
+  const SMS_CONFIG = "sms provider not configured";
+  const EMAIL_CONFIG = "email provider not configured";
+  const UNKNOWN_ERROR = "RAW_PROVIDER_SECRET_TEXT";
+
+  interface InspectionFixture {
+    memory: MemoryNotificationRepository;
+    fake: FakeDb;
+    drizzle: DrizzleNotificationRepository;
+    ordered: NotificationDTO[];
+    A: NotificationDTO;
+    B: NotificationDTO;
+    C: NotificationDTO;
+    D: NotificationDTO;
+    E: NotificationDTO;
+    F: NotificationDTO;
+    G: NotificationDTO;
+    H: NotificationDTO;
+  }
+
+  function toRow(dto: NotificationDTO): Record<string, unknown> {
+    return {
+      id: dto.id,
+      user_id: dto.user_id,
+      channel: dto.channel,
+      to_address: dto.to_address,
+      body: dto.body,
+      status: dto.status,
+      attempts: dto.attempts,
+      last_error: dto.last_error,
+      next_attempt_at: new Date(dto.next_attempt_at),
+      created_at: new Date(dto.created_at),
+    };
+  }
+
+  async function buildInspectionFixture(): Promise<InspectionFixture> {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const memory = new MemoryNotificationRepository();
+      const enq = async (iso: string, channel: "sms" | "email") => {
+        vi.setSystemTime(new Date(iso));
+        return memory.enqueue({ ...input(), channel });
+      };
+
+      // A: due PENDING, no error. B: future PENDING, UNKNOWN. C: FAILED,
+      // PROVIDER_UNCONFIGURED. D: SENT. E: due PENDING, PROVIDER_UNCONFIGURED.
+      // F/G: due PENDING with a shared created_at (id tie-break). H: PENDING
+      // whose next_attempt_at is exactly NOW (inclusive due boundary).
+      const A = await enq("2029-01-01T00:00:00.000Z", "sms");
+      const B0 = await enq("2029-01-02T00:00:00.000Z", "sms");
+      const B = (await memory.markRetryable(
+        B0.id,
+        (await memory.reserveAttempt(B0.id, 0, NOW))!.attempts,
+        UNKNOWN_ERROR,
+        FUTURE,
+      ))!;
+      const C0 = await enq("2029-01-03T00:00:00.000Z", "email");
+      const C = (await memory.markDead(
+        C0.id,
+        (await memory.reserveAttempt(C0.id, 0, NOW))!.attempts,
+        EMAIL_CONFIG,
+      ))!;
+      const D0 = await enq("2029-01-04T00:00:00.000Z", "sms");
+      const D = (await memory.markSent(
+        D0.id,
+        (await memory.reserveAttempt(D0.id, 0, NOW))!.attempts,
+      ))!;
+      const E0 = await enq("2029-01-05T00:00:00.000Z", "email");
+      const E = (await memory.markRetryable(
+        E0.id,
+        (await memory.reserveAttempt(E0.id, 0, NOW))!.attempts,
+        EMAIL_CONFIG,
+        PAST,
+      ))!;
+      const F = await enq("2029-01-06T00:00:00.000Z", "sms");
+      vi.setSystemTime(new Date("2029-01-06T00:00:00.000Z"));
+      const G = await memory.enqueue({ ...input(), channel: "sms" });
+      const H = await enq("2030-01-01T00:00:00.000Z", "sms");
+      expect(H.next_attempt_at).toBe(NOW.toISOString());
+
+      const ordered = [A, B, C, D, E, F, G, H].sort(
+        (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id),
+      );
+
+      const fake = createFakeDb();
+      const drizzle = new DrizzleNotificationRepository(fake.db);
+      for (const dto of ordered) fake.seed(toRow(dto));
+      return { memory, fake, drizzle, ordered, A, B, C, D, E, F, G, H };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  function idsFor(fixture: InspectionFixture, rows: NotificationDTO[]): string[] {
+    const wanted = new Set(rows.map((r) => r.id));
+    return fixture.ordered.filter((r) => wanted.has(r.id)).map((r) => r.id);
+  }
+
+  it("O26: due/future use the supplied single now, include the boundary, and exclude terminal rows", async () => {
+    const f = await buildInspectionFixture();
+    // The real wall clock (2026) is far from NOW (2030): if the repository
+    // ignored the supplied `now` and used an internal clock, every 2029/2030
+    // next_attempt_at would classify as future and `due` would be empty.
+    const due = await f.memory.listForOperabilityInspection({ now: NOW, limit: 50, due: "due" });
+    expect(due.items.map((i) => i.id)).toEqual(idsFor(f, [f.A, f.E, f.F, f.G, f.H]));
+    expect(due.items.every((i) => i.status === "PENDING")).toBe(true);
+    expect(due.items.some((i) => i.id === f.H.id)).toBe(true); // next_attempt_at == now
+
+    const future = await f.memory.listForOperabilityInspection({
+      now: NOW,
+      limit: 50,
+      due: "future",
+    });
+    expect(future.items.map((i) => i.id)).toEqual([f.B.id]);
+
+    const all = await f.memory.listForOperabilityInspection({ now: NOW, limit: 50, due: "all" });
+    expect(all.items.map((i) => i.id)).toEqual(f.ordered.map((r) => r.id));
+    expect(all.items.map((i) => i.status)).toContain("FAILED");
+    expect(all.items.map((i) => i.status)).toContain("SENT");
+
+    for (const mode of ["due", "future", "all"] as const) {
+      expect(
+        await f.drizzle.listForOperabilityInspection({ now: NOW, limit: 50, due: mode }),
+      ).toEqual(await f.memory.listForOperabilityInspection({ now: NOW, limit: 50, due: mode }));
+    }
+  });
+
+  it("O27: exclusive keyset pagination is ordered, complete, tie-break safe, and cursor-validated", async () => {
+    const f = await buildInspectionFixture();
+    const expected = f.ordered.map((r) => r.id);
+
+    const runPages = async (repo: NotificationRepository): Promise<string[]> => {
+      const collected: string[] = [];
+      let cursor: { created_at: string; id: string } | undefined;
+      for (let guard = 0; guard < 50; guard += 1) {
+        const page = await repo.listForOperabilityInspection({
+          now: NOW,
+          limit: 3,
+          due: "all",
+          cursor,
+        });
+        collected.push(...page.items.map((i) => i.id));
+        if (!page.hasMore) return collected;
+        const last = page.items[page.items.length - 1]!;
+        cursor = { created_at: last.created_at, id: last.id };
+      }
+      throw new Error("pagination did not terminate");
+    };
+
+    expect(await runPages(f.memory)).toEqual(expected);
+    expect(await runPages(f.drizzle)).toEqual(expected);
+    expect(new Set(expected).size).toBe(expected.length); // no duplicates/omissions
+
+    // F and G share created_at; the id ASC tie-break keeps them adjacent/exact.
+    const fg = [f.F, f.G].sort((a, b) => a.id.localeCompare(b.id)).map((r) => r.id);
+    const start = expected.indexOf(fg[0]!);
+    expect(expected.slice(start, start + 2)).toEqual(fg);
+
+    // Filter + cursor composition: only sms AND due rows, in order, across pages.
+    const composedExpected = idsFor(f, [f.A, f.F, f.G, f.H]);
+    const composed = await f.memory.listForOperabilityInspection({
+      now: NOW,
+      limit: 2,
+      due: "due",
+      channel: "sms",
+    });
+    expect(composed.items.map((i) => i.id)).toEqual(composedExpected.slice(0, 2));
+    expect(composed.hasMore).toBe(true);
+    const composedLast = composed.items[composed.items.length - 1]!;
+    const composedNext = await f.memory.listForOperabilityInspection({
+      now: NOW,
+      limit: 2,
+      due: "due",
+      channel: "sms",
+      cursor: { created_at: composedLast.created_at, id: composedLast.id },
+    });
+    expect(composedNext.items.map((i) => i.id)).toEqual(composedExpected.slice(2));
+    expect(composedNext.hasMore).toBe(false);
+
+    // Cursor is opaque and round-trips, and malformed cursors decode to null.
+    const pos = { created_at: f.ordered[2]!.created_at, id: f.ordered[2]!.id };
+    expect(decodeNotificationInspectionCursor(encodeNotificationInspectionCursor(pos))).toEqual(pos);
+    expect(decodeNotificationInspectionCursor("not*base64*")).toBeNull();
+    expect(
+      decodeNotificationInspectionCursor(Buffer.from("null", "utf8").toString("base64url")),
+    ).toBeNull();
+    expect(
+      decodeNotificationInspectionCursor(
+        Buffer.from(JSON.stringify({ c: "not-a-date", i: "x" }), "utf8").toString("base64url"),
+      ),
+    ).toBeNull();
+    expect(
+      decodeNotificationInspectionCursor(
+        Buffer.from(JSON.stringify({ c: NOW.toISOString(), i: "" }), "utf8").toString("base64url"),
+      ),
+    ).toBeNull();
+  });
+
+  it("O28: Drizzle keeps filters, cursor, order and limit+1 in SQL with a safe DB-side CASE projection", async () => {
+    const f = await buildInspectionFixture();
+    const cursor = { created_at: f.A.created_at, id: f.A.id };
+    const query = { now: NOW, limit: 2, due: "all" as const, channel: "sms" as const, cursor };
+
+    const result = await f.drizzle.listForOperabilityInspection(query);
+    const traces = f.fake.projectedQueries();
+    const trace = traces[traces.length - 1]!;
+
+    expect(trace.keys.sort()).toEqual(
+      ["attempts", "channel", "created_at", "id", "next_attempt_at", "safe_error_category", "status"].sort(),
+    );
+    for (const pii of ["user_id", "to_address", "body"]) {
+      expect(trace.columns).not.toContain(pii);
+      expect(trace.keys).not.toContain(pii);
+    }
+    // `last_error` is referenced DB-side only inside the safe-category CASE; it
+    // is never a projected key.
+    expect(trace.columns).toContain("last_error");
+    expect(trace.keys).not.toContain("last_error");
+    expect(trace.usesSafeCase).toBe(true);
+    expect(trace.where).toBeDefined();
+    expect(trace.orderBy.map((e) => parseOrder(e).col)).toEqual(["created_at", "id"]);
+    expect(trace.orderBy.map((e) => parseOrder(e).dir)).toEqual(["asc", "asc"]);
+    expect(trace.limit).toBe(3); // requested 2 + 1
+
+    const pairs = parsePairs(trace.where);
+    expect(pairs.some((p) => p.col === "channel" && p.val === "sms")).toBe(true);
+    expect(pairs.some((p) => p.col === "created_at" && p.val instanceof Date)).toBe(true);
+    expect(pairs.some((p) => p.col === "id")).toBe(true);
+
+    // The fake "database" holds all 8 rows; the DB limit bounds what crosses.
+    expect(f.fake.rows()).toHaveLength(8);
+    expect(trace.emitted).toBeLessThanOrEqual(3);
+    expect(result).toEqual(await f.memory.listForOperabilityInspection(query));
+
+    const serialized = JSON.stringify(
+      await f.memory.listForOperabilityInspection({ now: NOW, limit: 50 }),
+    );
+    for (const secret of [UNKNOWN_ERROR, SMS_CONFIG, EMAIL_CONFIG]) {
+      expect(serialized).not.toContain(secret);
+    }
+    for (const forbidden of ["user_id", "to_address", "body", "last_error", "idempotency"]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+
+    // Closed taxonomy: null last_error matches neither category (never UNKNOWN).
+    const unknown = await f.memory.listForOperabilityInspection({
+      now: NOW,
+      limit: 50,
+      safe_error_category: "UNKNOWN",
+    });
+    expect(unknown.items.map((i) => i.id)).toEqual([f.B.id]);
+    const unconfigured = await f.memory.listForOperabilityInspection({
+      now: NOW,
+      limit: 50,
+      safe_error_category: "PROVIDER_UNCONFIGURED",
+    });
+    expect(unconfigured.items.map((i) => i.id)).toEqual(idsFor(f, [f.C, f.E]));
+    expect(unconfigured.items.every((i) => i.safe_error_category === "PROVIDER_UNCONFIGURED")).toBe(true);
+    const nullIds = new Set([f.A.id, f.D.id, f.F.id, f.G.id, f.H.id]);
+    expect(unknown.items.some((i) => nullIds.has(i.id))).toBe(false);
+    expect(unconfigured.items.some((i) => nullIds.has(i.id))).toBe(false);
+    expect(
+      await f.drizzle.listForOperabilityInspection({
+        now: NOW,
+        limit: 50,
+        safe_error_category: "UNKNOWN",
+      }),
+    ).toEqual(unknown);
+
+    // Frozen legacy surfaces are untouched by the new read path. `listAll`
+    // deliberately has no id tie-break, so compare identity as a set there.
+    expect((await f.drizzle.listAll()).map((r) => r.id).sort()).toEqual(
+      (await f.memory.listAll()).map((r) => r.id).sort(),
+    );
+    expect(await f.drizzle.listPending()).toEqual(await f.memory.listPending());
+    expect(f.fake.setCalls()).toHaveLength(0);
   });
 });

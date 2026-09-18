@@ -19,6 +19,10 @@ import {
   getStorageMode,
 } from "../repositories/shared";
 import { getRedis } from "../lib/redis";
+import {
+  decodeNotificationInspectionCursor,
+  encodeNotificationInspectionCursor,
+} from "../repositories/notificationRepository";
 import { config } from "../config";
 import { emit, createEventEnvelope } from "../lib/eventBus";
 import { getCatalogRepository } from "./catalog";
@@ -856,6 +860,75 @@ adminRouter.get(
       channels: health.channels,
       failure_categories: health.failure_categories,
     });
+  }),
+);
+
+// ============================================
+// Notification inspection (NOTIFICATION-OPERABILITY-INSPECTION-A2) — bounded,
+// read-only, PII-safe per-record operator drill-down. Exactly seven safe fields
+// per item (opaque id, status, channel, attempts, created_at, next_attempt_at,
+// closed-enum safe_error_category); no recipient, body, raw error, user_id, or
+// idempotency material. Keyset paginated by `(created_at, id)`; `hasMore` is
+// internal and surfaces only as a non-null `next_cursor`. No mutation, no
+// schema/index, and `listAll` is never on this path.
+// ============================================
+
+// Digit-only preprocessing so malformed limits (0, negative, >200, NaN,
+// non-numeric, empty, or a repeated/array param) fail instead of being clamped.
+const NotificationInspectionLimitSchema = z.preprocess((raw) => {
+  if (raw === undefined) return 50;
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) return Number.NaN;
+  return Number(raw);
+}, z.number().int().min(1).max(200));
+
+const NotificationInspectionQuerySchema = z.object({
+  limit: NotificationInspectionLimitSchema,
+  status: z.enum(["PENDING", "SENT", "FAILED"]).optional(),
+  channel: z.enum(["sms", "email"]).optional(),
+  due: z.enum(["due", "future", "all"]).default("all"),
+  safe_error_category: z.enum(["PROVIDER_UNCONFIGURED", "UNKNOWN"]).optional(),
+  cursor: z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      if (value === undefined) return undefined;
+      const decoded = decodeNotificationInspectionCursor(value);
+      if (decoded === null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid cursor" });
+        return z.NEVER;
+      }
+      return decoded;
+    }),
+});
+
+adminRouter.get(
+  "/notifications",
+  adminReadOnly,
+  asyncHandler(async (req, res) => {
+    const parsed = NotificationInspectionQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid notification inspection query",
+        400,
+        parsed.error.flatten(),
+      );
+    }
+    const { limit, status, channel, due, safe_error_category, cursor } = parsed.data;
+    // ONE_NOW: a single clock instant classifies due/future for the whole page.
+    const now = new Date();
+    const page = await sharedNotificationRepo.listForOperabilityInspection({
+      now,
+      limit,
+      status,
+      channel,
+      due,
+      safe_error_category,
+      cursor,
+    });
+    const last = page.items[page.items.length - 1];
+    const next_cursor = page.hasMore && last ? encodeNotificationInspectionCursor(last) : null;
+    ok(res, { items: page.items, next_cursor });
   }),
 );
 

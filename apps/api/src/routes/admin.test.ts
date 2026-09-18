@@ -48,6 +48,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
       { method: "get" as const, path: "/api/v1/admin/revenue" },
       { method: "get" as const, path: "/api/v1/admin/notifications/metrics" },
       { method: "get" as const, path: "/api/v1/admin/notifications/health" },
+      { method: "get" as const, path: "/api/v1/admin/notifications" },
     ];
 
     for (const ep of readEndpoints) {
@@ -555,6 +556,213 @@ describe("Admin RBAC (A-01, A-11)", () => {
       for (const forbidden of ["cursor", "next_cursor", "page", "limit", "offset", "items", "has_more"]) {
         expect([...keys]).not.toContain(forbidden);
       }
+    });
+  });
+
+  describe("Notification inspection (NOTIFICATION-OPERABILITY-INSPECTION-A2)", () => {
+    const USER_ID = "00000000-0000-4000-8000-0000000000c2";
+    const TO_ADDRESS = "recipient-secret@example.com";
+    const BODY_TEXT = "body-secret";
+    const RAW_ERROR = "raw-error-secret";
+    const SMS_CONFIG = "sms provider not configured";
+    const FUTURE_AT = new Date("2999-01-01T00:00:00.000Z");
+    const GENERIC_PER_CHANNEL = 26;
+    const SAFE_ITEM_KEYS = [
+      "attempts",
+      "channel",
+      "created_at",
+      "id",
+      "next_attempt_at",
+      "safe_error_category",
+      "status",
+    ];
+
+    function enqueueInput(channel: "sms" | "email") {
+      return { user_id: USER_ID, channel, to_address: TO_ADDRESS, body: BODY_TEXT };
+    }
+
+    function getInspect(query = "") {
+      const suffix = query ? `?${query}` : "";
+      return request(app)
+        .get(`/api/v1/admin/notifications${suffix}`)
+        .set("Authorization", adminToken("ADMIN"));
+    }
+
+    function collectKeys(value: unknown, keys: Set<string>): void {
+      if (Array.isArray(value)) {
+        for (const v of value) collectKeys(v, keys);
+        return;
+      }
+      if (value && typeof value === "object") {
+        for (const [k, v] of Object.entries(value)) {
+          keys.add(k);
+          collectKeys(v, keys);
+        }
+      }
+    }
+
+    async function pageAllIds(query: string): Promise<string[]> {
+      const ids: string[] = [];
+      let cursor: string | null = null;
+      for (let guard = 0; guard < 100; guard += 1) {
+        const q = cursor ? `${query}&cursor=${encodeURIComponent(cursor)}` : query;
+        const res = await getInspect(q);
+        expect(res.status).toBe(200);
+        ids.push(...res.body.data.items.map((i: { id: string }) => i.id));
+        cursor = res.body.data.next_cursor;
+        if (!cursor) return ids;
+      }
+      throw new Error("pagination did not terminate");
+    }
+
+    beforeAll(async () => {
+      // Reset the in-memory rate-limit window: this block issues a bounded but
+      // non-trivial number of requests (full pagination walks) and must not
+      // exhaust the shared per-IP budget for downstream blocks.
+      resetRedisForTests();
+      sharedNotificationRepo._reset();
+      for (let i = 0; i < GENERIC_PER_CHANNEL; i += 1) {
+        await sharedNotificationRepo.enqueue(enqueueInput("sms"));
+      }
+      for (let i = 0; i < GENERIC_PER_CHANNEL; i += 1) {
+        await sharedNotificationRepo.enqueue(enqueueInput("email"));
+      }
+      const failed = await sharedNotificationRepo.enqueue(enqueueInput("email"));
+      const rf = await sharedNotificationRepo.reserveAttempt(failed.id, 0, new Date());
+      await sharedNotificationRepo.markDead(failed.id, rf!.attempts, SMS_CONFIG);
+      const future = await sharedNotificationRepo.enqueue(enqueueInput("sms"));
+      const rfu = await sharedNotificationRepo.reserveAttempt(future.id, 0, new Date());
+      await sharedNotificationRepo.markRetryable(future.id, rfu!.attempts, RAW_ERROR, FUTURE_AT);
+      const sent = await sharedNotificationRepo.enqueue(enqueueInput("sms"));
+      const rs = await sharedNotificationRepo.reserveAttempt(sent.id, 0, new Date());
+      await sharedNotificationRepo.markSent(sent.id, rs!.attempts);
+    });
+
+    afterAll(() => {
+      sharedNotificationRepo._reset();
+      resetRedisForTests();
+    });
+
+    it("O23: default response is the exact bounded projection with no total/offset and a cursor only when more rows exist", async () => {
+      const res = await getInspect();
+      expect(res.status).toBe(200);
+      expect(Object.keys(res.body.data).sort()).toEqual(["items", "next_cursor"]);
+      expect(res.body.data.items).toHaveLength(50); // DEFAULT_LIMIT
+      expect(res.body.data.next_cursor).toEqual(expect.any(String));
+      expect(res.body.data).not.toHaveProperty("total");
+      expect(res.body.data).not.toHaveProperty("has_more");
+      expect(res.body.data).not.toHaveProperty("page");
+      expect(res.body.data).not.toHaveProperty("offset");
+      for (const item of res.body.data.items) {
+        expect(Object.keys(item).sort()).toEqual(SAFE_ITEM_KEYS);
+      }
+
+      // The full walk is ordered created_at ASC, id ASC and complete.
+      const direct = await sharedNotificationRepo.listForOperabilityInspection({
+        now: new Date(),
+        limit: 200,
+        due: "all",
+      });
+      expect(direct.items).toHaveLength(GENERIC_PER_CHANNEL * 2 + 3);
+      expect(await pageAllIds("limit=20")).toEqual(direct.items.map((i) => i.id));
+    });
+
+    it("O24: response carries no recipient/body/raw-error/user/idempotency material", async () => {
+      const res = await getInspect("limit=200");
+      expect(res.status).toBe(200);
+      const serialized = JSON.stringify(res.body);
+      for (const secret of [TO_ADDRESS, BODY_TEXT, RAW_ERROR, SMS_CONFIG]) {
+        expect(serialized).not.toContain(secret);
+      }
+      expect(serialized).not.toContain("+91");
+      const keys = new Set<string>();
+      collectKeys(res.body.data.items, keys);
+      for (const forbidden of ["user_id", "to_address", "body", "last_error", "idempotency"]) {
+        expect([...keys]).not.toContain(forbidden);
+      }
+      // The closed-enum category is the only failure signal exposed.
+      expect([...keys]).toContain("safe_error_category");
+    });
+
+    it("O25: status/channel/due/safe-category filters are exact and invalid values are 400", async () => {
+      const ids = (res: request.Response) =>
+        res.body.data.items.map((i: { id: string }) => i.id) as string[];
+
+      const pending = await getInspect("limit=200&status=PENDING");
+      expect(ids(pending)).toHaveLength(GENERIC_PER_CHANNEL * 2 + 1);
+      expect(pending.body.data.items.every((i: { status: string }) => i.status === "PENDING")).toBe(true);
+
+      const failed = await getInspect("limit=200&status=FAILED");
+      expect(ids(failed)).toHaveLength(1);
+      expect(failed.body.data.items[0].status).toBe("FAILED");
+
+      const email = await getInspect("limit=200&channel=email");
+      expect(ids(email)).toHaveLength(GENERIC_PER_CHANNEL + 1);
+      expect(email.body.data.items.every((i: { channel: string }) => i.channel === "email")).toBe(true);
+
+      const smsPending = await getInspect("limit=200&channel=sms&status=PENDING");
+      expect(ids(smsPending)).toHaveLength(GENERIC_PER_CHANNEL + 1);
+
+      const future = await getInspect("limit=200&due=future");
+      expect(ids(future)).toHaveLength(1);
+      expect(future.body.data.items[0].status).toBe("PENDING");
+
+      const due = await getInspect("limit=200&due=due");
+      expect(ids(due)).toHaveLength(GENERIC_PER_CHANNEL * 2);
+
+      const unknown = await getInspect("limit=200&safe_error_category=UNKNOWN");
+      expect(ids(unknown)).toHaveLength(1);
+      expect(unknown.body.data.items[0].safe_error_category).toBe("UNKNOWN");
+
+      const unconfigured = await getInspect("limit=200&safe_error_category=PROVIDER_UNCONFIGURED");
+      expect(ids(unconfigured)).toHaveLength(1);
+      expect(unconfigured.body.data.items[0].safe_error_category).toBe("PROVIDER_UNCONFIGURED");
+
+      const invalidQueries = [
+        "limit=0",
+        "limit=201",
+        "limit=abc",
+        "limit=1.5",
+        "limit=-1",
+        "limit=",
+        "limit=1&limit=2",
+        "status=BOGUS",
+        "status=PENDING&status=SENT",
+        "channel=push",
+        "due=soon",
+        "safe_error_category=NOPE",
+        "cursor=@@@not-a-cursor@@@",
+      ];
+      for (const query of invalidQueries) {
+        const res = await getInspect(query);
+        expect(res.status, query).toBe(400);
+        expect(res.body.error.code, query).toBe("VALIDATION_ERROR");
+      }
+    });
+
+    it("O27 (route): the opaque cursor pages exactly once through the full ordered set", async () => {
+      const first = await getInspect("limit=13");
+      expect(first.body.data.items).toHaveLength(13);
+      expect(first.body.data.next_cursor).toEqual(expect.any(String));
+
+      const walked = await pageAllIds("limit=13");
+      const direct = await sharedNotificationRepo.listForOperabilityInspection({
+        now: new Date(),
+        limit: 200,
+        due: "all",
+      });
+      expect(walked).toEqual(direct.items.map((i) => i.id));
+      expect(new Set(walked).size).toBe(walked.length);
+
+      // A cursor produced under a filter stays scoped to that filter.
+      const filtered = await getInspect("limit=5&status=PENDING");
+      const follow = await getInspect(
+        `limit=5&status=PENDING&cursor=${encodeURIComponent(filtered.body.data.next_cursor)}`,
+      );
+      expect(follow.status).toBe(200);
+      expect(follow.body.data.items.every((i: { status: string }) => i.status === "PENDING")).toBe(true);
+      const overlap = new Set(filtered.body.data.items.map((i: { id: string }) => i.id));
+      expect(follow.body.data.items.some((i: { id: string }) => overlap.has(i.id))).toBe(false);
     });
   });
 
