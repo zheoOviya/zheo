@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, isNotNull, lt, lte, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, lt, lte, sql } from "drizzle-orm";
 import { notifications } from "@snakzap/db";
 import type { DrizzleDb } from "../lib/dbType";
 
@@ -39,6 +39,25 @@ type AggregateGroupQuery = Promise<Record<string, unknown>[]> & {
 type AggregateGroupSelect = {
   select: (fields: Record<string, unknown>) => {
     from: (table: unknown) => AggregateGroupQuery;
+  };
+};
+
+/**
+ * Drizzle bounded row-select chain exposing `.orderBy()` + `.limit()`. The
+ * shared `DrizzleDb` facade only models `select().from().where()`, so the
+ * delivery hot read reaches database-side ordering/truncation through a narrow
+ * local cast (the same discipline used for `.returning()` and the aggregate
+ * chains above) rather than widening shared types. Used by `listPending`.
+ */
+type BoundedSelectQuery = Promise<Record<string, unknown>[]> & {
+  where: (condition: unknown) => BoundedSelectQuery;
+  orderBy: (...columns: unknown[]) => BoundedSelectQuery;
+  limit: (count: number) => BoundedSelectQuery;
+};
+
+type BoundedSelect = {
+  select: () => {
+    from: (table: unknown) => BoundedSelectQuery;
   };
 };
 
@@ -246,7 +265,9 @@ export class MemoryNotificationRepository implements NotificationRepository {
     const now = Date.now();
     return Array.from(this.items.values())
       .filter((n) => n.status === "PENDING" && new Date(n.next_attempt_at).getTime() <= now)
-      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      // FIFO by `created_at` with `id` as a stable tie-break, mirroring the
+      // DB-side `ORDER BY created_at ASC, id ASC` used by the Drizzle read.
+      .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
       .slice(0, limit);
   }
 
@@ -447,7 +468,12 @@ export class DrizzleNotificationRepository implements NotificationRepository {
   }
 
   async listPending(limit = 50): Promise<NotificationDTO[]> {
-    const rows = (await this.db
+    // Bounded delivery hot read (NOTIFICATION-OPERABILITY-BOUNDEDNESS-A2): the
+    // database applies the due predicate, the FIFO ordering (`created_at`, then
+    // `id` as a deterministic tie-break), and the LIMIT, so the full eligible
+    // set is never materialized in application memory. `now` is evaluated once
+    // per invocation. Public signature and default (50) are unchanged.
+    const rows = (await (this.db as unknown as BoundedSelect)
       .select()
       .from(notifications)
       .where(
@@ -455,11 +481,10 @@ export class DrizzleNotificationRepository implements NotificationRepository {
           eq(notifications.status, "PENDING"),
           lte(notifications.next_attempt_at, new Date()),
         ),
-      )) as Record<string, unknown>[];
-    return rows
-      .map((r) => this.mapRow(r))
-      .sort((a, b) => a.created_at.localeCompare(b.created_at))
-      .slice(0, limit);
+      )
+      .orderBy(asc(notifications.created_at), asc(notifications.id))
+      .limit(limit)) as Record<string, unknown>[];
+    return rows.map((r) => this.mapRow(r));
   }
 
   async getOperabilityMetrics(now: Date): Promise<NotificationOperabilityMetrics> {

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import type { DrizzleDb, SelectQuery } from "../lib/dbType";
+import { describe, expect, it, vi } from "vitest";
+import type { DrizzleDb } from "../lib/dbType";
 import {
   classifyNotificationError,
   DrizzleNotificationRepository,
@@ -33,6 +33,19 @@ interface FakeDb {
   seed: (row: Record<string, unknown>) => void;
   aggregateColumns: () => string[];
   aggregateSelectCalls: () => number;
+  rowQueries: () => RowQueryTrace[];
+}
+
+/**
+ * Captured shape of one plain row-select (`select().from().where()...`) so the
+ * OPER_5 boundedness contract can assert the DB-side `where`/`orderBy`/`limit`
+ * chain and the number of rows the database actually emitted to the app.
+ */
+interface RowQueryTrace {
+  where: unknown;
+  orderBy: unknown[];
+  limit: number | undefined;
+  emitted: number;
 }
 
 /** Awaitable + chainable shape the repository casts its grouped aggregate to. */
@@ -40,6 +53,13 @@ interface AggregateGroupQuery extends Promise<Record<string, unknown>[]> {
   where: (condition: unknown) => AggregateGroupQuery;
   groupBy: (...columns: unknown[]) => AggregateGroupQuery;
   orderBy: (...columns: unknown[]) => AggregateGroupQuery;
+}
+
+/** Awaitable + chainable shape of the bounded row select used by `listPending`. */
+interface BoundedRowQuery extends Promise<Record<string, unknown>[]> {
+  where: (condition: unknown) => BoundedRowQuery;
+  orderBy: (...columns: unknown[]) => BoundedRowQuery;
+  limit: (count: number) => BoundedRowQuery;
 }
 
 interface Pair {
@@ -125,6 +145,18 @@ function notNullColumns(cond: unknown): string[] {
     if (/is\s+not\s+null/i.test(text)) cols.push(tok.col as string);
   }
   return cols;
+}
+
+/** Parse a Drizzle order expression (`asc(col)`/`desc(col)`) into column + direction. */
+function parseOrder(expr: unknown): { col: string; dir: "asc" | "desc" } {
+  const tokens: Array<Record<string, unknown>> = [];
+  flattenChunks(expr, tokens);
+  const colTok = tokens.find((t) => t.kind === "col");
+  if (!colTok) throw new Error("order expression is missing its column");
+  const dir = tokens.some((t) => t.kind === "text" && /desc/i.test(String(t.text)))
+    ? "desc"
+    : "asc";
+  return { col: colTok.col as string, dir };
 }
 
 function predicate(cond: unknown): (row: Record<string, unknown>) => boolean {
@@ -334,16 +366,62 @@ function createFakeDb(): FakeDb {
   const setCalls: Array<Record<string, unknown>> = [];
   let aggregateSelectCalls = 0;
   let aggregateColumnsSeen: string[] = [];
+  const rowQueries: RowQueryTrace[] = [];
 
   const rowSelect = () => ({
-    from: () => ({
-      where: (cond: unknown) => {
-        const exec = () => rows.filter(predicate(cond));
-        const p = Promise.resolve().then(exec) as unknown as SelectQuery;
-        p.for = () => p;
+    from: () => {
+      let whereCond: unknown;
+      let orderExprs: unknown[] = [];
+      let limitValue: number | undefined;
+      const trace: RowQueryTrace = {
+        where: undefined,
+        orderBy: [],
+        limit: undefined,
+        emitted: 0,
+      };
+      rowQueries.push(trace);
+      // Deferred so the synchronous `.where().orderBy().limit()` chain is fully
+      // collected before the read executes. Applying order/limit here (rather
+      // than in the repository) is what makes app-side full-set materialization
+      // observable: `trace.emitted` reports how many rows the "database" handed
+      // to the application.
+      const exec = (): Record<string, unknown>[] => {
+        trace.where = whereCond;
+        trace.orderBy = orderExprs;
+        trace.limit = limitValue;
+        let result = rows.filter(predicate(whereCond));
+        if (orderExprs.length > 0) {
+          const specs = orderExprs.map(parseOrder);
+          result = [...result].sort((a, b) => {
+            for (const spec of specs) {
+              const c = compare(a[spec.col], b[spec.col]);
+              if (c !== 0) return spec.dir === "asc" ? c : -c;
+            }
+            return 0;
+          });
+        }
+        if (limitValue !== undefined) result = result.slice(0, limitValue);
+        trace.emitted = result.length;
+        return result;
+      };
+      const p = Promise.resolve().then(exec) as unknown as BoundedRowQuery & {
+        for: () => BoundedRowQuery;
+      };
+      p.for = () => p;
+      p.where = (cond) => {
+        whereCond = cond;
         return p;
-      },
-    }),
+      };
+      p.orderBy = (...cols) => {
+        orderExprs = cols;
+        return p;
+      };
+      p.limit = (count) => {
+        limitValue = count;
+        return p;
+      };
+      return p;
+    },
   });
 
   const db = {
@@ -435,6 +513,7 @@ function createFakeDb(): FakeDb {
     },
     aggregateColumns: () => aggregateColumnsSeen,
     aggregateSelectCalls: () => aggregateSelectCalls,
+    rowQueries: () => rowQueries,
   };
 }
 
@@ -1171,5 +1250,224 @@ describe("Notification operability health read model (NOTIFICATION-OPERABILITY-R
     expect(cols).not.toContain("to_address");
     expect(cols).not.toContain("user_id");
     expect(JSON.stringify(h)).not.toContain("last_error");
+  });
+});
+
+// ============================================================
+// NOTIFICATION-OPERABILITY-BOUNDEDNESS-A2 (OPER_5) — the delivery hot read
+// must bound `ORDER BY created_at ASC, id ASC` + `LIMIT n` inside the
+// database. B1-B12 run against both backends over identical rows; B13-B17
+// assert the Drizzle query chain itself (shape + rows the "database" emitted);
+// B18 pins the frozen listAll / operability read-model surface.
+// ============================================================
+
+describe("Notification listPending boundedness (NOTIFICATION-OPERABILITY-BOUNDEDNESS-A2)", () => {
+  const READ_NOW = new Date("2030-01-01T00:00:00.000Z");
+  const FUTURE_AT = new Date("2999-01-01T00:00:00.000Z");
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 5));
+
+  function toRow(dto: NotificationDTO): Record<string, unknown> {
+    return {
+      id: dto.id,
+      user_id: dto.user_id,
+      channel: dto.channel,
+      to_address: dto.to_address,
+      body: dto.body,
+      status: dto.status,
+      attempts: dto.attempts,
+      last_error: dto.last_error,
+      next_attempt_at: new Date(dto.next_attempt_at),
+      created_at: new Date(dto.created_at),
+    };
+  }
+
+  interface BoundedFixture {
+    memory: MemoryNotificationRepository;
+    fake: FakeDb;
+    drizzle: DrizzleNotificationRepository;
+    due: NotificationDTO[];
+    future: NotificationDTO;
+    sent: NotificationDTO;
+    failed: NotificationDTO;
+  }
+
+  // `count` due PENDING rows with strictly increasing `created_at`, plus one
+  // future-retry PENDING, one SENT and one FAILED row for exclusion coverage.
+  async function buildBoundedFixture(count: number): Promise<BoundedFixture> {
+    const memory = new MemoryNotificationRepository();
+    const due: NotificationDTO[] = [];
+    for (let i = 0; i < count; i += 1) {
+      await tick();
+      due.push(await memory.enqueue(input()));
+    }
+
+    const future0 = await memory.enqueue(input());
+    const rf = await memory.reserveAttempt(future0.id, 0, new Date());
+    const future = (await memory.markRetryable(future0.id, rf!.attempts, "later", FUTURE_AT))!;
+
+    const sent0 = await memory.enqueue(input());
+    const rs = await memory.reserveAttempt(sent0.id, 0, new Date());
+    const sent = (await memory.markSent(sent0.id, rs!.attempts))!;
+
+    const failed0 = await memory.enqueue(input());
+    const rd = await memory.reserveAttempt(failed0.id, 0, new Date());
+    const failed = (await memory.markDead(failed0.id, rd!.attempts, "dead"))!;
+
+    const fake = createFakeDb();
+    const drizzle = new DrizzleNotificationRepository(fake.db);
+    for (const dto of [...due, future, sent, failed]) fake.seed(toRow(dto));
+    return { memory, fake, drizzle, due, future, sent, failed };
+  }
+
+  function lastRowQuery(fake: FakeDb): RowQueryTrace {
+    const queries = fake.rowQueries();
+    return queries[queries.length - 1]!;
+  }
+
+  it("B1: empty repository returns []", async () => {
+    expect(await new MemoryNotificationRepository().listPending()).toEqual([]);
+    expect(await new DrizzleNotificationRepository(createFakeDb().db).listPending()).toEqual([]);
+  });
+
+  it("B2: only due PENDING rows are returned", async () => {
+    const { memory, drizzle, due } = await buildBoundedFixture(3);
+    expect((await memory.listPending()).map((n) => n.id)).toEqual(due.map((n) => n.id));
+    expect((await drizzle.listPending()).map((n) => n.id)).toEqual(due.map((n) => n.id));
+  });
+
+  it("B3: future PENDING retry is excluded", async () => {
+    const { memory, drizzle, future } = await buildBoundedFixture(2);
+    expect((await memory.listPending()).map((n) => n.id)).not.toContain(future.id);
+    expect((await drizzle.listPending()).map((n) => n.id)).not.toContain(future.id);
+  });
+
+  it("B4: SENT is excluded", async () => {
+    const { memory, drizzle, sent } = await buildBoundedFixture(2);
+    expect((await memory.listPending()).map((n) => n.id)).not.toContain(sent.id);
+    expect((await drizzle.listPending()).map((n) => n.id)).not.toContain(sent.id);
+  });
+
+  it("B5: FAILED is excluded", async () => {
+    const { memory, drizzle, failed } = await buildBoundedFixture(2);
+    expect((await memory.listPending()).map((n) => n.id)).not.toContain(failed.id);
+    expect((await drizzle.listPending()).map((n) => n.id)).not.toContain(failed.id);
+  });
+
+  it("B6: next_attempt_at exactly equal to now is eligible", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const boundary = new Date("2035-06-01T00:00:00.000Z");
+      vi.setSystemTime(boundary);
+
+      const memory = new MemoryNotificationRepository();
+      const n = await memory.enqueue(input());
+      expect(n.next_attempt_at).toBe(boundary.toISOString());
+      expect((await memory.listPending()).map((r) => r.id)).toEqual([n.id]);
+
+      const fake = createFakeDb();
+      const drizzle = new DrizzleNotificationRepository(fake.db);
+      fake.seed(toRow(n));
+      expect((await drizzle.listPending()).map((r) => r.id)).toEqual([n.id]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("B7: rows are ordered by created_at ASC", async () => {
+    const { memory, drizzle, due } = await buildBoundedFixture(4);
+    const expected = due.map((n) => n.id);
+    expect((await memory.listPending()).map((n) => n.id)).toEqual(expected);
+    expect((await drizzle.listPending()).map((n) => n.id)).toEqual(expected);
+  });
+
+  it("B8: equal created_at falls back to id ASC tie-break", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2035-06-01T00:00:00.000Z"));
+      const memory = new MemoryNotificationRepository();
+      const created: NotificationDTO[] = [];
+      for (let i = 0; i < 5; i += 1) created.push(await memory.enqueue(input()));
+      const expected = created.map((n) => n.id).sort((a, b) => a.localeCompare(b));
+      expect(new Set(created.map((n) => n.created_at)).size).toBe(1);
+
+      expect((await memory.listPending()).map((n) => n.id)).toEqual(expected);
+
+      const fake = createFakeDb();
+      const drizzle = new DrizzleNotificationRepository(fake.db);
+      for (const dto of created) fake.seed(toRow(dto));
+      expect((await drizzle.listPending()).map((n) => n.id)).toEqual(expected);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("B9: default limit is 50", async () => {
+    const { memory, drizzle, due } = await buildBoundedFixture(55);
+    const expected = due.map((n) => n.id).slice(0, 50);
+    expect((await memory.listPending()).map((n) => n.id)).toEqual(expected);
+    expect((await drizzle.listPending()).map((n) => n.id)).toEqual(expected);
+  });
+
+  it("B10: explicit limit truncates the exact ordered prefix", async () => {
+    const { memory, drizzle, due } = await buildBoundedFixture(6);
+    const expected = due.map((n) => n.id).slice(0, 3);
+    expect((await memory.listPending(3)).map((n) => n.id)).toEqual(expected);
+    expect((await drizzle.listPending(3)).map((n) => n.id)).toEqual(expected);
+  });
+
+  it("B11: limit greater than the eligible population returns all eligible rows", async () => {
+    const { memory, drizzle, due } = await buildBoundedFixture(4);
+    const expected = due.map((n) => n.id);
+    expect((await memory.listPending(99)).map((n) => n.id)).toEqual(expected);
+    expect((await drizzle.listPending(99)).map((n) => n.id)).toEqual(expected);
+  });
+
+  it("B12: Memory and Drizzle results match on identical rows", async () => {
+    const { memory, drizzle } = await buildBoundedFixture(7);
+    expect(await drizzle.listPending(4)).toEqual(await memory.listPending(4));
+    expect(await drizzle.listPending()).toEqual(await memory.listPending());
+  });
+
+  it("B13-B16: Drizzle read chains DB-side where/orderBy/limit", async () => {
+    const { fake, drizzle } = await buildBoundedFixture(5);
+    expect(fake.rowQueries()).toHaveLength(0);
+
+    await drizzle.listPending(3);
+    const trace = lastRowQuery(fake);
+
+    const pairs = parsePairs(trace.where);
+    expect(pairs.some((p) => p.col === "status" && p.op === "=" && p.val === "PENDING")).toBe(true);
+    const duePair = pairs.find((p) => p.col === "next_attempt_at");
+    expect(duePair?.op).toBe("<=");
+    expect(duePair?.val).toBeInstanceOf(Date);
+
+    expect(trace.orderBy.map((e) => parseOrder(e).col)).toEqual(["created_at", "id"]);
+    expect(trace.orderBy.map((e) => parseOrder(e).dir)).toEqual(["asc", "asc"]);
+    expect(trace.limit).toBe(3);
+  });
+
+  it("B17: the full eligible set is never materialized before the DB limit", async () => {
+    const { fake, drizzle } = await buildBoundedFixture(5);
+    const result = await drizzle.listPending(2);
+    const trace = lastRowQuery(fake);
+    expect(result).toHaveLength(2);
+    expect(trace.limit).toBe(2);
+    expect(trace.emitted).toBe(2);
+    // The fake "database" holds the whole eligible set; only `limit` rows cross
+    // into application memory because the repository requests the DB limit.
+    expect(fake.rows()).toHaveLength(8);
+  });
+
+  it("B18: listAll and operability read models remain unchanged", async () => {
+    const { memory, fake, drizzle, due } = await buildBoundedFixture(3);
+    expect((await memory.listAll()).length).toBe(due.length + 3);
+    expect((await drizzle.listAll()).length).toBe(due.length + 3);
+    expect(await drizzle.getOperabilityMetrics(READ_NOW)).toEqual(
+      await memory.getOperabilityMetrics(READ_NOW),
+    );
+    expect(await drizzle.getOperabilityHealth(READ_NOW)).toEqual(
+      await memory.getOperabilityHealth(READ_NOW),
+    );
+    expect(fake.setCalls()).toHaveLength(0);
   });
 });
