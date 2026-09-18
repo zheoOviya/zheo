@@ -7,11 +7,15 @@ import type {
 import {
   sharedNotificationRepo,
 } from "../repositories/shared";
-import { NOTIFICATION_MAX_ATTEMPTS } from "../repositories/notificationRepository";
+import {
+  NOTIFICATION_MAX_ATTEMPTS,
+  classifyNotificationError,
+} from "../repositories/notificationRepository";
 import type {
   EnqueueNotificationInput,
   NotificationChannel,
   NotificationDTO,
+  SafeErrorCategory,
 } from "../repositories/notificationRepository";
 
 // ============================================
@@ -214,7 +218,8 @@ export async function deliverOne(n: NotificationDTO): Promise<void> {
     confirmation.kind === "AMBIGUOUS"
       ? `${outcome.error}; provider outcome ambiguous after final same-key confirmation`
       : confirmation.error;
-  await sharedNotificationRepo.markDead(reserved.id, reserved.attempts, finalError);
+  const dead = await sharedNotificationRepo.markDead(reserved.id, reserved.attempts, finalError);
+  if (dead) logTerminalFailed(dead);
 }
 
 /**
@@ -236,18 +241,52 @@ async function invokeProvider(
   }
 }
 
+/**
+ * Lifecycle observability (NOTIFICATION-OPERABILITY-LIFECYCLE-A2).
+ *
+ * These logs describe PERSISTED truth, never an intended transition: a
+ * `markRetryable`/`markDead` call alone proves nothing, only a non-null
+ * repository transition result does. That is why every emit helper below takes
+ * the returned persisted row and is called strictly after persistence. The
+ * payloads are restricted to the frozen safe operational fields — no row id,
+ * recipient, body, raw error, or idempotency key.
+ */
+function safeCategoryOf(persisted: NotificationDTO): SafeErrorCategory {
+  return classifyNotificationError(persisted.last_error) ?? "UNKNOWN";
+}
+
+function logRetryScheduled(persisted: NotificationDTO): void {
+  logger.info({
+    message: "notification_retry_scheduled",
+    channel: persisted.channel,
+    attempts: persisted.attempts,
+    safe_error_category: safeCategoryOf(persisted),
+  });
+}
+
+function logTerminalFailed(persisted: NotificationDTO): void {
+  logger.error({
+    message: "notification_terminal_failed",
+    channel: persisted.channel,
+    attempts: persisted.attempts,
+    safe_error_category: safeCategoryOf(persisted),
+  });
+}
+
 /** Existing retry/backoff/dead policy, driven by the reserved attempt. */
 async function retryOrDead(reserved: NotificationDTO, error: string): Promise<void> {
   if (reserved.attempts >= MAX_ATTEMPTS) {
-    await sharedNotificationRepo.markDead(reserved.id, reserved.attempts, error);
+    const dead = await sharedNotificationRepo.markDead(reserved.id, reserved.attempts, error);
+    if (dead) logTerminalFailed(dead);
   } else {
     const backoffMs = BASE_BACKOFF_MS * 2 ** (reserved.attempts - 1);
-    await sharedNotificationRepo.markRetryable(
+    const retried = await sharedNotificationRepo.markRetryable(
       reserved.id,
       reserved.attempts,
       error,
       new Date(Date.now() + backoffMs),
     );
+    if (retried) logRetryScheduled(retried);
   }
 }
 
@@ -267,6 +306,10 @@ export function startNotificationRetrySweep(): void {
     void drainNotifications();
   }, NOTIFICATION_RETRY_SWEEP_INTERVAL_MS);
   retryTimer.unref();
+  logger.info({
+    message: "notification_retry_sweep_started",
+    interval_ms: NOTIFICATION_RETRY_SWEEP_INTERVAL_MS,
+  });
 }
 
 /** Stop the retry sweep. Safe when not started, idempotent, no DB mutation. */
@@ -274,6 +317,7 @@ export function stopNotificationRetrySweep(): void {
   if (!retryTimer) return;
   clearInterval(retryTimer);
   retryTimer = null;
+  logger.info({ message: "notification_retry_sweep_stopped" });
 }
 
 async function enqueue(input: EnqueueNotificationInput): Promise<void> {

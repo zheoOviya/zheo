@@ -1345,3 +1345,278 @@ describe("Notification drain resilience (NOTIFICATION-DRAIN-RESILIENCE-A2)", () 
     expect(aErrors).toHaveLength(1);
   });
 });
+
+// ============================================
+// NOTIFICATION-OPERABILITY-LIFECYCLE-A2 (OPER_6) — lifecycle + terminal truth.
+// The central invariant: log PERSISTED truth, not intended transition. A
+// markRetryable/markDead call alone proves nothing; only a non-null repository
+// transition result may emit the new structured log. Sweep start/stop log only
+// on a real state transition, and the 30s wakeups stay silent.
+// ============================================
+
+describe("Notification lifecycle observability (NOTIFICATION-OPERABILITY-LIFECYCLE-A2)", () => {
+  beforeEach(() => {
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+    resetRedisForTests();
+    sharedNotificationRepo._reset();
+    stopNotificationRetrySweep();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    stopNotificationRetrySweep();
+    vi.useRealTimers();
+    __setNotificationProviderForTests(null);
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+    vi.restoreAllMocks();
+  });
+
+  function messageOf(call: unknown[]): string {
+    return (call[0] as { message?: string } | undefined)?.message ?? "";
+  }
+
+  function logsWith(spy: { mock: { calls: unknown[][] } }, name: string): unknown[][] {
+    return spy.mock.calls.filter((c) => messageOf(c) === name);
+  }
+
+  function patchRepoMethod(
+    method: string,
+    impl: (...args: unknown[]) => unknown,
+  ): () => void {
+    const record = sharedNotificationRepo as unknown as Record<string, unknown>;
+    const original = record[method];
+    const hadOwn = Object.prototype.hasOwnProperty.call(record, method);
+    record[method] = impl;
+    return () => {
+      if (hadOwn) record[method] = original;
+      else delete record[method];
+    };
+  }
+
+  const useFakeTimers = () =>
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    });
+
+  it("O31-A: start emits exactly one notification_retry_sweep_started on stopped -> running", () => {
+    const infoSpy = vi.spyOn(logger, "info").mockReturnValue(logger);
+    stopNotificationRetrySweep();
+    infoSpy.mockClear();
+    startNotificationRetrySweep();
+    const starts = logsWith(infoSpy, "notification_retry_sweep_started");
+    expect(starts).toHaveLength(1);
+  });
+
+  it("O31-B: start log contains interval_ms = 30_000", () => {
+    const infoSpy = vi.spyOn(logger, "info").mockReturnValue(logger);
+    startNotificationRetrySweep();
+    const [call] = logsWith(infoSpy, "notification_retry_sweep_started");
+    expect(call![0]).toEqual({
+      message: "notification_retry_sweep_started",
+      interval_ms: NOTIFICATION_RETRY_SWEEP_INTERVAL_MS,
+    });
+    expect((call![0] as { interval_ms: number }).interval_ms).toBe(30_000);
+  });
+
+  it("O31-C: a second start while running emits no second start log", () => {
+    const infoSpy = vi.spyOn(logger, "info").mockReturnValue(logger);
+    startNotificationRetrySweep();
+    startNotificationRetrySweep();
+    expect(logsWith(infoSpy, "notification_retry_sweep_started")).toHaveLength(1);
+  });
+
+  it("O31-D: periodic timer execution emits no sweep-cycle info log", async () => {
+    const infoSpy = vi.spyOn(logger, "info").mockReturnValue(logger);
+    useFakeTimers();
+    startNotificationRetrySweep();
+    await vi.advanceTimersByTimeAsync(0);
+    const before = infoSpy.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(3 * NOTIFICATION_RETRY_SWEEP_INTERVAL_MS);
+    expect(infoSpy.mock.calls.length).toBe(before);
+    const forbidden = ["notification_retry_sweep_run", "notification_retry_sweep_tick", "notification_retry_sweep_cycle", "notification_drain_started", "notification_drain_completed"];
+    const messages = infoSpy.mock.calls.map((c) => messageOf(c));
+    expect(messages.filter((m) => forbidden.includes(m))).toEqual([]);
+  });
+
+  it("O31-E: stop after running emits exactly one notification_retry_sweep_stopped", () => {
+    const infoSpy = vi.spyOn(logger, "info").mockReturnValue(logger);
+    startNotificationRetrySweep();
+    infoSpy.mockClear();
+    stopNotificationRetrySweep();
+    const stops = logsWith(infoSpy, "notification_retry_sweep_stopped");
+    expect(stops).toHaveLength(1);
+    expect(stops[0]![0]).toEqual({ message: "notification_retry_sweep_stopped" });
+  });
+
+  it("O31-F: a second stop while already stopped emits no second stop log", () => {
+    const infoSpy = vi.spyOn(logger, "info").mockReturnValue(logger);
+    startNotificationRetrySweep();
+    stopNotificationRetrySweep();
+    stopNotificationRetrySweep();
+    expect(logsWith(infoSpy, "notification_retry_sweep_stopped")).toHaveLength(1);
+  });
+
+  it("O31-G/H/I: successful markRetryable emits exactly one safe retry-scheduled log", async () => {
+    const infoSpy = vi.spyOn(logger, "info").mockReturnValue(logger);
+    const n = await enqueueIdem("sms");
+    const { provider } = scriptProvider([{ kind: "DEFINITIVE_FAILURE", error: "definitely rejected" }]);
+    __setNotificationProviderForTests(provider);
+    await deliverOne(n);
+
+    const scheduled = logsWith(infoSpy, "notification_retry_scheduled");
+    expect(scheduled).toHaveLength(1);
+    const arg = scheduled[0]![0] as Record<string, unknown>;
+    expect(Object.keys(arg).sort()).toEqual([
+      "attempts",
+      "channel",
+      "message",
+      "safe_error_category",
+    ]);
+    expect(arg).toEqual({
+      message: "notification_retry_scheduled",
+      channel: "sms",
+      attempts: 1,
+      safe_error_category: "UNKNOWN",
+    });
+    for (const forbidden of ["id", "notification_id", "user_id", "to_address", "body", "last_error", "error", "idempotencyKey", "idempotency_key"]) {
+      expect(forbidden in arg).toBe(false);
+    }
+    const serialized = JSON.stringify(arg);
+    expect(serialized).not.toContain("definitely rejected");
+    expect(serialized).not.toContain("+9100000001");
+    expect(serialized).not.toContain(n.id);
+  });
+
+  it("O31-J: markRetryable returning null emits no retry-scheduled log", async () => {
+    const infoSpy = vi.spyOn(logger, "info").mockReturnValue(logger);
+    const n = await enqueueIdem("sms");
+    const { provider } = scriptProvider([{ kind: "DEFINITIVE_FAILURE", error: "boom" }]);
+    __setNotificationProviderForTests(provider);
+    const restore = patchRepoMethod("markRetryable", async () => null);
+    try {
+      await deliverOne(n);
+    } finally {
+      restore();
+    }
+    expect(logsWith(infoSpy, "notification_retry_scheduled")).toHaveLength(0);
+  });
+
+  it("O31-K: markRetryable throwing emits no retry-scheduled truth log", async () => {
+    const infoSpy = vi.spyOn(logger, "info").mockReturnValue(logger);
+    vi.spyOn(logger, "error").mockReturnValue(logger);
+    await enqueueIdem("sms");
+    const { provider } = scriptProvider([{ kind: "DEFINITIVE_FAILURE", error: "boom" }]);
+    __setNotificationProviderForTests(provider);
+    const restore = patchRepoMethod("markRetryable", async () => {
+      throw new Error("markRetryable boom");
+    });
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    expect(logsWith(infoSpy, "notification_retry_scheduled")).toHaveLength(0);
+  });
+
+  it("O31-L/N/O: max-attempt markDead emits exactly one safe terminal-failed log", async () => {
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    const n = await enqueueIdem("email");
+    await driveToAttempts(n.id, NOTIFICATION_MAX_ATTEMPTS - 1);
+    const { provider } = scriptProvider([{ kind: "DEFINITIVE_FAILURE", error: "rejected at cap" }]);
+    __setNotificationProviderForTests(provider);
+    await deliverOne(await currentOf(n.id));
+
+    const terminal = logsWith(errorSpy, "notification_terminal_failed");
+    expect(terminal).toHaveLength(1);
+    const arg = terminal[0]![0] as Record<string, unknown>;
+    expect(Object.keys(arg).sort()).toEqual([
+      "attempts",
+      "channel",
+      "message",
+      "safe_error_category",
+    ]);
+    expect(arg).toEqual({
+      message: "notification_terminal_failed",
+      channel: "email",
+      attempts: NOTIFICATION_MAX_ATTEMPTS,
+      safe_error_category: "UNKNOWN",
+    });
+    for (const forbidden of ["id", "notification_id", "user_id", "to_address", "body", "last_error", "error", "idempotencyKey", "idempotency_key"]) {
+      expect(forbidden in arg).toBe(false);
+    }
+    const serialized = JSON.stringify(arg);
+    expect(serialized).not.toContain("rejected at cap");
+    expect(serialized).not.toContain("owner@example.com");
+    expect(serialized).not.toContain(n.id);
+  });
+
+  it("O31-M: final ambiguous-confirmation terminal path also emits exactly one terminal log", async () => {
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    const n = await enqueueIdem("sms");
+    await driveToAttempts(n.id, NOTIFICATION_MAX_ATTEMPTS - 1);
+    const { provider, calls } = scriptProvider([
+      { kind: "AMBIGUOUS", error: "timeout-1" },
+      { kind: "DEFINITIVE_FAILURE", error: "confirmed failure" },
+    ]);
+    __setNotificationProviderForTests(provider);
+    await deliverOne(await currentOf(n.id));
+
+    expect((await currentOf(n.id)).status).toBe("FAILED");
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.key).toBe(n.id);
+    expect(logsWith(errorSpy, "notification_terminal_failed")).toHaveLength(1);
+  });
+
+  it("O31-P: markDead returning null emits no terminal-failed log", async () => {
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    const n = await enqueueIdem("sms");
+    await driveToAttempts(n.id, NOTIFICATION_MAX_ATTEMPTS - 1);
+    const { provider } = scriptProvider([{ kind: "DEFINITIVE_FAILURE", error: "boom at cap" }]);
+    __setNotificationProviderForTests(provider);
+    const restore = patchRepoMethod("markDead", async () => null);
+    try {
+      await deliverOne(await currentOf(n.id));
+    } finally {
+      restore();
+    }
+    expect(logsWith(errorSpy, "notification_terminal_failed")).toHaveLength(0);
+  });
+
+  it("O31-Q: markDead throwing emits no terminal-failed truth log", async () => {
+    const errorSpy = vi.spyOn(logger, "error").mockReturnValue(logger);
+    const n = await enqueueIdem("sms");
+    await driveToAttempts(n.id, NOTIFICATION_MAX_ATTEMPTS - 1);
+    const { provider } = scriptProvider([{ kind: "DEFINITIVE_FAILURE", error: "boom at cap" }]);
+    __setNotificationProviderForTests(provider);
+    const restore = patchRepoMethod("markDead", async () => {
+      throw new Error("markDead boom");
+    });
+    try {
+      await drainNotifications();
+    } finally {
+      restore();
+    }
+    expect(logsWith(errorSpy, "notification_terminal_failed")).toHaveLength(0);
+  });
+
+  it("O31-R: safe_error_category classification remains exact and closed", async () => {
+    const infoSpy = vi.spyOn(logger, "info").mockReturnValue(logger);
+    const configured = await enqueueIdem("sms");
+    const { provider } = scriptProvider([
+      { kind: "CONFIG_ERROR", error: "sms provider not configured" },
+    ]);
+    __setNotificationProviderForTests(provider);
+    await deliverOne(configured);
+    expect((logsWith(infoSpy, "notification_retry_scheduled")[0]![0] as { safe_error_category: string }).safe_error_category).toBe("PROVIDER_UNCONFIGURED");
+
+    sharedNotificationRepo._reset();
+    infoSpy.mockClear();
+    const other = await enqueueIdem("email");
+    const { provider: otherProvider } = scriptProvider([
+      { kind: "DEFINITIVE_FAILURE", error: "something else entirely" },
+    ]);
+    __setNotificationProviderForTests(otherProvider);
+    await deliverOne(other);
+    expect((logsWith(infoSpy, "notification_retry_scheduled")[0]![0] as { safe_error_category: string }).safe_error_category).toBe("UNKNOWN");
+  });
+});
