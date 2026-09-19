@@ -864,6 +864,30 @@ adminRouter.get(
 );
 
 // ============================================
+// Notification backlog age distribution (NOTIFICATION-OPERABILITY-AGE-TRUTH-A2)
+// — read-only, aggregate-only operator view of how long the CURRENT PENDING
+// backlog has been waiting. Four fixed, always-present buckets (including
+// zero-count ones) ordered youngest -> oldest, plus `pending_total`; all
+// measured against one captured `now` and clamped at zero. It exposes no
+// per-record data, no SLA/breach/severity/alert semantics, and performs no
+// mutation. The existing /metrics, /health, and /notifications contracts are
+// unchanged.
+// ============================================
+
+adminRouter.get(
+  "/notifications/age",
+  adminReadOnly,
+  asyncHandler(async (_req, res) => {
+    const now = new Date();
+    const distribution = await sharedNotificationRepo.getOperabilityAgeDistribution(now);
+    ok(res, {
+      buckets: distribution.buckets,
+      pending_total: distribution.pending_total,
+    });
+  }),
+);
+
+// ============================================
 // Notification inspection (NOTIFICATION-OPERABILITY-INSPECTION-A2) — bounded,
 // read-only, PII-safe per-record operator drill-down. Exactly seven safe fields
 // per item (opaque id, status, channel, attempts, created_at, next_attempt_at,

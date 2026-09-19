@@ -252,6 +252,98 @@ export interface NotificationInspectionPage {
 }
 
 /**
+ * Operability backlog age bucket keys, youngest -> oldest
+ * (NOTIFICATION-OPERABILITY-AGE-TRUTH-A2 / OPER_3). Boundaries are pure
+ * multiples of the delivery retry-sweep cadence (30s), deliberately NOT the
+ * cumulative retry-envelope edges: these buckets describe how long the current
+ * PENDING backlog has been waiting, not whether any attempt has breached a
+ * policy.
+ */
+export type NotificationAgeBucketKey = "lt_1m" | "m1_to_lt_5m" | "m5_to_lt_15m" | "gte_15m";
+
+/**
+ * Upper-exclusive bucket boundaries in milliseconds, paired positionally with
+ * `NOTIFICATION_AGE_BUCKET_KEYS`:
+ *   lt_1m        [0, 60s)
+ *   m1_to_lt_5m  [60s, 300s)
+ *   m5_to_lt_15m [300s, 900s)
+ *   gte_15m      [900s, +inf)
+ * The final key has no upper bound. Exported so memory and DB paths, plus their
+ * parity tests, derive the same edges from one source of truth.
+ */
+export const NOTIFICATION_AGE_BUCKET_BOUNDARIES_MS: readonly number[] = [60_000, 300_000, 900_000];
+
+/** Bucket keys ordered youngest -> oldest; positionally paired with the bounds. */
+export const NOTIFICATION_AGE_BUCKET_KEYS: readonly NotificationAgeBucketKey[] = [
+  "lt_1m",
+  "m1_to_lt_5m",
+  "m5_to_lt_15m",
+  "gte_15m",
+];
+
+/**
+ * Shared, immutable bucket metadata derived from the SAME frozen boundaries and
+ * key order used for classification: min is the previous boundary (0 for the
+ * youngest), max is the next boundary (null for the open-ended oldest). This is
+ * the single source of truth both repository backends consume, so the returned
+ * `min_age_seconds`/`max_age_seconds` can never drift from the edges that decide
+ * bucket membership.
+ */
+export interface NotificationAgeBucketMeta {
+  bucket: NotificationAgeBucketKey;
+  min_age_seconds: number;
+  max_age_seconds: number | null;
+}
+
+export const NOTIFICATION_AGE_BUCKET_META: readonly NotificationAgeBucketMeta[] =
+  NOTIFICATION_AGE_BUCKET_KEYS.map((bucket, i) => ({
+    bucket,
+    min_age_seconds: i === 0 ? 0 : NOTIFICATION_AGE_BUCKET_BOUNDARIES_MS[i - 1]! / 1000,
+    max_age_seconds:
+      i < NOTIFICATION_AGE_BUCKET_BOUNDARIES_MS.length
+        ? NOTIFICATION_AGE_BUCKET_BOUNDARIES_MS[i]! / 1000
+        : null,
+  }));
+
+/**
+ * One age bucket: the closed key, its descriptive age-window metadata, and a
+ * non-negative count. `min_age_seconds` is inclusive and `max_age_seconds` is
+ * exclusive; `max_age_seconds` is null for the open-ended oldest bucket. These
+ * are descriptive intervals only, never SLA/breach/severity signals.
+ */
+export interface NotificationAgeBucketCount extends NotificationAgeBucketMeta {
+  count: number;
+}
+
+/**
+ * PII-free aggregate age distribution of the CURRENT pending backlog
+ * (NOTIFICATION-OPERABILITY-AGE-TRUTH-A2 / OPER_3). `buckets` always carries
+ * all four keys in youngest -> oldest order, including zero-count buckets, so
+ * the response shape never depends on which buckets happen to be populated.
+ * `pending_total` is the count of PENDING rows at the same captured `now`, and
+ * `pending_total === sum(buckets.count)` is an invariant of the single
+ * evaluation instant.
+ *
+ * AGE_BASIS is `created_at` (time waiting in the outbox), not
+ * `next_attempt_at`. Ages are clamped at zero, so a future-dated `created_at`
+ * folds into the youngest bucket instead of fabricating a negative bucket.
+ * Deliberately absent: SLA/breach/severity/alert semantics, per-row data, and
+ * any mutation.
+ */
+export interface NotificationOperabilityAgeDistribution {
+  buckets: NotificationAgeBucketCount[];
+  pending_total: number;
+}
+
+/** Position of an age (ms, already clamped at zero) in the shared bucket keys. */
+function ageBucketIndexForAge(ageMs: number): number {
+  for (let i = 0; i < NOTIFICATION_AGE_BUCKET_BOUNDARIES_MS.length; i += 1) {
+    if (ageMs < NOTIFICATION_AGE_BUCKET_BOUNDARIES_MS[i]!) return i;
+  }
+  return NOTIFICATION_AGE_BUCKET_KEYS.length - 1;
+}
+
+/**
  * Encode a decoded cursor into the opaque base64url(JSON) wire form
  * (`{"c": <created_at ISO>, "i": <id>}`). No signing: the payload is a position,
  * not an authorization token, and every read is re-scoped by the SQL filters.
@@ -328,6 +420,15 @@ export interface NotificationRepository {
   listForOperabilityInspection(
     query: NotificationInspectionQuery,
   ): Promise<NotificationInspectionPage>;
+  /**
+   * Read-only, PII-free aggregate age distribution of the current PENDING
+   * backlog, resolved against the single supplied `now` (never an internal
+   * `new Date()`). Returns all four buckets youngest -> oldest including
+   * zero-count ones, plus `pending_total`; `pending_total === sum(count)`.
+   * Age is `now - created_at` clamped at zero. Never materializes rows, never
+   * selects recipient/body/error/user columns, and performs no mutation.
+   */
+  getOperabilityAgeDistribution(now: Date): Promise<NotificationOperabilityAgeDistribution>;
   /**
    * Atomically reserve one delivery attempt: CAS over
    * id + status=PENDING + next_attempt_at<=now + attempts=expectedAttempts +
@@ -510,6 +611,24 @@ export class MemoryNotificationRepository implements NotificationRepository {
     return {
       items: eligible.slice(0, query.limit).map(toInspectionItem),
       hasMore: eligible.length > query.limit,
+    };
+  }
+
+  async getOperabilityAgeDistribution(now: Date): Promise<NotificationOperabilityAgeDistribution> {
+    const nowMs = now.getTime();
+    const counts = NOTIFICATION_AGE_BUCKET_KEYS.map(() => 0);
+    let pending_total = 0;
+    for (const n of this.items.values()) {
+      if (n.status !== "PENDING") continue;
+      pending_total += 1;
+      // Clamp at zero so a future-dated `created_at` (clock/fixture anomaly)
+      // folds into the youngest bucket instead of fabricating a negative age.
+      const ageMs = Math.max(0, nowMs - Date.parse(n.created_at));
+      counts[ageBucketIndexForAge(ageMs)]! += 1;
+    }
+    return {
+      buckets: NOTIFICATION_AGE_BUCKET_META.map((meta, i) => ({ ...meta, count: counts[i]! })),
+      pending_total,
     };
   }
 
@@ -805,6 +924,41 @@ export class DrizzleNotificationRepository implements NotificationRepository {
     return {
       items: rows.slice(0, query.limit).map((row) => this.mapInspectionRow(row)),
       hasMore: rows.length > query.limit,
+    };
+  }
+
+  async getOperabilityAgeDistribution(now: Date): Promise<NotificationOperabilityAgeDistribution> {
+    // One database-side aggregate read: `count(*) FILTER` per bucket over
+    // PENDING rows only, so no notification row (and no PII column) is ever
+    // selected into application memory and zero-count buckets are never
+    // materialized. Bucket edges come from the shared boundary metadata, all
+    // measured against the single supplied `now`. The age is derived as
+    // `created_at > now - bound`, which clamps a future-dated `created_at`
+    // (negative age) into the youngest bucket.
+    const nowMs = now.getTime();
+    const bounds = NOTIFICATION_AGE_BUCKET_BOUNDARIES_MS.map(
+      (ms) => new Date(nowMs - ms),
+    );
+    const [b0, b1, b2] = bounds as [Date, Date, Date];
+    const pending = sql<number>`count(*) filter (where ${notifications.status} = ${"PENDING"})`;
+
+    const rows = (await (this.db as unknown as AggregateSelect)
+      .select({
+        lt_1m: sql<number>`count(*) filter (where ${notifications.status} = ${"PENDING"} and ${notifications.created_at} > ${b0})`,
+        m1_to_lt_5m: sql<number>`count(*) filter (where ${notifications.status} = ${"PENDING"} and ${notifications.created_at} <= ${b0} and ${notifications.created_at} > ${b1})`,
+        m5_to_lt_15m: sql<number>`count(*) filter (where ${notifications.status} = ${"PENDING"} and ${notifications.created_at} <= ${b1} and ${notifications.created_at} > ${b2})`,
+        gte_15m: sql<number>`count(*) filter (where ${notifications.status} = ${"PENDING"} and ${notifications.created_at} <= ${b2})`,
+        pending_total: pending,
+      })
+      .from(notifications)) as Record<string, unknown>[];
+
+    const row = rows[0] ?? {};
+    return {
+      buckets: NOTIFICATION_AGE_BUCKET_META.map((meta) => ({
+        ...meta,
+        count: Number(row[meta.bucket] ?? 0),
+      })),
+      pending_total: Number(row.pending_total ?? 0),
     };
   }
 

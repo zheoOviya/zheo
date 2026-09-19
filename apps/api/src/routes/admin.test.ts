@@ -48,6 +48,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
       { method: "get" as const, path: "/api/v1/admin/revenue" },
       { method: "get" as const, path: "/api/v1/admin/notifications/metrics" },
       { method: "get" as const, path: "/api/v1/admin/notifications/health" },
+      { method: "get" as const, path: "/api/v1/admin/notifications/age" },
       { method: "get" as const, path: "/api/v1/admin/notifications" },
     ];
 
@@ -763,6 +764,151 @@ describe("Admin RBAC (A-01, A-11)", () => {
       expect(follow.body.data.items.every((i: { status: string }) => i.status === "PENDING")).toBe(true);
       const overlap = new Set(filtered.body.data.items.map((i: { id: string }) => i.id));
       expect(follow.body.data.items.some((i: { id: string }) => overlap.has(i.id))).toBe(false);
+    });
+  });
+
+  describe("Notification backlog age distribution (NOTIFICATION-OPERABILITY-AGE-TRUTH-A2)", () => {
+    const USER_ID = "00000000-0000-4000-8000-0000000000d2";
+    const TO_ADDRESS = "age-probe@example.com";
+    const BODY_TEXT = "age-body-secret";
+    const RAW_ERROR = "age-raw-provider-secret";
+    const EXPECTED_BUCKETS = ["lt_1m", "m1_to_lt_5m", "m5_to_lt_15m", "gte_15m"];
+    const EXPECTED_META = [
+      { bucket: "lt_1m", min_age_seconds: 0, max_age_seconds: 60 },
+      { bucket: "m1_to_lt_5m", min_age_seconds: 60, max_age_seconds: 300 },
+      { bucket: "m5_to_lt_15m", min_age_seconds: 300, max_age_seconds: 900 },
+      { bucket: "gte_15m", min_age_seconds: 900, max_age_seconds: null },
+    ];
+    const BUCKET_KEYS_4 = ["bucket", "count", "max_age_seconds", "min_age_seconds"];
+    const PENDING_COUNT = 5;
+
+    function enqueueInput(channel: "sms" | "email") {
+      return { user_id: USER_ID, channel, to_address: TO_ADDRESS, body: BODY_TEXT };
+    }
+
+    function getAge() {
+      return request(app)
+        .get("/api/v1/admin/notifications/age")
+        .set("Authorization", adminToken("OPS_AGENT"));
+    }
+
+    function collectKeys(value: unknown, keys: Set<string>): void {
+      if (Array.isArray(value)) {
+        for (const v of value) collectKeys(v, keys);
+        return;
+      }
+      if (value && typeof value === "object") {
+        for (const [k, v] of Object.entries(value)) {
+          keys.add(k);
+          collectKeys(v, keys);
+        }
+      }
+    }
+
+    beforeAll(async () => {
+      resetRedisForTests();
+      sharedNotificationRepo._reset();
+      // Freshly enqueued rows have created_at ~= now, so every PENDING row is
+      // well inside the youngest (<60s) bucket. Terminal rows must be excluded.
+      for (let i = 0; i < PENDING_COUNT; i += 1) {
+        await sharedNotificationRepo.enqueue(enqueueInput(i % 2 === 0 ? "sms" : "email"));
+      }
+      const dead = await sharedNotificationRepo.enqueue(enqueueInput("sms"));
+      const rd = await sharedNotificationRepo.reserveAttempt(dead.id, 0, new Date());
+      await sharedNotificationRepo.markDead(dead.id, rd!.attempts, RAW_ERROR);
+      const sent = await sharedNotificationRepo.enqueue(enqueueInput("email"));
+      const rs = await sharedNotificationRepo.reserveAttempt(sent.id, 0, new Date());
+      await sharedNotificationRepo.markSent(sent.id, rs!.attempts);
+    });
+
+    afterAll(() => {
+      sharedNotificationRepo._reset();
+      resetRedisForTests();
+    });
+
+    it("O33-K: requires adminReadOnly (OPS_AGENT 200, CONSUMER 403, anonymous 401)", async () => {
+      const ops = await getAge();
+      expect(ops.status).toBe(200);
+
+      const admin = await request(app)
+        .get("/api/v1/admin/notifications/age")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(admin.status).toBe(200);
+
+      const consumer = await request(app)
+        .get("/api/v1/admin/notifications/age")
+        .set("Authorization", consumerToken());
+      expect(consumer.status).toBe(403);
+
+      const anonymous = await request(app).get("/api/v1/admin/notifications/age");
+      expect(anonymous.status).toBe(401);
+    });
+
+    it("O33-L: the response leaks no recipient/body/raw-error/user/idempotency material", async () => {
+      const res = await getAge();
+      expect(res.status).toBe(200);
+      const serialized = JSON.stringify(res.body);
+      for (const secret of [USER_ID, TO_ADDRESS, BODY_TEXT, RAW_ERROR]) {
+        expect(serialized).not.toContain(secret);
+      }
+      const keys = new Set<string>();
+      collectKeys(res.body.data, keys);
+      for (const forbidden of ["user_id", "to_address", "body", "last_error", "idempotency", "id"]) {
+        expect([...keys]).not.toContain(forbidden);
+      }
+      expect([...keys].sort()).toEqual([
+        "bucket",
+        "buckets",
+        "count",
+        "max_age_seconds",
+        "min_age_seconds",
+        "pending_total",
+      ]);
+    });
+
+    it("O33-M: response is frozen to buckets[] + pending_total with four ordered keys", async () => {
+      const res = await getAge();
+      expect(res.status).toBe(200);
+      expect(Object.keys(res.body.data).sort()).toEqual(["buckets", "pending_total"]);
+      expect(res.body.data.buckets.map((b: { bucket: string }) => b.bucket)).toEqual(EXPECTED_BUCKETS);
+      const meta = res.body.data.buckets.map(
+        (b: { bucket: string; min_age_seconds: number; max_age_seconds: number | null }) => ({
+          bucket: b.bucket,
+          min_age_seconds: b.min_age_seconds,
+          max_age_seconds: b.max_age_seconds,
+        }),
+      );
+      expect(meta).toEqual(EXPECTED_META);
+      for (const bucket of res.body.data.buckets) {
+        expect(Object.keys(bucket).sort()).toEqual(BUCKET_KEYS_4);
+        expect(Number.isInteger(bucket.count)).toBe(true);
+        expect(bucket.count).toBeGreaterThanOrEqual(0);
+      }
+      const serialized = JSON.stringify(res.body).toLowerCase();
+      for (const forbidden of ["sla", "breach", "severity", "alert", "warning", "critical", "overdue"]) {
+        expect(serialized).not.toContain(forbidden);
+      }
+    });
+
+    it("O33-N: aggregate-only counts are truthful, sum-invariant, and mutation-free", async () => {
+      const first = await getAge();
+      expect(first.status).toBe(200);
+      expect(first.body.data.pending_total).toBe(PENDING_COUNT);
+      const counts = Object.fromEntries(
+        first.body.data.buckets.map((b: { bucket: string; count: number }) => [b.bucket, b.count]),
+      );
+      expect(counts).toEqual({ lt_1m: PENDING_COUNT, m1_to_lt_5m: 0, m5_to_lt_15m: 0, gte_15m: 0 });
+      const sum = first.body.data.buckets.reduce(
+        (acc: number, b: { count: number }) => acc + b.count,
+        0,
+      );
+      expect(sum).toBe(first.body.data.pending_total);
+      expect(first.body.data).not.toHaveProperty("items");
+      expect(first.body.data).not.toHaveProperty("total");
+
+      // Read-only: a second read returns an identical snapshot.
+      const second = await getAge();
+      expect(second.body.data).toEqual(first.body.data);
     });
   });
 

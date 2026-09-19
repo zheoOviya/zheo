@@ -6,6 +6,9 @@ import {
   DrizzleNotificationRepository,
   encodeNotificationInspectionCursor,
   MemoryNotificationRepository,
+  NOTIFICATION_AGE_BUCKET_BOUNDARIES_MS,
+  NOTIFICATION_AGE_BUCKET_KEYS,
+  NOTIFICATION_AGE_BUCKET_META,
   type NotificationDTO,
   type NotificationRepository,
 } from "./notificationRepository";
@@ -221,10 +224,50 @@ function referencedColumns(fields: Record<string, unknown>): string[] {
   return cols;
 }
 
-// Bounded interpreter for the single PII-free aggregate query produced by
-// `getOperabilityMetrics`: `count(*) FILTER (WHERE ...)`, `MIN(created_at)`,
-// `MAX(attempts)`. It executes the real query semantics against the fake rows
-// so the Drizzle code path is proven, not merely shape-inspected.
+// Bounded interpreter for the PII-free aggregate queries produced by
+// `getOperabilityMetrics` and `getOperabilityAgeDistribution`: `count(*) FILTER
+// (WHERE <col> <op> <param> [AND ...])`, `MIN(created_at)`, `MAX(attempts)`. It
+// executes the real query semantics against the fake rows so the Drizzle code
+// path is proven, not merely shape-inspected. Comparisons are extracted
+// generically so `created_at` range filters (age buckets) evaluate too.
+function aggregateComparisons(
+  tokens: AggToken[],
+): Array<{ col: string; op: string; val: unknown }> {
+  const out: Array<{ col: string; op: string; val: unknown }> = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const tok = tokens[i]!;
+    if (tok.kind !== "col") continue;
+    let op: string | null = null;
+    let j = i + 1;
+    while (j < tokens.length && tokens[j]!.kind === "text") {
+      const s = (tokens[j] as { kind: "text"; text: string }).text;
+      if (s.includes("<=")) op = "<=";
+      else if (s.includes(">=")) op = ">=";
+      else if (s.includes("<>") || s.includes("!=")) op = "<>";
+      else if (s.includes(">")) op = ">";
+      else if (s.includes("<")) op = "<";
+      else if (s.includes("=")) op = "=";
+      j += 1;
+    }
+    const next = tokens[j];
+    if (op !== null && next && next.kind === "param") {
+      out.push({ col: tok.col, op, val: next.val });
+      i = j;
+    }
+  }
+  return out;
+}
+
+function compareWithOp(left: unknown, op: string, right: unknown): boolean {
+  if (op === "=") return left === right;
+  if (op === "<>") return left !== right;
+  const c = compare(left, right);
+  if (op === "<=") return c <= 0;
+  if (op === ">=") return c >= 0;
+  if (op === "<") return c < 0;
+  return c > 0;
+}
+
 function evalAggregateField(rows: Record<string, unknown>[], field: unknown): unknown {
   const tokens = aggTokens(field);
   const text = tokens
@@ -240,36 +283,10 @@ function evalAggregateField(rows: Record<string, unknown>[], field: unknown): un
         : null;
   if (!func) throw new Error(`unsupported aggregate field: ${text}`);
 
-  const statusParam = tokens.find(
-    (t) => t.kind === "param" && ["PENDING", "FAILED", "SENT"].includes(t.val as string),
+  const comparisons = aggregateComparisons(tokens);
+  const matched = rows.filter((r) =>
+    comparisons.every(({ col, op, val }) => compareWithOp(r[col], op, val)),
   );
-  const statusFilter =
-    statusParam && statusParam.kind === "param" ? (statusParam.val as string) : null;
-
-  let dateCmp: { val: unknown; op: "<=" | ">" } | null = null;
-  const naIdx = tokens.findIndex((t) => t.kind === "col" && t.col === "next_attempt_at");
-  if (naIdx >= 0) {
-    let op: "<=" | ">" = "<=";
-    for (let j = naIdx + 1; j < tokens.length; j += 1) {
-      const tok = tokens[j]!;
-      if (tok.kind === "text") {
-        if (tok.text.includes("<=")) op = "<=";
-        else if (tok.text.includes(">")) op = ">";
-      } else if (tok.kind === "param") {
-        dateCmp = { val: tok.val, op };
-        break;
-      }
-    }
-  }
-
-  const matched = rows.filter((r) => {
-    if (statusFilter !== null && r.status !== statusFilter) return false;
-    if (dateCmp) {
-      const c = compare(r.next_attempt_at, dateCmp.val);
-      if (dateCmp.op === ">" ? !(c > 0) : !(c <= 0)) return false;
-    }
-    return true;
-  });
 
   if (func === "count") return matched.length;
   if (func === "min") {
@@ -2024,5 +2041,318 @@ describe("Notification inspection (NOTIFICATION-OPERABILITY-INSPECTION-A2)", () 
     );
     expect(await f.drizzle.listPending()).toEqual(await f.memory.listPending());
     expect(f.fake.setCalls()).toHaveLength(0);
+  });
+});
+
+// ============================================================
+// NOTIFICATION-OPERABILITY-AGE-TRUTH-A2 (OPER_3) — aggregate-only age
+// distribution of the CURRENT PENDING backlog. Four fixed buckets
+// (youngest -> oldest, zero-count included) + `pending_total`, one captured
+// `now`, clamped at zero, terminal rows excluded, no PII, no mutation.
+// O33-A..O33-J, O33-M live here; O33-K/L/N are route-level in admin.test.ts.
+// ============================================================
+
+describe("Notification backlog age distribution (NOTIFICATION-OPERABILITY-AGE-TRUTH-A2)", () => {
+  const NOW = new Date("2030-01-01T00:00:00.000Z");
+  const EXPECTED_KEYS = ["lt_1m", "m1_to_lt_5m", "m5_to_lt_15m", "gte_15m"];
+  const EXPECTED_COUNTS = { lt_1m: 3, m1_to_lt_5m: 2, m5_to_lt_15m: 2, gte_15m: 1 };
+  const EXPECTED_META = [
+    { bucket: "lt_1m", min_age_seconds: 0, max_age_seconds: 60 },
+    { bucket: "m1_to_lt_5m", min_age_seconds: 60, max_age_seconds: 300 },
+    { bucket: "m5_to_lt_15m", min_age_seconds: 300, max_age_seconds: 900 },
+    { bucket: "gte_15m", min_age_seconds: 900, max_age_seconds: null },
+  ];
+  const BUCKET_KEYS_4 = ["bucket", "count", "max_age_seconds", "min_age_seconds"];
+  const TERMINAL_IDS = new Set<string>();
+
+  interface AgeFixture {
+    memory: MemoryNotificationRepository;
+    fake: FakeDb;
+    drizzle: DrizzleNotificationRepository;
+    all: NotificationDTO[];
+    pending: NotificationDTO[];
+  }
+
+  function toRow(dto: NotificationDTO): Record<string, unknown> {
+    return {
+      id: dto.id,
+      user_id: dto.user_id,
+      channel: dto.channel,
+      to_address: dto.to_address,
+      body: dto.body,
+      status: dto.status,
+      attempts: dto.attempts,
+      last_error: dto.last_error,
+      next_attempt_at: new Date(dto.next_attempt_at),
+      created_at: new Date(dto.created_at),
+    };
+  }
+
+  function countsOf(dist: { buckets: Array<{ bucket: string; count: number }> }): Record<string, number> {
+    return Object.fromEntries(dist.buckets.map((b) => [b.bucket, b.count]));
+  }
+
+  function metaOf(dist: {
+    buckets: Array<{ bucket: string; min_age_seconds: number; max_age_seconds: number | null }>;
+  }): Array<{ bucket: string; min_age_seconds: number; max_age_seconds: number | null }> {
+    return dist.buckets.map(({ bucket, min_age_seconds, max_age_seconds }) => ({
+      bucket,
+      min_age_seconds,
+      max_age_seconds,
+    }));
+  }
+
+  async function buildAgeFixture(): Promise<AgeFixture> {
+    TERMINAL_IDS.clear();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const memory = new MemoryNotificationRepository();
+      const enq = async (iso: string) => {
+        vi.setSystemTime(new Date(iso));
+        return memory.enqueue(input());
+      };
+      const terminal = async (iso: string, kind: "sent" | "failed") => {
+        const n = await enq(iso);
+        const r = await memory.reserveAttempt(n.id, 0, new Date(iso));
+        const done =
+          kind === "sent"
+            ? await memory.markSent(n.id, r!.attempts)
+            : await memory.markDead(n.id, r!.attempts, "sms provider not configured");
+        TERMINAL_IDS.add(done!.id);
+        return done!;
+      };
+
+      const pending = [
+        await enq("2030-01-01T00:00:30.000Z"), // age 30s -> lt_1m
+        await enq("2030-01-01T00:10:00.000Z"), // future -> clamps to lt_1m
+        await enq("2029-12-31T23:59:00.000Z"), // age exactly 60s -> m1 (lower-inclusive)
+        await enq("2029-12-31T23:59:00.001Z"), // 59999ms -> lt_1m
+        await enq("2029-12-31T23:55:00.000Z"), // age exactly 300s -> m5
+        await enq("2029-12-31T23:55:00.001Z"), // 299999ms -> m1
+        await enq("2029-12-31T23:45:00.000Z"), // age exactly 900s -> gte_15m
+        await enq("2029-12-31T23:45:00.001Z"), // 899999ms -> m5
+      ];
+      const sent = await terminal("2029-12-31T23:00:00.000Z", "sent");
+      const failed = await terminal("2029-12-31T22:00:00.000Z", "failed");
+      const all = [...pending, sent, failed];
+
+      const fake = createFakeDb();
+      const drizzle = new DrizzleNotificationRepository(fake.db);
+      for (const dto of all) fake.seed(toRow(dto));
+      return { memory, fake, drizzle, all, pending };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it("O33-A: an empty backlog returns four ordered zero buckets and pending_total 0", async () => {
+    const memory = new MemoryNotificationRepository();
+    const fake = createFakeDb();
+    const drizzle = new DrizzleNotificationRepository(fake.db);
+    for (const repo of [memory, drizzle]) {
+      const dist = await repo.getOperabilityAgeDistribution(NOW);
+      expect(dist.buckets.map((b) => b.bucket)).toEqual(EXPECTED_KEYS);
+      expect(dist.buckets.map((b) => b.count)).toEqual([0, 0, 0, 0]);
+      // All-zero buckets still carry the exact four-key metadata.
+      expect(metaOf(dist)).toEqual(EXPECTED_META);
+      for (const bucket of dist.buckets) {
+        expect(Object.keys(bucket).sort()).toEqual(BUCKET_KEYS_4);
+      }
+      expect(dist.pending_total).toBe(0);
+    }
+  });
+
+  it("O33-B: PENDING rows land in the correct buckets and terminal rows are excluded", async () => {
+    const f = await buildAgeFixture();
+    for (const repo of [f.memory, f.drizzle]) {
+      const dist = await repo.getOperabilityAgeDistribution(NOW);
+      expect(dist.buckets.map((b) => b.bucket)).toEqual(EXPECTED_KEYS);
+      expect(countsOf(dist)).toEqual(EXPECTED_COUNTS);
+      expect(metaOf(dist)).toEqual(EXPECTED_META);
+      expect(dist.buckets.every((b) => Object.keys(b).sort().join(",") === BUCKET_KEYS_4.join(","))).toBe(true);
+      expect(dist.pending_total).toBe(f.pending.length);
+    }
+  });
+
+  it("O33-C: boundaries are lower-inclusive (60s/300s/900s join the older bucket)", async () => {
+    const f = await buildAgeFixture();
+    const dist = await f.memory.getOperabilityAgeDistribution(NOW);
+    const counts = countsOf(dist);
+    // lt_1m: 30s, future-clamp, 60s-1ms.
+    expect(counts.lt_1m).toBe(3);
+    // m1 holds exactly the 60s row and the 300s-1ms row.
+    expect(counts.m1_to_lt_5m).toBe(2);
+    // m5 holds exactly the 300s row and the 900s-1ms row.
+    expect(counts.m5_to_lt_15m).toBe(2);
+    // gte_15m holds exactly the 900s row.
+    expect(counts.gte_15m).toBe(1);
+    expect(await f.drizzle.getOperabilityAgeDistribution(NOW)).toEqual(dist);
+  });
+
+  it("O33-D: a millisecond below a boundary stays in the younger bucket", async () => {
+    const f = await buildAgeFixture();
+    const counts = countsOf(await f.memory.getOperabilityAgeDistribution(NOW));
+    // 59999ms -> lt_1m, 299999ms -> m1, 899999ms -> m5. The 60s/300s/900s rows
+    // are the only ones promoted into an older bucket, giving 3/2/2/1.
+    expect(counts.lt_1m).toBe(3);
+    expect(counts.m1_to_lt_5m).toBe(2);
+    expect(counts.m5_to_lt_15m).toBe(2);
+  });
+
+  it("O33-E: a future-dated created_at clamps to age 0 (youngest bucket), never negative", async () => {
+    const f = await buildAgeFixture();
+    const dist = await f.memory.getOperabilityAgeDistribution(NOW);
+    expect(dist.buckets.every((b) => b.count >= 0)).toBe(true);
+    // The future row (2030-01-01T00:10:00Z > NOW) contributed to lt_1m.
+    expect(countsOf(dist).lt_1m).toBe(3);
+    expect(EXPECTED_KEYS).not.toContain("negative");
+    expect(await f.drizzle.getOperabilityAgeDistribution(NOW)).toEqual(dist);
+  });
+
+  it("O33-F: terminal SENT/FAILED rows are counted nowhere", async () => {
+    const f = await buildAgeFixture();
+    expect(TERMINAL_IDS.size).toBe(2);
+    for (const repo of [f.memory, f.drizzle]) {
+      const dist = await repo.getOperabilityAgeDistribution(NOW);
+      expect(dist.pending_total).toBe(8);
+      expect(dist.buckets.reduce((sum, b) => sum + b.count, 0)).toBe(8);
+      // No bucket could have gained the two terminal rows (would be 11).
+      expect(dist.buckets.reduce((sum, b) => sum + b.count, 0)).not.toBe(10);
+    }
+  });
+
+  it("O33-G: pending_total equals the sum of bucket counts for the one captured now", async () => {
+    const f = await buildAgeFixture();
+    for (const repo of [f.memory, f.drizzle]) {
+      const dist = await repo.getOperabilityAgeDistribution(NOW);
+      const sum = dist.buckets.reduce((acc, b) => acc + b.count, 0);
+      expect(sum).toBe(dist.pending_total);
+      expect(dist.pending_total).toBe(8);
+    }
+  });
+
+  it("O33-H: memory and Drizzle agree bucket-for-bucket on identical rows", async () => {
+    const f = await buildAgeFixture();
+    const memoryDist = await f.memory.getOperabilityAgeDistribution(NOW);
+    const drizzleDist = await f.drizzle.getOperabilityAgeDistribution(NOW);
+    expect(drizzleDist).toEqual(memoryDist);
+    // Parity includes name + metadata + count (not count equality alone).
+    for (let i = 0; i < memoryDist.buckets.length; i += 1) {
+      const m = memoryDist.buckets[i]!;
+      const d = drizzleDist.buckets[i]!;
+      expect(d.bucket).toBe(m.bucket);
+      expect(d.min_age_seconds).toBe(m.min_age_seconds);
+      expect(d.max_age_seconds).toBe(m.max_age_seconds);
+      expect(d.count).toBe(m.count);
+    }
+  });
+
+  it("O33-I: the Drizzle path is one DB-side aggregate, PII-free, and materializes no rows", async () => {
+    const fake = createFakeDb();
+    const repo = new DrizzleNotificationRepository(fake.db);
+    const at = "2029-12-31T23:59:30.000Z";
+    fake.seed({
+      id: "age-secret-id",
+      user_id: "user-secret",
+      channel: "sms",
+      to_address: "recipient-secret@example.com",
+      body: "body-secret",
+      status: "PENDING",
+      attempts: 3,
+      last_error: "raw-error-secret",
+      next_attempt_at: new Date(at),
+      created_at: new Date(at),
+    });
+
+    const dist = await repo.getOperabilityAgeDistribution(NOW);
+    expect(fake.aggregateSelectCalls()).toBe(1);
+    const cols = fake.aggregateColumns();
+    expect(new Set(cols)).toEqual(new Set(["status", "created_at"]));
+    for (const pii of ["body", "to_address", "last_error", "user_id", "id", "attempts"]) {
+      expect(cols).not.toContain(pii);
+    }
+    // No per-row read was issued (neither projected nor plain row select).
+    expect(fake.projectedQueries()).toHaveLength(0);
+    expect(fake.rowQueries()).toHaveLength(0);
+    expect(dist.pending_total).toBe(1);
+    expect(countsOf(dist).lt_1m).toBe(1);
+    expect(fake.setCalls()).toHaveLength(0);
+
+    // Independence: the read path resolves on its own, never via listAll.
+    let listAllCalled = false;
+    const original = repo.listAll.bind(repo);
+    (repo as unknown as { listAll: () => Promise<unknown[]> }).listAll = async () => {
+      listAllCalled = true;
+      return [];
+    };
+    await repo.getOperabilityAgeDistribution(NOW);
+    expect(listAllCalled).toBe(false);
+    (repo as unknown as { listAll: typeof original }).listAll = original;
+
+    const serialized = JSON.stringify(dist);
+    for (const forbidden of [
+      "user-secret",
+      "recipient-secret",
+      "body-secret",
+      "raw-error-secret",
+      "user_id",
+      "to_address",
+      "last_error",
+      "idempotency",
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
+
+  it("O33-J: bucket metadata is the frozen four-key ordering with 30s-multiple edges", async () => {
+    expect(NOTIFICATION_AGE_BUCKET_KEYS).toEqual(EXPECTED_KEYS);
+    expect(NOTIFICATION_AGE_BUCKET_BOUNDARIES_MS).toEqual([60_000, 300_000, 900_000]);
+    expect(NOTIFICATION_AGE_BUCKET_BOUNDARIES_MS.every((ms) => ms % 30_000 === 0)).toBe(true);
+    expect(NOTIFICATION_AGE_BUCKET_META).toEqual(EXPECTED_META);
+    const fake = createFakeDb();
+    const dist = await new DrizzleNotificationRepository(fake.db).getOperabilityAgeDistribution(NOW);
+    expect(dist.buckets.map((b) => b.bucket)).toEqual(EXPECTED_KEYS);
+    expect(metaOf(dist)).toEqual(EXPECTED_META);
+  });
+
+  it("O33-M: response contract is frozen to buckets[] + pending_total with no SLA/breach semantics", async () => {
+    const f = await buildAgeFixture();
+    const dist = await f.memory.getOperabilityAgeDistribution(NOW);
+    expect(Object.keys(dist).sort()).toEqual(["buckets", "pending_total"]);
+    for (const bucket of dist.buckets) {
+      expect(Object.keys(bucket).sort()).toEqual(BUCKET_KEYS_4);
+    }
+    expect(metaOf(dist)).toEqual(EXPECTED_META);
+    const serialized = JSON.stringify(dist).toLowerCase();
+    for (const forbidden of ["sla", "breach", "severity", "alert", "warning", "critical", "overdue"]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+
+    // Closed streams preserved shape-only (metrics / health / OPER_2 inspection).
+    const metrics = await f.memory.getOperabilityMetrics(NOW);
+    expect(Object.keys(metrics).sort()).toEqual([
+      "due_pending",
+      "failed_total",
+      "future_retry",
+      "max_attempt_pending",
+      "oldest_pending_at",
+      "pending_total",
+      "sent_total",
+    ]);
+    const health = await f.memory.getOperabilityHealth(NOW);
+    expect(Object.keys(health).sort()).toEqual(["channels", "failure_categories"]);
+    const page = await f.memory.listForOperabilityInspection({ now: NOW, limit: 1 });
+    expect(Object.keys(page).sort()).toEqual(["hasMore", "items"]);
+    if (page.items[0]) {
+      expect(Object.keys(page.items[0]).sort()).toEqual([
+        "attempts",
+        "channel",
+        "created_at",
+        "id",
+        "next_attempt_at",
+        "safe_error_category",
+        "status",
+      ]);
+    }
   });
 });
