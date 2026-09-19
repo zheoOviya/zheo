@@ -114,10 +114,14 @@ export default function LoginPage() {
 
         {step === "email" && (
           <div className="space-y-4">
-            <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+            <label
+              htmlFor="admin-login-email"
+              className="block text-sm font-medium text-neutral-700 dark:text-neutral-300"
+            >
               Email Address
             </label>
             <input
+              id="admin-login-email"
               type="email"
               placeholder="admin@snakzap.dev"
               value={email}
@@ -125,7 +129,11 @@ export default function LoginPage() {
               className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-4 py-3 text-sm text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none"
               disabled={loading}
             />
-            {error && <p className="text-sm text-red-500">{error}</p>}
+            {error && (
+              <p role="alert" className="text-sm text-red-500">
+                {error}
+              </p>
+            )}
             <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 px-3 py-2.5 text-xs text-neutral-500 dark:text-neutral-400">
               <p className="font-semibold uppercase tracking-wide">Demo accounts</p>
               <p className="mt-1 font-mono">admin@snakzap.dev — Admin</p>
@@ -165,6 +173,8 @@ export default function LoginPage() {
               </div>
             )}
             <input
+              id="admin-login-otp"
+              aria-label="One-time passcode"
               type="text"
               inputMode="numeric"
               maxLength={6}
@@ -174,7 +184,11 @@ export default function LoginPage() {
               className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-4 py-3 text-center text-lg tracking-[0.5em] text-neutral-900 dark:text-neutral-100 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none"
               disabled={loading}
             />
-            {error && <p className="text-sm text-red-500 text-center">{error}</p>}
+            {error && (
+              <p role="alert" className="text-sm text-red-500 text-center">
+                {error}
+              </p>
+            )}
             <button
               onClick={verifyOtp}
               disabled={loading || otp.length !== 6}
@@ -198,6 +212,8 @@ export default function LoginPage() {
               from your authenticator app.
             </p>
             <input
+              id="admin-login-totp"
+              aria-label="Authenticator code"
               type="text"
               inputMode="numeric"
               maxLength={6}
@@ -207,7 +223,11 @@ export default function LoginPage() {
               className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-4 py-3 text-center text-lg tracking-[0.5em] text-neutral-900 dark:text-neutral-100 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none"
               disabled={loading}
             />
-            {error && <p className="text-sm text-red-500 text-center">{error}</p>}
+            {error && (
+              <p role="alert" className="text-sm text-red-500 text-center">
+                {error}
+              </p>
+            )}
             <button
               onClick={verifyTotp}
               disabled={loading || totpCode.length !== 6}

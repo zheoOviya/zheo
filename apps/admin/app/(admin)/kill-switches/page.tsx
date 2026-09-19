@@ -56,7 +56,10 @@ export default function KillSwitchesPage() {
       </div>
 
       {error && (
-        <div className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-4 text-sm text-red-600 dark:text-red-400">
+        <div
+          role="alert"
+          className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-4 text-sm text-red-600 dark:text-red-400"
+        >
           {error}
         </div>
       )}

@@ -115,7 +115,10 @@ export default function VendorsPage() {
       <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">Vendor Management</h2>
 
       {error && (
-        <div className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-4 text-sm text-red-600 dark:text-red-400">
+        <div
+          role="alert"
+          className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-4 text-sm text-red-600 dark:text-red-400"
+        >
           {error}
         </div>
       )}
@@ -171,7 +174,7 @@ export default function VendorsPage() {
                     <td className="px-4 py-3">
                       <p className="font-medium text-neutral-900 dark:text-neutral-100">{a.name}</p>
                       <p className="text-xs text-neutral-500">{a.city ?? ""}{a.address ? ` — ${a.address}` : ""}</p>
-                      <span className={`inline-block rounded-full px-2 py-0.5 mt-1 text-[11px] font-semibold ${
+                      <span className={`inline-block rounded-full px-2 py-0.5 mt-1 text-2xs font-semibold ${
                         a.type === "CHAIN"
                           ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400"
                           : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"

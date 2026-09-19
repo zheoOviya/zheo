@@ -25,9 +25,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className="min-h-screen bg-surface-light dark:bg-surface-dark">
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
       <Sidebar />
       {sidebarOpen && (
-        <div className="fixed inset-0 z-40 md:hidden" role="dialog" aria-modal="true">
+        <div
+          id="admin-mobile-drawer"
+          className="fixed inset-0 z-40 md:hidden"
+          role="dialog"
+          aria-modal="true"
+        >
           <div
             className="absolute inset-0 bg-black/40"
             onClick={() => setSidebarOpen(false)}
@@ -47,6 +55,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="md:hidden rounded-lg p-2 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900"
             aria-label="Toggle sidebar"
+            aria-expanded={sidebarOpen}
+            aria-controls="admin-mobile-drawer"
           >
             <Bars3Icon className="h-6 w-6" />
           </button>
@@ -68,7 +78,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </button>
           </div>
         </header>
-        <main className="p-4 md:p-8">{children}</main>
+        <main id="main-content" className="p-4 md:p-8">{children}</main>
       </div>
     </div>
   );

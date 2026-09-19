@@ -69,7 +69,10 @@ export default function RevenuePage() {
       </div>
 
       {error && (
-        <div className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-4 text-sm text-red-600 dark:text-red-400">
+        <div
+          role="alert"
+          className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-4 text-sm text-red-600 dark:text-red-400"
+        >
           {error}
         </div>
       )}
@@ -108,7 +111,7 @@ export default function RevenuePage() {
                         title={`${s.date}: Rs.${s.revenue.toFixed(0)} / ${s.orders} orders`}
                       />
                     </div>
-                    <span className="text-[10px] text-neutral-400">{s.date.slice(5)}</span>
+                    <span className="text-2xs text-neutral-400">{s.date.slice(5)}</span>
                   </div>
                 ))}
               </div>

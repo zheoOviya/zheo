@@ -128,7 +128,10 @@ export default function OrdersPage() {
       </div>
 
       {error && (
-        <div className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-4 text-sm text-red-600 dark:text-red-400">
+        <div
+          role="alert"
+          className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-4 text-sm text-red-600 dark:text-red-400"
+        >
           {error}
         </div>
       )}
@@ -288,7 +291,7 @@ export default function OrdersPage() {
                             </div>
                           </div>
                         ) : (
-                          <p className="text-xs text-neutral-400">Failed to load details</p>
+                          <p role="alert" className="text-xs text-neutral-400">Failed to load details</p>
                         )}
                       </td>
                     </tr>

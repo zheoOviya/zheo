@@ -168,10 +168,10 @@ export default function Sidebar({
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
         {navGroups.map((group) => {
           if (group.adminOnly && !admin) return null;
-          const items = group.adminOnly ? group.items : group.items;
+          const items = group.items;
           return (
             <div key={group.label}>
-              <p className="px-3 mb-1 text-[11px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
+              <p className="px-3 mb-1 text-2xs font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
                 {group.label}
               </p>
               <div className="space-y-0.5">
@@ -184,6 +184,7 @@ export default function Sidebar({
                       key={item.href}
                       href={item.href}
                       onClick={onNavigate}
+                      aria-current={active ? "page" : undefined}
                       className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
                         active
                           ? "bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400"

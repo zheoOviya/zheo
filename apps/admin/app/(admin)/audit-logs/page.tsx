@@ -91,7 +91,10 @@ export default function AuditLogsPage() {
       </div>
 
       {error && (
-        <div className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-4 text-sm text-red-600 dark:text-red-400">
+        <div
+          role="alert"
+          className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-4 text-sm text-red-600 dark:text-red-400"
+        >
           {error}
         </div>
       )}
@@ -139,7 +142,7 @@ export default function AuditLogsPage() {
                             <summary className="cursor-pointer text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300">
                               raw metadata
                             </summary>
-                            <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-[10px] text-neutral-400">
+                            <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-2xs text-neutral-400">
                               {JSON.stringify(l.metadata, null, 2)}
                             </pre>
                           </details>

@@ -37,7 +37,10 @@ export default function DashboardPage() {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-6 text-red-600 dark:text-red-400">
+      <div
+        role="alert"
+        className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-6 text-red-600 dark:text-red-400"
+      >
         Failed to load dashboard: {error}
       </div>
     );

@@ -40,7 +40,10 @@ export default function Customer360Page() {
     return (
       <div className="space-y-4">
         <Link href="/users" className="text-sm text-primary-500 hover:underline">← Back to Users</Link>
-        <div className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-6 text-sm text-red-600 dark:text-red-400">
+        <div
+          role="alert"
+          className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-6 text-sm text-red-600 dark:text-red-400"
+        >
           Failed to load customer: {error}
         </div>
       </div>
