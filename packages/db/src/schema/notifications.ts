@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   index,
   integer,
@@ -49,5 +50,12 @@ export const notifications = pgTable(
       table.next_attempt_at,
     ),
     userIdx: index("notifications_user_idx").on(table.user_id),
+    // Bounded ordered reads over the pending backlog (OPER_2 inspection and
+    // OPER_5 drain) sort by (created_at, id) after filtering status=PENDING.
+    // A partial index lets those reads avoid a sort without paying for
+    // terminal rows, which dominate a drained outbox.
+    pendingCreatedIdIdx: index("notifications_pending_created_id_idx")
+      .on(table.created_at, table.id)
+      .where(sql`${table.status} = 'PENDING'`),
   }),
 );

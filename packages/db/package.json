@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:notification-index:prepare": "tsx scripts/notification_pending_index_cic.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {

@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS "notifications_pending_created_id_idx" ON "notifications" USING btree ("created_at","id") WHERE "notifications"."status" = 'PENDING';
