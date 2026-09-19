@@ -11,7 +11,8 @@
   "scripts": {
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "db:generate": "drizzle-kit generate",
+    "db:generate": "node scripts/migration_monotonicity_guard.mjs generate",
+    "db:generate:check": "node scripts/migration_monotonicity_guard.mjs check",
     "db:migrate": "drizzle-kit migrate",
     "db:notification-index:prepare": "tsx scripts/notification_pending_index_cic.ts",
     "db:studio": "drizzle-kit studio"
