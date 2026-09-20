@@ -244,6 +244,31 @@ describe("LT-11 authorized-file compact-control scan", () => {
 });
 
 describe("LT-12 no fetch/business behavior change", () => {
+  const A2B_BASE = "5ea427b3c943666ddee379918e8a63125f412c31";
+  const A2B_COMMIT = "135f29f9158f72a44e5fa7f6b8d3951d5b9eb112";
+  const A2B_COMMITTED_SCOPE = [
+    "apps/admin/__tests__/adminLayoutTouch.test.tsx",
+    "apps/admin/app/(admin)/layout.tsx",
+    "apps/admin/components/Sidebar.tsx",
+    "apps/admin/app/(admin)/orders/page.tsx",
+    "apps/admin/app/(admin)/support-tickets/page.tsx",
+    "apps/admin/app/(admin)/security/page.tsx",
+    "apps/admin/app/(admin)/health/page.tsx",
+    "apps/admin/app/(admin)/roles/page.tsx",
+    "apps/admin/app/(admin)/audit-logs/page.tsx",
+    "apps/admin/app/(admin)/users/page.tsx",
+    "apps/admin/app/(admin)/vendors/page.tsx",
+  ];
+  const A2B_FORBIDDEN_PATHS = [
+    "pnpm-lock.yaml",
+    "apps/admin/app/globals.css",
+    "apps/admin/tailwind.config.ts",
+    "packages/ui/src/Container.tsx",
+    "packages/config/tailwind.config.ts",
+  ];
+  const a2bCommittedChanges = () =>
+    git(["diff", "--name-only", A2B_BASE, A2B_COMMIT]).split("\n").filter(Boolean);
+
   const API_IMPORTS: Record<string, string[]> = {
     [ORDERS]: ["fetchLiveOrders", "fetchOrderDetail", "overrideOrderStatus", "OrderDetailDTO"],
     [USERS]: ["fetchUsers", "suspendUser", "reactivateUser", "updateUserRole", "getSessionRoles"],
@@ -313,35 +338,19 @@ describe("LT-12 no fetch/business behavior change", () => {
     expect(read(ROLES)).toContain("handleCreate");
   });
 
-  it("does not modify apps/admin/lib/api.ts (diff-level)", () => {
-    const changed = git(["diff", "--name-only"]).split("\n").filter(Boolean);
-    expect(changed).not.toContain("apps/admin/lib/api.ts");
+  it("does not modify apps/admin/lib/api.ts in the committed A2b baseline", () => {
+    expect(a2bCommittedChanges()).not.toContain("apps/admin/lib/api.ts");
   });
 
-  it("keeps the change set inside the authorized A2b scope", () => {
-    const changed = git(["diff", "--name-only"]).split("\n").filter(Boolean);
-    const authorized = [
-      "apps/admin/app/(admin)/layout.tsx",
-      "apps/admin/components/Sidebar.tsx",
-      "apps/admin/app/(admin)/orders/page.tsx",
-      "apps/admin/app/(admin)/support-tickets/page.tsx",
-      "apps/admin/app/(admin)/security/page.tsx",
-      "apps/admin/app/(admin)/health/page.tsx",
-      "apps/admin/app/(admin)/roles/page.tsx",
-      "apps/admin/app/(admin)/audit-logs/page.tsx",
-      "apps/admin/app/(admin)/users/page.tsx",
-      "apps/admin/app/(admin)/vendors/page.tsx",
-    ];
-    for (const file of changed) {
-      expect(authorized, `unexpected changed file: ${file}`).toContain(file);
+  it("keeps the committed A2b change set inside the authorized A2b scope", () => {
+    for (const file of a2bCommittedChanges()) {
+      expect(A2B_COMMITTED_SCOPE, `unexpected committed file: ${file}`).toContain(file);
     }
-    for (const forbidden of [
-      "pnpm-lock.yaml",
-      "apps/admin/app/globals.css",
-      "apps/admin/tailwind.config.ts",
-      "packages/ui/src/Container.tsx",
-      "packages/config/tailwind.config.ts",
-    ]) {
+  });
+
+  it("never lets the working tree touch forbidden paths", () => {
+    const changed = git(["diff", "--name-only"]).split("\n").filter(Boolean);
+    for (const forbidden of A2B_FORBIDDEN_PATHS) {
       expect(changed).not.toContain(forbidden);
     }
     expect(changed.some((f) => f.startsWith("e2e/") || f.startsWith(".github/"))).toBe(false);

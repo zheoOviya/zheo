@@ -63,7 +63,7 @@ export default function AuditLogsPage() {
     setError("");
     fetchAuditLogs({ page, limit: 25, action: actionFilter || undefined })
       .then(setLogs)
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load audit logs"));
   }, [page, actionFilter]);
 
   useEffect(() => { load(); }, [load]);

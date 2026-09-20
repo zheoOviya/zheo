@@ -34,7 +34,7 @@ export default function SupportTicketsPage() {
       priority: priorityFilter || undefined,
     })
       .then(setData)
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load support tickets"));
   }, [page, statusFilter, priorityFilter]);
 
   useEffect(() => { load(); }, [load]);

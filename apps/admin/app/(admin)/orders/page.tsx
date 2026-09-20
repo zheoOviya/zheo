@@ -42,7 +42,7 @@ export default function OrdersPage() {
     setError("");
     fetchLiveOrders(statusFilter || undefined)
       .then(setData)
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load orders"));
   }, [statusFilter]);
 
   useEffect(() => {

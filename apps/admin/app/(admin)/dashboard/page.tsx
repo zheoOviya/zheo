@@ -20,7 +20,7 @@ export default function DashboardPage() {
   const load = useCallback(() => {
     fetchDashboardMetrics()
       .then(setMetrics)
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load dashboard"));
   }, []);
 
   useEffect(() => {

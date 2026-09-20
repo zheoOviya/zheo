@@ -29,7 +29,7 @@ export default function KillSwitchesPage() {
     setError("");
     fetchKillSwitches()
       .then(setSwitches)
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load kill switches"));
   }, []);
 
   useEffect(() => { load(); }, [load]);

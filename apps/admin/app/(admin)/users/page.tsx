@@ -35,7 +35,7 @@ export default function UsersPage() {
     setError("");
     fetchUsers(page, search || undefined)
       .then(setData)
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load users"));
   }, [page, search]);
 
   useEffect(() => { load(); }, [load]);

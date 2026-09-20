@@ -184,6 +184,49 @@ function getDeviceFingerprint(): string {
 // Auth is carried by the httpOnly access cookie (snakzap_access), so no token
 // is stored in JavaScript or localStorage. On a 401 the access cookie is
 // rotated once via the refresh cookie before giving up.
+interface ApiEnvelope<T> {
+  success?: unknown;
+  data?: T | null;
+  error?: { message?: unknown } | null;
+  message?: unknown;
+}
+
+// Reads the response body without ever letting res.json() throw a native
+// SyntaxError into the application. Empty / invalid / non-JSON bodies all
+// resolve to null so callers can produce a deterministic HTTP-level error.
+async function parseJsonSafely(res: Response): Promise<unknown> {
+  const text = await res.text().catch(() => "");
+  if (text === "") return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function readSafeMessage(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+// Deterministic precedence: backend error.message -> body.message -> HTTP status
+// (for non-2xx) -> generic failure. Raw HTML/body text is never surfaced.
+function apiErrorMessage(res: Response, body: unknown): string {
+  if (body !== null && typeof body === "object") {
+    const envelope = body as ApiEnvelope<unknown>;
+    const errorMessage = readSafeMessage(envelope.error?.message);
+    if (errorMessage) return errorMessage;
+    const topLevelMessage = readSafeMessage(envelope.message);
+    if (topLevelMessage) return topLevelMessage;
+  }
+  return res.ok ? "Request failed" : `HTTP ${res.status}`;
+}
+
+function isSuccessfulEnvelope<T>(body: unknown): body is ApiEnvelope<T> & { data: T } {
+  if (body === null || typeof body !== "object") return false;
+  const envelope = body as ApiEnvelope<T>;
+  return envelope.success === true && envelope.data !== null && envelope.data !== undefined;
+}
+
 async function adminFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const doFetch = () =>
     fetch(`${ADMIN_API}${path}`, {
@@ -197,24 +240,44 @@ async function adminFetch<T>(path: string, options?: RequestInit): Promise<T> {
 
   let res = await doFetch();
   if (res.status === 401) {
-    const refreshed = await fetch("/api/v1/auth/refresh", {
+    const refreshRes = await fetch("/api/v1/auth/refresh", {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ device_fingerprint: getDeviceFingerprint() }),
-    }).then((r) => r.json().catch(() => null));
-    if (refreshed?.success) {
+    });
+    const refreshed = await parseJsonSafely(refreshRes);
+    const refreshSucceeded =
+      refreshRes.ok &&
+      refreshed !== null &&
+      typeof refreshed === "object" &&
+      (refreshed as ApiEnvelope<unknown>).success === true;
+    if (refreshSucceeded) {
       res = await doFetch();
     }
   }
 
-  const body = await res.json();
-  if (!body.success || body.data === null || body.data === undefined) {
+  const body = await parseJsonSafely(res);
+
+  // HTTP transport truth wins: a non-2xx response can never become success,
+  // even if its JSON payload claims { success: true }.
+  if (!res.ok) {
     if (res.status === 401 && typeof window !== "undefined") {
       window.location.href = "/login";
     }
-    throw new Error(body.error?.message ?? "Request failed");
+    throw new Error(apiErrorMessage(res, body));
   }
+
+  // Bounded empty-success contract: no current admin consumer depends on an
+  // empty JSON body, so an empty/204 response yields undefined (no fabrication).
+  if (res.status === 204 || body === null) {
+    return undefined as T;
+  }
+
+  if (!isSuccessfulEnvelope<T>(body)) {
+    throw new Error(apiErrorMessage(res, body));
+  }
+
   return body.data;
 }
 
@@ -222,10 +285,18 @@ export async function fetchHeatmap(): Promise<HeatmapResult> {
   // The heatmap lives on the public discovery router (`/api/v1/discovery/heatmap`),
   // not under the `/api/v1/admin` prefix used by `adminFetch`.
   const res = await fetch("/api/v1/discovery/heatmap");
-  const body = await res.json();
-  if (!body.success) {
-    throw new Error(body.error?.message ?? "Request failed");
+  const body = await parseJsonSafely(res);
+
+  if (!res.ok) {
+    throw new Error(apiErrorMessage(res, body));
   }
+
+  // A specialized endpoint: a missing/invalid heatmap payload must reject
+  // rather than masquerade as an empty-but-valid application object.
+  if (!isSuccessfulEnvelope<HeatmapResult>(body)) {
+    throw new Error(apiErrorMessage(res, body));
+  }
+
   return body.data;
 }
 
