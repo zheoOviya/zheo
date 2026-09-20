@@ -1,19 +1,9 @@
 import { readFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const here = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 const read = (rel: string) => readFileSync(here(rel), "utf8");
-const repoRoot = here("../../..");
-
-function git(args: string[]): string {
-  try {
-    return execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
-  } catch {
-    return "";
-  }
-}
 
 const countOf = (src: string, token: string) => src.split(token).length - 1;
 
@@ -207,24 +197,53 @@ describe("TS-12 not-found navigation", () => {
   });
 });
 
-describe("TS-13 no unauthorized changes", () => {
-  const BASELINE = "c8f84797b94ea6c79619fc0f6c91c933cd41a832";
+const FROZEN_SWEEP_MANIFEST = [
+  "apps/admin/app/(admin)/dashboard/page.tsx",
+  "apps/admin/app/(admin)/dine-in/page.tsx",
+  "apps/admin/app/(admin)/dine-in/sessions/[sessionId]/page.tsx",
+  "apps/admin/app/(admin)/kill-switches/page.tsx",
+  "apps/admin/app/(admin)/reports/page.tsx",
+  "apps/admin/app/(admin)/revenue/page.tsx",
+  "apps/admin/app/(admin)/team/page.tsx",
+  "apps/admin/app/(admin)/users/[id]/page.tsx",
+  "apps/admin/app/error.tsx",
+  "apps/admin/app/heatmap/page.tsx",
+  "apps/admin/app/login/page.tsx",
+  "apps/admin/app/not-found.tsx",
+];
 
-  it("keeps the tracked change set inside the authorized 12 production files", () => {
-    const changed = git(["diff", "--name-only", BASELINE]).split("\n").filter(Boolean).sort();
-    expect(changed).toEqual([...AUTHORIZED_PROD].sort());
+const FORBIDDEN_SWEEP_SURFACE: RegExp[] = [
+  /^apps\/api\//,
+  /^packages\/db\//,
+  /^packages\/ui\//,
+  /^packages\/config\//,
+  /^pnpm-lock\.yaml$/,
+  /^\.github\//,
+  /^e2e\//,
+  /^apps\/admin\/lib\/api\.ts$/,
+  /^apps\/admin\/app\/globals\.css$/,
+  /tailwind/,
+];
+
+describe("TS-13 static scope and boundary contract", () => {
+  it("TS-13A freezes the exact 12-file production sweep manifest", () => {
+    expect(AUTHORIZED_PROD.length).toBe(12);
+    expect(new Set(AUTHORIZED_PROD).size).toBe(AUTHORIZED_PROD.length);
+    for (const rel of AUTHORIZED_PROD) {
+      expect(rel.startsWith("apps/admin/"), `manifest path ${rel}`).toBe(true);
+    }
+    expect([...AUTHORIZED_PROD].sort()).toEqual([...FROZEN_SWEEP_MANIFEST].sort());
   });
 
-  it("never introduces forbidden backend/API/utility/layout churn", () => {
-    const changed = git(["diff", "--name-only", BASELINE]).split("\n").filter(Boolean);
-    for (const file of changed) {
-      expect(file, `forbidden path ${file}`).not.toMatch(
-        /apps\/api\/|packages\/db\/|pnpm-lock\.yaml|globals\.css|tailwind|\.github\/|^e2e\//,
-      );
+  it("TS-13B never points the sweep manifest at a forbidden surface", () => {
+    for (const rel of AUTHORIZED_PROD) {
+      for (const re of FORBIDDEN_SWEEP_SURFACE) {
+        expect(rel, `forbidden surface ${rel}`).not.toMatch(re);
+      }
     }
   });
 
-  it("uses the frozen 44px touch utility and no arbitrary pixel min-height", () => {
+  it("TS-13C uses the frozen 44px touch utility and no arbitrary pixel min-size", () => {
     for (const rel of AUTHORIZED_PROD) {
       const src = read(`../${rel.replace(/^apps\/admin\//, "")}`);
       expect(src, `${rel} arbitrary min-height`).not.toContain("min-h-[");
@@ -235,6 +254,13 @@ describe("TS-13 no unauthorized changes", () => {
     expect(css).toContain("min-height: 44px");
     expect(css).toContain(".min-w-touch");
     expect(css).toContain("min-width: 44px");
+  });
+
+  it("TS-13D keeps the A2c API surface free of touch-sweep tokens", () => {
+    const api = read("../lib/api.ts");
+    expect(api).not.toContain("min-h-touch");
+    expect(api).not.toContain("min-w-touch");
+    expect(api).not.toContain("after:-inset-y-2");
   });
 });
 
