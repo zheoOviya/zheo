@@ -64,21 +64,30 @@ export function OtpInput({ length = 6, value, onChange, disabled, error }: OtpIn
 
   return (
     <div className="space-y-2">
-      <label className="text-sm font-medium text-neutral-600">
+      <span id="otp-group-label" className="text-sm font-medium text-neutral-600">
         Enter OTP
-      </label>
-      <div className="flex justify-center gap-2" onPaste={handlePaste}>
+      </span>
+      <div
+        role="group"
+        aria-labelledby="otp-group-label"
+        className="flex justify-center gap-2"
+        onPaste={handlePaste}
+      >
         {Array.from({ length }, (_, idx) => {
           const char = digits[idx] ?? "";
           return (
             <input
               key={idx}
+              id={`otp-digit-${idx}`}
               ref={(el) => { inputsRef.current[idx] = el; }}
               type="tel"
               inputMode="numeric"
               autoComplete="one-time-code"
               maxLength={1}
               value={char}
+              aria-label={`Digit ${idx + 1} of ${length}`}
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? "otp-error" : undefined}
               onChange={(e) => handleChange(idx, e)}
               onKeyDown={(e) => handleKeyDown(idx, e)}
               disabled={disabled}
@@ -91,7 +100,15 @@ export function OtpInput({ length = 6, value, onChange, disabled, error }: OtpIn
           );
         })}
       </div>
-      {error && <p className="text-center text-xs text-red-500">{error}</p>}
+      {error && (
+        <p
+          id="otp-error"
+          role="alert"
+          className="text-center text-xs text-red-500"
+        >
+          {error}
+        </p>
+      )}
     </div>
   );
 }

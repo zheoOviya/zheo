@@ -114,4 +114,31 @@ describe("BottomNav", () => {
     // should not throw, default link behavior takes over
     expect(screen.getByText("Orders")).toBeInTheDocument();
   });
+
+  it("CA-4 marks the active destination with aria-current=page", () => {
+    render(<BottomNav items={DEFAULT_ITEMS} activeHref="/orders" />);
+    const links = screen.getAllByRole("link");
+    expect(links[1]).toHaveAttribute("aria-current", "page");
+  });
+
+  it("CA-4 marks a child route active with aria-current=page", () => {
+    render(<BottomNav items={DEFAULT_ITEMS} activeHref="/orders/123" />);
+    const links = screen.getAllByRole("link");
+    expect(links[1]).toHaveAttribute("aria-current", "page");
+  });
+
+  it("CA-6 omits aria-current from inactive destinations", () => {
+    render(<BottomNav items={DEFAULT_ITEMS} activeHref="/orders" />);
+    const links = screen.getAllByRole("link");
+    expect(links[0]).not.toHaveAttribute("aria-current");
+    expect(links[2]).not.toHaveAttribute("aria-current");
+    expect(links[3]).not.toHaveAttribute("aria-current");
+  });
+
+  it("CA-6 omits aria-current from every link when no activeHref is given", () => {
+    render(<BottomNav items={DEFAULT_ITEMS} />);
+    for (const link of screen.getAllByRole("link")) {
+      expect(link).not.toHaveAttribute("aria-current");
+    }
+  });
 });
