@@ -168,7 +168,7 @@ export default function ReportsPage() {
           </dl>
           <Link
             href="/heatmap"
-            className="mt-4 inline-flex rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+            className="min-h-touch mt-4 inline-flex rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
           >
             Open full heatmap
           </Link>

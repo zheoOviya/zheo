@@ -92,7 +92,7 @@ export default function DashboardPage() {
           </div>
           <Link
             href="/security"
-            className="rounded-lg bg-amber-500 hover:bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-colors"
+            className="min-h-touch inline-flex items-center rounded-lg bg-amber-500 hover:bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-colors"
           >
             Enable 2FA
           </Link>
@@ -147,13 +147,13 @@ export default function DashboardPage() {
       <div className="flex gap-3">
         <Link
           href="/orders"
-          className="rounded-lg bg-primary-500 hover:bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors"
+          className="min-h-touch inline-flex items-center rounded-lg bg-primary-500 hover:bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors"
         >
           View Live Orders
         </Link>
         <Link
           href="/kill-switches"
-          className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-4 py-2 text-sm font-semibold text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+          className="min-h-touch inline-flex items-center rounded-lg border border-neutral-300 dark:border-neutral-700 px-4 py-2 text-sm font-semibold text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
         >
           Kill Switches
         </Link>

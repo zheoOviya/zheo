@@ -56,7 +56,7 @@ export default function RevenuePage() {
             <button
               key={d}
               onClick={() => setDays(d)}
-              className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${
+              className={`min-h-touch rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${
                 days === d
                   ? "bg-primary-500 text-white"
                   : "bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700"

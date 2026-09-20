@@ -198,7 +198,7 @@ export default function LoginPage() {
             </button>
             <button
               onClick={() => { setStep("email"); setError(""); setDemoOtp(""); }}
-              className="w-full text-sm text-neutral-500 dark:text-neutral-400 hover:text-primary-500 transition-colors"
+              className="min-h-touch inline-flex items-center justify-center w-full text-sm text-neutral-500 dark:text-neutral-400 hover:text-primary-500 transition-colors"
             >
               Change email
             </button>
@@ -237,7 +237,7 @@ export default function LoginPage() {
             </button>
             <button
               onClick={() => { setStep("email"); setError(""); setTotpCode(""); }}
-              className="w-full text-sm text-neutral-500 dark:text-neutral-400 hover:text-primary-500 transition-colors"
+              className="min-h-touch inline-flex items-center justify-center w-full text-sm text-neutral-500 dark:text-neutral-400 hover:text-primary-500 transition-colors"
             >
               Back to email
             </button>

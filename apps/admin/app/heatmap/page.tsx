@@ -126,7 +126,7 @@ export default function HeatmapPage() {
               setLive((v) => !v);
               load();
             }}
-            className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${
+            className={`relative after:absolute after:inset-x-0 after:-inset-y-2 after:content-[''] rounded-full px-3 py-1 text-sm font-medium transition-colors ${
               live
                 ? "bg-primary-600 text-white"
                 : "bg-neutral-200 text-neutral-600"

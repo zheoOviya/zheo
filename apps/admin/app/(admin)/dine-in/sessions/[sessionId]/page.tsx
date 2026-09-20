@@ -107,7 +107,7 @@ export default function DineInSessionDetailPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <Link href="/dine-in" className="text-sm text-primary-500 hover:underline">
+          <Link href="/dine-in" className="min-h-touch inline-flex items-center text-sm text-primary-500 hover:underline">
             ← Back to Dine-In Oversight
           </Link>
           <h2 className="mt-1 text-xl font-bold text-neutral-900 dark:text-neutral-100">
@@ -118,7 +118,7 @@ export default function DineInSessionDetailPage() {
         {data && (
           <button
             onClick={load}
-            className="rounded-lg bg-primary-500 hover:bg-primary-600 px-3 py-1.5 text-sm font-semibold text-white transition-colors"
+            className="min-h-touch rounded-lg bg-primary-500 hover:bg-primary-600 px-3 py-1.5 text-sm font-semibold text-white transition-colors"
           >
             Refresh
           </button>

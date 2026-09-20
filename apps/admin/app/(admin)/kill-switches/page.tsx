@@ -117,7 +117,7 @@ export default function KillSwitchesPage() {
               <button
                 onClick={() => handleToggle(sw)}
                 disabled={toggling === sw.name}
-                className={`shrink-0 rounded-lg px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-50 ${
+                className={`min-h-touch shrink-0 rounded-lg px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-50 ${
                   sw.enabled
                     ? "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700"
                     : "bg-red-500 text-white hover:bg-red-600"

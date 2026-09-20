@@ -100,7 +100,7 @@ export default function DineInOverviewPage() {
         </div>
         <button
           onClick={load}
-          className="rounded-lg bg-primary-500 hover:bg-primary-600 px-3 py-1.5 text-sm font-semibold text-white transition-colors"
+          className="min-h-touch rounded-lg bg-primary-500 hover:bg-primary-600 px-3 py-1.5 text-sm font-semibold text-white transition-colors"
         >
           Refresh
         </button>
@@ -192,7 +192,7 @@ export default function DineInOverviewPage() {
                 setRestaurantId(e.target.value);
                 setPage(1);
               }}
-              className="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none"
+              className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none"
             >
               <option value="">All restaurants</option>
               {restaurants.map((r) => (
@@ -206,7 +206,7 @@ export default function DineInOverviewPage() {
                 setStatus(e.target.value);
                 setPage(1);
               }}
-              className="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none"
+              className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none"
             >
               <option value="">All session statuses</option>
               {Object.entries(SESSION_STATUS_LABELS).map(([value, label]) => (
@@ -282,14 +282,14 @@ export default function DineInOverviewPage() {
                 <button
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                   disabled={list.pagination.page <= 1}
-                  className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors"
+                  className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors"
                 >
                   Previous
                 </button>
                 <button
                   onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                   disabled={list.pagination.page >= totalPages}
-                  className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors"
+                  className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors"
                 >
                   Next
                 </button>

@@ -107,7 +107,7 @@ export default function TeamPage() {
               setSearch(e.target.value);
               setPage(1);
             }}
-            className="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-4 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none"
+            className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-4 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none"
           />
         </div>
       </div>
@@ -144,7 +144,7 @@ export default function TeamPage() {
                         value={user.role}
                         disabled={busyId === user.id}
                         onChange={(e) => changeRole(user.id, e.target.value)}
-                        className="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-sm text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none"
+                        className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-sm text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none"
                       >
                         {ROLES.map((r) => (
                           <option key={r} value={r}>
@@ -184,7 +184,7 @@ export default function TeamPage() {
                         <button
                           onClick={() => toggleSuspension(user.id, user.is_suspended)}
                           disabled={busyId === user.id}
-                          className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                          className={`min-h-touch rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
                             user.is_suspended
                               ? "bg-emerald-50 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-400"
                               : "bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400"
@@ -216,7 +216,7 @@ export default function TeamPage() {
           <button
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page <= 1}
-            className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 disabled:opacity-40"
+            className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 disabled:opacity-40"
           >
             Previous
           </button>
@@ -226,7 +226,7 @@ export default function TeamPage() {
           <button
             onClick={() => setPage((p) => p + 1)}
             disabled={page * 20 >= data.total}
-            className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 disabled:opacity-40"
+            className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 disabled:opacity-40"
           >
             Next
           </button>

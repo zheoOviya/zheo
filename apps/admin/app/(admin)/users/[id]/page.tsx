@@ -39,7 +39,7 @@ export default function Customer360Page() {
   if (error) {
     return (
       <div className="space-y-4">
-        <Link href="/users" className="text-sm text-primary-500 hover:underline">← Back to Users</Link>
+        <Link href="/users" className="min-h-touch inline-flex items-center text-sm text-primary-500 hover:underline">← Back to Users</Link>
         <div
           role="alert"
           className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-6 text-sm text-red-600 dark:text-red-400"
@@ -53,7 +53,7 @@ export default function Customer360Page() {
   if (!data) {
     return (
       <div className="space-y-4">
-        <Link href="/users" className="text-sm text-primary-500 hover:underline">← Back to Users</Link>
+        <Link href="/users" className="min-h-touch inline-flex items-center text-sm text-primary-500 hover:underline">← Back to Users</Link>
         <div className="h-32 animate-pulse rounded-xl bg-neutral-200 dark:bg-neutral-800" />
         <div className="h-48 animate-pulse rounded-xl bg-neutral-200 dark:bg-neutral-800" />
       </div>
@@ -66,7 +66,7 @@ export default function Customer360Page() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <Link href="/users" className="text-sm text-primary-500 hover:underline">← Back to Users</Link>
+          <Link href="/users" className="min-h-touch inline-flex items-center text-sm text-primary-500 hover:underline">← Back to Users</Link>
           <h2 className="mt-1 text-xl font-bold text-neutral-900 dark:text-neutral-100">
             Customer 360 — <span className="font-mono">{user.phone}</span>
           </h2>
