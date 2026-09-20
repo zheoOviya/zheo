@@ -205,14 +205,14 @@ export default function VendorsPage() {
                             <button
                               onClick={() => handleReview(a, "approve")}
                               disabled={reviewing === a.id}
-                              className="rounded-lg bg-green-50 px-3 py-1.5 text-xs font-semibold text-green-600 hover:bg-green-100 dark:bg-green-900/20 dark:text-green-400 disabled:opacity-50"
+                              className="min-h-touch rounded-lg bg-green-50 px-3 py-1.5 text-xs font-semibold text-green-600 hover:bg-green-100 dark:bg-green-900/20 dark:text-green-400 disabled:opacity-50"
                             >
                               Approve
                             </button>
                             <button
                               onClick={() => handleReview(a, "reject")}
                               disabled={reviewing === a.id}
-                              className="rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 disabled:opacity-50"
+                              className="min-h-touch rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 disabled:opacity-50"
                             >
                               Reject
                             </button>
@@ -264,7 +264,7 @@ export default function VendorsPage() {
                     <button
                       onClick={() => handleToggle(v)}
                       disabled={toggling === v.id}
-                      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                      className={`min-h-touch rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
                         v.is_active
                           ? "bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/40"
                           : "bg-green-50 text-green-600 hover:bg-green-100 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/40"

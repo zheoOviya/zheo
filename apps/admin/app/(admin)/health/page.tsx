@@ -89,7 +89,7 @@ export default function HealthPage() {
   const dbTone = health?.storage_mode === "postgres" ? ("ok" as const) : ("warn" as const);
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6 max-w-4xl mx-auto">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
@@ -108,7 +108,7 @@ export default function HealthPage() {
           <button
             onClick={() => load(true)}
             disabled={refreshing}
-            className="flex items-center gap-2 rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 px-3 py-2 text-sm font-semibold text-white transition-colors"
+            className="flex min-h-touch items-center gap-2 rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 px-3 py-2 text-sm font-semibold text-white transition-colors"
           >
             <ArrowPathIcon className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
             {refreshing ? "Refreshing..." : "Refresh"}

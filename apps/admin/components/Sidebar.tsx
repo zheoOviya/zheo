@@ -161,7 +161,7 @@ export default function Sidebar({
   return (
     <aside className={className}>
       <div className="flex h-16 items-center px-6 border-b border-neutral-200 dark:border-neutral-800">
-        <Link href="/dashboard" className="text-lg font-bold text-primary-500">
+        <Link href="/dashboard" className="inline-flex items-center min-h-touch text-lg font-bold text-primary-500">
           SnakZap Ops
         </Link>
       </div>
@@ -185,7 +185,7 @@ export default function Sidebar({
                       href={item.href}
                       onClick={onNavigate}
                       aria-current={active ? "page" : undefined}
-                      className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                      className={`flex min-h-touch items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
                         active
                           ? "bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400"
                           : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900"
@@ -214,7 +214,7 @@ export default function Sidebar({
             await logout();
             window.location.href = "/login";
           }}
-          className="flex items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400 hover:text-red-500 transition-colors"
+          className="flex min-h-touch items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400 hover:text-red-500 transition-colors"
         >
           <ArrowRightStartOnRectangleIcon className="h-4 w-4" />
           Sign Out

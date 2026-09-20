@@ -86,11 +86,11 @@ export default function UsersPage() {
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            className="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none"
+            className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none"
           />
           <button
             onClick={handleSearch}
-            className="rounded-lg bg-primary-500 hover:bg-primary-600 px-3 py-2 text-sm font-semibold text-white transition-colors"
+            className="min-h-touch rounded-lg bg-primary-500 hover:bg-primary-600 px-3 py-2 text-sm font-semibold text-white transition-colors"
           >
             Search
           </button>
@@ -141,7 +141,7 @@ export default function UsersPage() {
                           value={u.role}
                           onChange={(e) => handleRoleChange(u.id, e.target.value)}
                           disabled={changingRole === u.id}
-                          className="rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none disabled:opacity-50"
+                          className="min-h-touch rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none disabled:opacity-50"
                         >
                           {ALL_ROLES.map((r) => (
                             <option key={r} value={r}>{r}</option>
@@ -173,7 +173,7 @@ export default function UsersPage() {
                         <button
                           onClick={() => handleToggle(u.id, u.is_suspended)}
                           disabled={toggling === u.id}
-                          className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                          className={`min-h-touch rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
                             u.is_suspended
                               ? "bg-green-50 text-green-600 hover:bg-green-100 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/40"
                               : "bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/40"
@@ -202,11 +202,11 @@ export default function UsersPage() {
               <p className="text-sm text-neutral-500">Page {page} of {totalPages} ({data.total} users)</p>
               <div className="flex gap-2">
                 <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}
-                  className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors">
+                  className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors">
                   Previous
                 </button>
                 <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}
-                  className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors">
+                  className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors">
                   Next
                 </button>
               </div>

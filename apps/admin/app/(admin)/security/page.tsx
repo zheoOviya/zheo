@@ -124,7 +124,7 @@ export default function SecurityPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-6 max-w-2xl mx-auto">
       <div>
         <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
           Security
@@ -168,7 +168,7 @@ export default function SecurityPage() {
             <button
               onClick={submitDisable}
               disabled={busy || disableCode.length !== 6}
-              className="w-full rounded-lg border border-red-300 dark:border-red-700 bg-red-500 hover:bg-red-600 disabled:opacity-50 px-4 py-2.5 text-sm font-semibold text-white transition-colors"
+              className="w-full min-h-touch rounded-lg border border-red-300 dark:border-red-700 bg-red-500 hover:bg-red-600 disabled:opacity-50 px-4 py-2.5 text-sm font-semibold text-white transition-colors"
             >
               {busy ? "Disabling..." : "Disable 2FA"}
             </button>
@@ -199,14 +199,14 @@ export default function SecurityPage() {
             <button
               onClick={submitConfirm}
               disabled={busy || confirmCode.length !== 6}
-              className="w-full rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 px-4 py-2.5 text-sm font-semibold text-white transition-colors"
+              className="w-full min-h-touch rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 px-4 py-2.5 text-sm font-semibold text-white transition-colors"
             >
               {busy ? "Confirming..." : "Confirm & Enable"}
             </button>
             <button
               onClick={() => { setEnrollResult(null); setConfirmCode(""); setError(""); }}
               disabled={busy}
-              className="w-full text-sm text-neutral-500 dark:text-neutral-400 hover:text-primary-500 transition-colors"
+              className="w-full min-h-touch text-sm text-neutral-500 dark:text-neutral-400 hover:text-primary-500 transition-colors"
             >
               Cancel
             </button>
@@ -229,7 +229,7 @@ export default function SecurityPage() {
           <button
             onClick={startEnroll}
             disabled={busy}
-            className="w-full rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 px-4 py-2.5 text-sm font-semibold text-white transition-colors"
+            className="w-full min-h-touch rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 px-4 py-2.5 text-sm font-semibold text-white transition-colors"
           >
             {busy ? "Preparing..." : "Set up 2FA"}
           </button>

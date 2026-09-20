@@ -67,7 +67,7 @@ export default function SupportTicketsPage() {
         <select
           value={statusFilter}
           onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
-          className="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none"
+          className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none"
         >
           <option value="">All Statuses</option>
           <option value="OPEN">Open</option>
@@ -78,7 +78,7 @@ export default function SupportTicketsPage() {
         <select
           value={priorityFilter}
           onChange={(e) => { setPriorityFilter(e.target.value); setPage(1); }}
-          className="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none"
+          className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none"
         >
           <option value="">All Priorities</option>
           <option value="HIGH">High</option>
@@ -134,17 +134,17 @@ export default function SupportTicketsPage() {
                       </p>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <button
                       onClick={() => setExpandedId(expandedId === t.id ? null : t.id)}
-                      className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-2.5 py-1 text-xs text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                      className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 px-2.5 py-1 text-xs text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
                     >
                       {expandedId === t.id ? "Hide" : "View"}
                     </button>
                     <select
                       value={t.assignee ?? ""}
                       onChange={(e) => handleAssigneeChange(t.id, e.target.value)}
-                      className="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-600 dark:text-neutral-400 focus:border-primary-500 outline-none"
+                      className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-600 dark:text-neutral-400 focus:border-primary-500 outline-none"
                     >
                       <option value="">Unassigned</option>
                       {ASSIGNABLE_ROLES.map((r) => (
@@ -155,13 +155,13 @@ export default function SupportTicketsPage() {
                       <>
                         <button
                           onClick={() => handleStatusChange(t.id, "IN_PROGRESS")}
-                          className="rounded-lg bg-primary-500 hover:bg-primary-600 px-2.5 py-1 text-xs text-white transition-colors"
+                          className="min-h-touch rounded-lg bg-primary-500 hover:bg-primary-600 px-2.5 py-1 text-xs text-white transition-colors"
                         >
                           Start
                         </button>
                         <button
                           onClick={() => handleStatusChange(t.id, "RESOLVED")}
-                          className="rounded-lg bg-green-500 hover:bg-green-600 px-2.5 py-1 text-xs text-white transition-colors"
+                          className="min-h-touch rounded-lg bg-green-500 hover:bg-green-600 px-2.5 py-1 text-xs text-white transition-colors"
                         >
                           Resolve
                         </button>
@@ -170,7 +170,7 @@ export default function SupportTicketsPage() {
                     {(t.status === "IN_PROGRESS" || t.status === "RESOLVED") && (
                       <button
                         onClick={() => handleStatusChange(t.id, "CLOSED")}
-                        className="rounded-lg bg-neutral-500 hover:bg-neutral-600 px-2.5 py-1 text-xs text-white transition-colors"
+                        className="min-h-touch rounded-lg bg-neutral-500 hover:bg-neutral-600 px-2.5 py-1 text-xs text-white transition-colors"
                       >
                         Close
                       </button>
@@ -188,11 +188,11 @@ export default function SupportTicketsPage() {
               <p className="text-sm text-neutral-500">Page {page} of {totalPages} ({data.total} tickets)</p>
               <div className="flex gap-2">
                 <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}
-                  className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors">
+                  className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors">
                   Previous
                 </button>
                 <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}
-                  className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors">
+                  className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors">
                   Next
                 </button>
               </div>

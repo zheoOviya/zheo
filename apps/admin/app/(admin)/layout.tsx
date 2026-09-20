@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ArrowRightStartOnRectangleIcon, Bars3Icon } from "@heroicons/react/24/outline";
+import { Container } from "@snakzap/ui";
 import Sidebar from "../../components/Sidebar";
 import { getUserRole, logout } from "../../lib/auth";
 
@@ -53,7 +54,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-950/80 backdrop-blur px-4 md:px-8">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="md:hidden rounded-lg p-2 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+            className="md:hidden min-h-touch min-w-touch rounded-lg p-2 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900"
             aria-label="Toggle sidebar"
             aria-expanded={sidebarOpen}
             aria-controls="admin-mobile-drawer"
@@ -70,7 +71,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 await logout();
                 window.location.href = "/login";
               }}
-              className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-red-500 transition-colors"
+              className="flex min-h-touch min-w-touch items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-red-500 transition-colors"
               aria-label="Sign out"
             >
               <ArrowRightStartOnRectangleIcon className="h-4 w-4" />
@@ -78,7 +79,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </button>
           </div>
         </header>
-        <main id="main-content" className="p-4 md:p-8">{children}</main>
+        <Container as="main" id="main-content" maxWidth="7xl" gutter={false} className="p-4 md:p-8">
+          {children}
+        </Container>
       </div>
     </div>
   );

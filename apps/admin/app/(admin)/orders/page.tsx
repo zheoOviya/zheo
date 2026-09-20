@@ -104,7 +104,7 @@ export default function OrdersPage() {
       <div className="flex flex-wrap gap-2">
         <button
           onClick={() => setStatusFilter("")}
-          className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+          className={`min-h-touch rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
             !statusFilter
               ? "bg-primary-500 text-white"
               : "bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700"
@@ -116,7 +116,7 @@ export default function OrdersPage() {
           <button
             key={s}
             onClick={() => setStatusFilter(s)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+            className={`min-h-touch rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
               statusFilter === s
                 ? "bg-primary-500 text-white"
                 : "bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700"
@@ -171,7 +171,7 @@ export default function OrdersPage() {
                     <td className="px-4 py-3">
                       <button
                         onClick={() => showDetail(o.id)}
-                        className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-2.5 py-1 text-xs text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                        className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 px-2.5 py-1 text-xs text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
                       >
                         {expandedId === o.id ? "Hide" : "Detail"}
                       </button>
@@ -259,7 +259,7 @@ export default function OrdersPage() {
                               <select
                                 value={overrideStatus}
                                 onChange={(e) => setOverrideStatusState(e.target.value)}
-                                className="rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 outline-none"
+                                className="min-h-touch rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 outline-none"
                               >
                                 <option value="">-- select --</option>
                                 {["CONFIRMED", "PREPARING", "ALMOST_READY", "READY_FOR_PICKUP", "PICKED_UP", "CANCELLED"].map((s) => (
@@ -271,7 +271,7 @@ export default function OrdersPage() {
                                 placeholder="Reason..."
                                 value={overrideReason}
                                 onChange={(e) => setOverrideReason(e.target.value)}
-                                className="rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 outline-none"
+                                className="min-h-touch rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 outline-none"
                               />
                               <label className="flex items-center gap-1 text-xs text-neutral-500">
                                 <input
@@ -284,7 +284,7 @@ export default function OrdersPage() {
                               <button
                                 onClick={() => handleOverride(o.id, o.status)}
                                 disabled={!overrideStatus || overriding || (overrideForce && !overrideReason)}
-                                className="rounded-lg bg-accent-500 hover:bg-accent-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors disabled:opacity-50"
+                                className="min-h-touch rounded-lg bg-accent-500 hover:bg-accent-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors disabled:opacity-50"
                               >
                                 {overriding ? "..." : "Override"}
                               </button>

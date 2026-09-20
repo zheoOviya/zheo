@@ -179,7 +179,7 @@ export default function RolesPage() {
   const activeMeta = roles.find((r) => r.name === selected);
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
@@ -193,7 +193,7 @@ export default function RolesPage() {
         {isSuperAdmin && (
           <button
             onClick={() => setShowCreate(true)}
-            className="flex items-center gap-2 rounded-lg bg-primary-500 hover:bg-primary-600 px-3 py-2 text-sm font-semibold text-white transition-colors"
+            className="flex min-h-touch items-center gap-2 rounded-lg bg-primary-500 hover:bg-primary-600 px-3 py-2 text-sm font-semibold text-white transition-colors"
           >
             <PlusIcon className="h-4 w-4" />
             Add Role
@@ -260,7 +260,7 @@ export default function RolesPage() {
                   <button
                     onClick={() => handleDelete(r.name)}
                     disabled={deleting === r.name}
-                    className="mt-3 rounded-lg border border-red-200 dark:border-red-900 px-2.5 py-1 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 disabled:opacity-50 transition-colors"
+                    className="mt-3 min-h-touch rounded-lg border border-red-200 dark:border-red-900 px-2.5 py-1 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 disabled:opacity-50 transition-colors"
                   >
                     {deleting === r.name ? "Deleting..." : "Delete role"}
                   </button>
@@ -309,7 +309,7 @@ export default function RolesPage() {
                           value={u.role}
                           onChange={(e) => handleRoleChange(u.id, e.target.value)}
                           disabled={changingRole === u.id}
-                          className="rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none disabled:opacity-50"
+                          className="min-h-touch rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 focus:border-primary-500 outline-none disabled:opacity-50"
                         >
                           {roles.map((r) => (
                             <option key={r.name} value={r.name}>{r.label}</option>
@@ -339,7 +339,7 @@ export default function RolesPage() {
                       <button
                         onClick={() => handleToggle(u.id, u.is_suspended)}
                         disabled={toggling === u.id}
-                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                        className={`min-h-touch rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
                           u.is_suspended
                             ? "bg-green-50 text-green-600 hover:bg-green-100 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/40"
                             : "bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/40"
@@ -372,7 +372,7 @@ export default function RolesPage() {
                   loadMembers(selected, next);
                 }}
                 disabled={page <= 1}
-                className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors"
+                className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors"
               >
                 Previous
               </button>
@@ -383,7 +383,7 @@ export default function RolesPage() {
                   loadMembers(selected, next);
                 }}
                 disabled={page >= totalPages}
-                className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors"
+                className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 transition-colors"
               >
                 Next
               </button>
@@ -406,7 +406,7 @@ export default function RolesPage() {
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder="SUPPORT_LEAD"
-                className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:border-primary-500 outline-none"
+                className="w-full min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:border-primary-500 outline-none"
               />
               <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
                 Label
@@ -415,7 +415,7 @@ export default function RolesPage() {
                 value={form.label}
                 onChange={(e) => setForm({ ...form, label: e.target.value })}
                 placeholder="Support Lead"
-                className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:border-primary-500 outline-none"
+                className="w-full min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:border-primary-500 outline-none"
               />
               <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
                 Description
@@ -434,7 +434,7 @@ export default function RolesPage() {
                 value={form.permissions}
                 onChange={(e) => setForm({ ...form, permissions: e.target.value })}
                 placeholder="Triage tickets, Escalate"
-                className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:border-primary-500 outline-none"
+                className="w-full min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:border-primary-500 outline-none"
               />
               {formError && (
                 <p className="text-sm text-red-500">{formError}</p>
@@ -443,14 +443,14 @@ export default function RolesPage() {
             <div className="mt-5 flex justify-end gap-2">
               <button
                 onClick={() => setShowCreate(false)}
-                className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-2 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                className="min-h-touch rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-2 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleCreate}
                 disabled={creating}
-                className="rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white transition-colors"
+                className="min-h-touch rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white transition-colors"
               >
                 {creating ? "Creating..." : "Create Role"}
               </button>
