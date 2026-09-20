@@ -259,7 +259,7 @@ export function DineInBillRequestPanel({
                   if (!inFlight) setPhase(null);
                 }}
                 aria-label="Close"
-                className="flex h-10 w-10 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                className="flex min-h-touch min-w-touch h-10 w-10 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
               >
                 <XMarkIcon className="h-5 w-5" aria-hidden="true" />
               </button>

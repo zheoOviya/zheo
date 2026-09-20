@@ -192,7 +192,7 @@ function TrackingContent() {
         <button
           type="button"
           onClick={() => router.push("/")}
-          className="mb-4 inline-flex items-center gap-1 text-sm font-semibold text-primary-600 transition-colors hover:text-primary-700 dark:text-primary-400"
+          className="min-h-touch mb-4 inline-flex items-center gap-1 text-sm font-semibold text-primary-600 transition-colors hover:text-primary-700 dark:text-primary-400"
         >
           <ChevronLeftIcon className="h-4 w-4" />
           Back
@@ -316,7 +316,7 @@ function TrackingContent() {
             <button
               type="button"
               onClick={() => router.push("/")}
-              className="mt-4 rounded-full bg-green-600 px-6 py-2 text-sm font-semibold text-white hover:bg-green-700"
+              className="min-h-touch mt-4 rounded-full bg-green-600 px-6 py-2 text-sm font-semibold text-white hover:bg-green-700"
             >
               Order Again
             </button>

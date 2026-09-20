@@ -81,7 +81,7 @@ export default async function RestaurantMenuPage({ params }: { params: Promise<{
           <Link
             href="/"
             aria-label="Back to home"
-            className="absolute left-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur transition-colors hover:bg-black/60"
+            className="absolute left-4 top-4 flex min-h-touch min-w-touch h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur transition-colors hover:bg-black/60"
           >
             <ChevronLeftIcon className="h-5 w-5" />
           </Link>

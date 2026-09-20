@@ -252,7 +252,7 @@ export function DineInServiceRequestPanel({
                 type="button"
                 onClick={() => closePanel()}
                 aria-label="Close"
-                className="flex h-10 w-10 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                className="flex min-h-touch min-w-touch h-10 w-10 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
               >
                 <XMarkIcon className="h-5 w-5" aria-hidden="true" />
               </button>
@@ -285,7 +285,7 @@ export function DineInServiceRequestPanel({
                 <button
                   type="button"
                   onClick={handleSendAnother}
-                  className="mt-3 w-full text-sm font-bold text-primary-600 underline-offset-2 hover:underline dark:text-primary-300"
+                  className="min-h-touch mt-3 w-full text-sm font-bold text-primary-600 underline-offset-2 hover:underline dark:text-primary-300"
                 >
                   Send another request
                 </button>

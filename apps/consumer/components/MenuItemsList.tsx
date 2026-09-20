@@ -59,7 +59,7 @@ function warnCrossRestaurant(result: Extract<AddItemResult, { cleared: true }>, 
             useCartStore.getState().restoreSnapshot(result.snapshot);
             toast.dismiss(t.id);
           }}
-          className="shrink-0 rounded-full bg-primary-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-primary-hover"
+          className="min-h-touch shrink-0 rounded-full bg-primary-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-primary-hover"
         >
           Undo
         </button>
@@ -197,7 +197,7 @@ export function MenuItemsList({
                   setPickerItem(item);
                 }}
                 aria-label={isJustAdded ? `Added ${item.name}` : `Add ${item.name}`}
-                className={`shrink-0 rounded-full px-4 py-2 text-xs font-bold text-white transition-transform active:scale-95 ${
+                className={`min-h-touch shrink-0 rounded-full px-4 py-2 text-xs font-bold text-white transition-transform active:scale-95 ${
                   isJustAdded ? "animate-pop bg-green-500" : "bg-primary-500 hover:bg-primary-hover"
                 }`}
               >
@@ -214,7 +214,7 @@ export function MenuItemsList({
                   setPickerItem(item);
                 }}
                 aria-label={`Gift ${item.name}`}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-500/10 text-primary-600 transition-transform active:scale-95 hover:bg-primary-500/20"
+                className="flex min-h-touch min-w-touch h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-500/10 text-primary-600 transition-transform active:scale-95 hover:bg-primary-500/20"
               >
                 <GiftIcon className="h-5 w-5" />
               </button>

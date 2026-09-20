@@ -133,14 +133,14 @@ function QrModal({
             type="button"
             onClick={() => setBright((v) => !v)}
             aria-pressed={bright}
-            className="flex-1 rounded-full border border-primary-500/30 py-2.5 text-sm font-semibold text-primary-700 hover:bg-surface-light"
+            className="min-h-touch flex-1 rounded-full border border-primary-500/30 py-2.5 text-sm font-semibold text-primary-700 hover:bg-surface-light"
           >
             {bright ? "Max Brightness On" : "Max Brightness"}
           </button>
           <button
             type="button"
             onClick={copyOtp}
-            className="flex-1 rounded-full bg-primary-500 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
+            className="min-h-touch flex-1 rounded-full bg-primary-500 py-2.5 text-sm font-semibold text-white hover:bg-primary-hover"
           >
             {copied ? "Copied!" : "Copy OTP"}
           </button>
@@ -149,7 +149,7 @@ function QrModal({
         <button
           type="button"
           onClick={onClose}
-          className="mt-4 text-sm text-neutral-400 underline-offset-2 hover:text-neutral-600 hover:underline"
+          className="min-h-touch mt-4 text-sm text-neutral-400 underline-offset-2 hover:text-neutral-600 hover:underline"
         >
           Close
         </button>

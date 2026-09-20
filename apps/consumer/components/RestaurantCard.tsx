@@ -137,7 +137,7 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
                 e.stopPropagation();
                 openQuickAdd();
               }}
-              className="btn-outline mt-3 w-full !min-h-10 !px-4 !py-2 !text-xs"
+              className="btn-outline mt-3 w-full min-h-touch !px-4 !py-2 !text-xs"
             >
               {isOpen ? "Quick add" : "View menu"}
             </button>
@@ -180,7 +180,7 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
                 <button
                   type="button"
                   onClick={() => handleQuickAdd(item)}
-                  className="ml-3 shrink-0 rounded-full bg-primary-500 px-4 py-1.5 text-xs font-bold text-white transition-all duration-150 hover:bg-primary-hover active:scale-95"
+                  className="min-h-touch ml-3 shrink-0 rounded-full bg-primary-500 px-4 py-1.5 text-xs font-bold text-white transition-all duration-150 hover:bg-primary-hover active:scale-95"
                 >
                   + Add
                 </button>

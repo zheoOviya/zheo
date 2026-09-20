@@ -97,7 +97,7 @@ export default function OnboardingPage() {
         <button
           type="button"
           onClick={finish}
-          className="rounded-full px-4 py-2 text-sm font-semibold text-primary-600 hover:bg-primary-500/10"
+          className="min-h-touch rounded-full px-4 py-2 text-sm font-semibold text-primary-600 hover:bg-primary-500/10"
         >
           Skip
         </button>
@@ -144,7 +144,7 @@ export default function OnboardingPage() {
           onClick={prev}
           disabled={index === 0}
           aria-label="Previous slide"
-          className="rounded-full border border-primary-500/30 px-5 py-2.5 text-sm font-semibold text-primary-700 hover:bg-surface-white disabled:cursor-not-allowed disabled:opacity-40"
+          className="min-h-touch rounded-full border border-primary-500/30 px-5 py-2.5 text-sm font-semibold text-primary-700 hover:bg-surface-white disabled:cursor-not-allowed disabled:opacity-40"
         >
           &larr; Back
         </button>
@@ -169,7 +169,7 @@ export default function OnboardingPage() {
           <button
             type="button"
             onClick={finish}
-            className="rounded-full bg-primary-500 px-5 py-2.5 text-sm font-bold text-white hover:bg-primary-hover"
+            className="min-h-touch rounded-full bg-primary-500 px-5 py-2.5 text-sm font-bold text-white hover:bg-primary-hover"
           >
             Get Started
           </button>
@@ -178,7 +178,7 @@ export default function OnboardingPage() {
             type="button"
             onClick={next}
             aria-label="Next slide"
-            className="rounded-full bg-primary-500 px-5 py-2.5 text-sm font-bold text-white hover:bg-primary-hover"
+            className="min-h-touch rounded-full bg-primary-500 px-5 py-2.5 text-sm font-bold text-white hover:bg-primary-hover"
           >
             Next
           </button>

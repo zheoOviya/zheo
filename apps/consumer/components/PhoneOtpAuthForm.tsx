@@ -119,7 +119,7 @@ export function PhoneOtpAuthForm({ mode }: { mode: "login" | "signup" }) {
                 <button
                   type="button"
                   onClick={handleBackToPhone}
-                  className="text-sm text-primary-600 hover:text-primary-700"
+                  className="min-h-touch text-sm text-primary-600 hover:text-primary-700"
                 >
                   Back
                 </button>

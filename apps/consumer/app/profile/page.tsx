@@ -334,7 +334,7 @@ function ReferEarnCard({
             onChange={(e) => setCode(e.target.value.toUpperCase())}
             placeholder="SNKZ-XXXXXX"
             maxLength={12}
-            className="flex-1 rounded-full border border-neutral-200 px-4 py-2.5 text-sm focus:border-primary-400 focus:outline-none"
+            className="min-h-touch flex-1 rounded-full border border-neutral-200 px-4 py-2.5 text-sm focus:border-primary-400 focus:outline-none"
           />
           <button
             type="button"
@@ -554,7 +554,7 @@ function VipSupportCard({
                   onChange={(e) => setSubject(e.target.value)}
                   placeholder="Subject (e.g. Delayed order)"
                   maxLength={120}
-                  className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm focus:border-primary-400 focus:outline-none"
+                  className="min-h-touch w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm focus:border-primary-400 focus:outline-none"
                 />
                 <textarea
                   value={description}
@@ -634,7 +634,7 @@ function GiftsSection({ gifts, onUpdated }: { gifts: Gift[]; onUpdated: () => vo
                 </button>
               )}
               {(gift.status === "ACTIVE" || gift.status === "PENDING") && (
-                <button type="button" onClick={() => void handleCancel(gift.id)} disabled={busy === gift.id} className="rounded-full border border-red-500/30 px-3 py-1 text-xs font-semibold text-red-600">
+                <button type="button" onClick={() => void handleCancel(gift.id)} disabled={busy === gift.id} className="min-h-touch rounded-full border border-red-500/30 px-3 py-1 text-xs font-semibold text-red-600">
                   Cancel
                 </button>
               )}

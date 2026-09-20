@@ -39,7 +39,7 @@ function CartToastListener() {
                   toast.dismiss(t.id);
                   toast.success("Previous cart restored.", { duration: 2000 });
                 }}
-                className="shrink-0 rounded-full bg-primary-500 px-3 py-1 text-xs font-semibold text-white hover:bg-primary-hover"
+                className="min-h-touch shrink-0 rounded-full bg-primary-500 px-3 py-1 text-xs font-semibold text-white hover:bg-primary-hover"
               >
                 Undo
               </button>

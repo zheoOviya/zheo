@@ -46,7 +46,7 @@ export function DietaryFilter({
             type="button"
             aria-pressed={active}
             onClick={() => toggle(tag)}
-            className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
+            className={`min-h-touch rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
               active
                 ? "bg-primary-500 text-white"
                 : "bg-white text-primary-700 ring-1 ring-primary-500/30 hover:bg-primary-500/10"

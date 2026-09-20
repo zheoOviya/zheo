@@ -93,7 +93,7 @@ export function AccountEntry() {
       aria-haspopup={isDesktop ? "menu" : "dialog"}
       aria-expanded={open}
       aria-controls={isDesktop ? "account-menu" : undefined}
-      className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-sm font-bold text-white shadow-md shadow-primary-700/20 transition-transform hover:scale-105 active:scale-95"
+      className="flex min-h-touch min-w-touch h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-sm font-bold text-white shadow-md shadow-primary-700/20 transition-transform hover:scale-105 active:scale-95"
     >
       U
     </button>
@@ -118,7 +118,7 @@ export function AccountEntry() {
                     href={link.href}
                     role="menuitem"
                     onClick={() => setOpen(false)}
-                    className="block px-4 py-2.5 text-sm text-neutral-700 hover:bg-surface-light dark:text-neutral-200 dark:hover:bg-neutral-800"
+                    className="min-h-touch block px-4 py-2.5 text-sm text-neutral-700 hover:bg-surface-light dark:text-neutral-200 dark:hover:bg-neutral-800"
                   >
                     {link.label}
                   </Link>
@@ -128,7 +128,7 @@ export function AccountEntry() {
                   type="button"
                   role="menuitem"
                   onClick={handleSignOut}
-                  className="block w-full px-4 py-2.5 text-left text-sm text-red-600 hover:bg-surface-light dark:text-red-400 dark:hover:bg-neutral-800"
+                  className="min-h-touch block w-full px-4 py-2.5 text-left text-sm text-red-600 hover:bg-surface-light dark:text-red-400 dark:hover:bg-neutral-800"
                 >
                   Sign out
                 </button>
@@ -172,13 +172,13 @@ export function AccountEntry() {
     <div className="flex items-center gap-2">
       <Link
         href="/login"
-        className="rounded-full px-4 py-2 text-sm font-semibold text-primary-700 ring-1 ring-primary-500/30 hover:bg-primary-500/5 dark:text-primary-300"
+        className="min-h-touch rounded-full px-4 py-2 text-sm font-semibold text-primary-700 ring-1 ring-primary-500/30 hover:bg-primary-500/5 dark:text-primary-300"
       >
         Sign in
       </Link>
       <Link
         href="/signup"
-        className="rounded-full bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover"
+        className="min-h-touch rounded-full bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover"
       >
         Sign up
       </Link>

@@ -231,7 +231,7 @@ function OrderHistoryContent() {
               {active && (
                 <Link
                   href={`/orders/${order.id}`}
-                  className="rounded-full bg-primary-500/10 px-4 py-2 text-sm font-semibold text-primary-700 hover:bg-primary-500/20 dark:text-primary-400"
+                  className="min-h-touch rounded-full bg-primary-500/10 px-4 py-2 text-sm font-semibold text-primary-700 hover:bg-primary-500/20 dark:text-primary-400"
                 >
                   Track →
                 </Link>
@@ -241,7 +241,7 @@ function OrderHistoryContent() {
                 onClick={() => handleReorder(order)}
                 disabled={reorderingId === order.id}
                 aria-busy={reorderingId === order.id}
-                className="shrink-0 rounded-full bg-primary-500 px-5 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+                className="min-h-touch shrink-0 rounded-full bg-primary-500 px-5 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {reorderingId === order.id ? "Reordering..." : "Reorder"}
               </button>
@@ -263,7 +263,7 @@ function OrderHistoryContent() {
           </div>
           <Link
             href="/"
-            className="inline-flex min-h-9 items-center gap-1 rounded-full bg-white px-3.5 text-xs font-semibold text-neutral-600 shadow-elevation-1 ring-1 ring-neutral-900/5 transition-colors hover:bg-surface-light dark:bg-neutral-900 dark:text-neutral-300 dark:ring-white/10"
+            className="inline-flex min-h-touch min-h-9 items-center gap-1 rounded-full bg-white px-3.5 text-xs font-semibold text-neutral-600 shadow-elevation-1 ring-1 ring-neutral-900/5 transition-colors hover:bg-surface-light dark:bg-neutral-900 dark:text-neutral-300 dark:ring-white/10"
           >
             <ChevronLeftIcon className="h-3.5 w-3.5" />
             Home
@@ -280,7 +280,7 @@ function OrderHistoryContent() {
           <button
             type="button"
             onClick={() => setAttempt((a) => a + 1)}
-            className="mt-3 rounded-full border border-primary-500/30 px-5 py-2 text-sm font-medium text-primary-700 hover:bg-surface-light"
+            className="min-h-touch mt-3 rounded-full border border-primary-500/30 px-5 py-2 text-sm font-medium text-primary-700 hover:bg-surface-light"
           >
             Retry
           </button>
@@ -294,7 +294,7 @@ function OrderHistoryContent() {
             type="button"
             onClick={() => setFilter(f.key)}
             aria-pressed={filter === f.key}
-            className={`rounded-full px-4 py-1.5 text-sm font-semibold transition-colors ${
+            className={`min-h-touch rounded-full px-4 py-1.5 text-sm font-semibold transition-colors ${
               filter === f.key
                 ? "bg-primary text-white"
                 : "bg-white text-neutral-500 shadow-sm hover:bg-surface-light dark:bg-neutral-900 dark:text-neutral-400"
@@ -348,7 +348,7 @@ function OrderHistoryContent() {
             type="button"
             onClick={loadMore}
             disabled={loadingMore}
-            className="btn-outline min-h-10 px-6 text-sm disabled:cursor-not-allowed"
+            className="btn-outline min-h-touch min-h-10 px-6 text-sm disabled:cursor-not-allowed"
           >
             {loadingMore ? "Loading..." : "Load more"}
           </button>

@@ -108,7 +108,7 @@ export function GroupCartView({ token }: { token: string }) {
         <button
           type="button"
           onClick={() => void load()}
-          className="mt-4 rounded-full bg-primary-500 px-5 py-2 text-sm font-semibold text-white hover:bg-primary-hover"
+          className="min-h-touch mt-4 rounded-full bg-primary-500 px-5 py-2 text-sm font-semibold text-white hover:bg-primary-hover"
         >
           Try Again
         </button>
@@ -135,13 +135,13 @@ export function GroupCartView({ token }: { token: string }) {
               <button
                 type="button"
                 onClick={handleCopyLink}
-                className="rounded-full border border-primary-500/30 px-4 py-2 text-sm font-medium text-primary-700 hover:bg-surface-light"
+                className="min-h-touch rounded-full border border-primary-500/30 px-4 py-2 text-sm font-medium text-primary-700 hover:bg-surface-light"
               >
                 {copied ? "Copied!" : "Copy Invite Link"}
               </button>
               <Link
                 href={`/restaurants/${snapshot.restaurant_id}`}
-                className="rounded-full border border-primary-500/30 px-4 py-2 text-sm font-medium text-primary-700 hover:bg-surface-light"
+                className="min-h-touch rounded-full border border-primary-500/30 px-4 py-2 text-sm font-medium text-primary-700 hover:bg-surface-light"
               >
                 View Menu
               </Link>

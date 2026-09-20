@@ -248,7 +248,7 @@ function PickupSlotSelector({
                             setShowGrid(false);
                           }
                         }}
-                        className={`rounded-lg border px-2 py-2.5 text-xs font-medium transition-colors ${
+                        className={`min-h-touch rounded-lg border px-2 py-2.5 text-xs font-medium transition-colors ${
                           isSelected
                             ? "border-primary-500 bg-primary-500/10 text-primary-700"
                             : slot.available
@@ -635,7 +635,7 @@ function CheckoutContent() {
           <button
             type="button"
             onClick={() => router.push("/")}
-            className="w-full py-2 text-sm text-neutral-400 hover:text-primary-600"
+            className="min-h-touch w-full py-2 text-sm text-neutral-400 hover:text-primary-600"
           >
             Continue Shopping
           </button>

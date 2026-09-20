@@ -126,7 +126,7 @@ export function CustomizationPicker({
               if (!isLocked) onCancel();
             }}
             disabled={isLocked}
-            className="flex-1 rounded-full border border-primary-500/30 py-2.5 text-sm font-medium text-primary-700 hover:bg-surface-light disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-touch flex-1 rounded-full border border-primary-500/30 py-2.5 text-sm font-medium text-primary-700 hover:bg-surface-light disabled:cursor-not-allowed disabled:opacity-60"
           >
             Cancel
           </button>
@@ -135,7 +135,7 @@ export function CustomizationPicker({
             onClick={() => onConfirm(selected)}
             disabled={isLocked}
             aria-busy={pending}
-            className={`flex flex-1 items-center justify-center gap-2 rounded-full py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed ${
+            className={`min-h-touch flex flex-1 items-center justify-center gap-2 rounded-full py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed ${
               success
                 ? "bg-green-600 hover:bg-green-700"
                 : "bg-primary-500 hover:bg-primary-hover"

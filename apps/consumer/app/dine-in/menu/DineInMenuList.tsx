@@ -113,7 +113,7 @@ function ItemCard({
           type="button"
           onClick={onAdd}
           aria-label={`Add ${item.name}`}
-          className="shrink-0 rounded-full bg-primary-500 px-4 py-2 text-xs font-bold text-white hover:bg-primary-hover active:scale-95"
+          className="min-h-touch shrink-0 rounded-full bg-primary-500 px-4 py-2 text-xs font-bold text-white hover:bg-primary-hover active:scale-95"
         >
           Add
         </button>
@@ -123,7 +123,7 @@ function ItemCard({
             type="button"
             onClick={onDecrement}
             aria-label={`Decrease ${item.name}`}
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-primary-700 shadow-sm active:scale-95"
+            className="flex min-h-touch min-w-touch h-7 w-7 items-center justify-center rounded-full bg-white text-primary-700 shadow-sm active:scale-95"
           >
             <MinusIcon className="h-3.5 w-3.5" />
           </button>
@@ -140,7 +140,7 @@ function ItemCard({
             disabled={atMax}
             aria-disabled={atMax}
             aria-label={`Increase ${item.name}`}
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-primary-700 shadow-sm active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex min-h-touch min-w-touch h-7 w-7 items-center justify-center rounded-full bg-white text-primary-700 shadow-sm active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <PlusIcon className="h-3.5 w-3.5" />
           </button>

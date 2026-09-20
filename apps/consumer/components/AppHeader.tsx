@@ -11,7 +11,7 @@ import { AccountEntry } from "./AccountEntry";
 
 export function BrandMark() {
   return (
-    <Link href="/" className="flex items-center gap-2.5" aria-label="SnakZap home">
+    <Link href="/" className="flex min-h-touch items-center gap-2.5" aria-label="SnakZap home">
       <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary-400 to-primary-700 text-white shadow-md shadow-primary-700/20">
         <svg
           className="h-5 w-5"
