@@ -29,6 +29,33 @@ interface PickupSlot {
   max_capacity: number;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Local untrusted-response guard for the public pickup-slots endpoint. The
+// wire shape must never be trusted: a malformed payload normalizes to a
+// truthful failure instead of fabricating slots or crashing the render.
+// Returns null for any malformed/wrong envelope (no silent coercion).
+function parsePickupSlotsResponse(value: unknown): PickupSlot[] | null {
+  if (!isRecord(value) || value.success !== true) return null;
+  const data = value.data;
+  if (!isRecord(data) || !Array.isArray(data.slots)) return null;
+
+  const slots: PickupSlot[] = [];
+  for (const item of data.slots) {
+    if (!isRecord(item)) return null;
+    const { time, label, available, current_orders, max_capacity } = item;
+    if (typeof time !== "string") return null;
+    if (typeof label !== "string") return null;
+    if (typeof available !== "boolean") return null;
+    if (typeof current_orders !== "number") return null;
+    if (typeof max_capacity !== "number") return null;
+    slots.push({ time, label, available, current_orders, max_capacity });
+  }
+  return slots;
+}
+
 const PAYMENT_METHODS: {
   id: PaymentMethod;
   label: string;
@@ -139,10 +166,19 @@ function PickupSlotSelector({
     try {
       const res = await fetch(`/api/v1/restaurants/${restaurantId}/pickup-slots?date=${today}`);
       if (!res.ok) throw new Error("Failed to load slots");
-      const body = await res.json();
-      setSlots(body.data.slots);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load pickup slots");
+      let body: unknown;
+      try {
+        body = await res.json();
+      } catch {
+        throw new Error("Failed to load slots");
+      }
+      const parsed = parsePickupSlotsResponse(body);
+      if (parsed === null) throw new Error("Failed to load slots");
+      setSlots(parsed);
+    } catch {
+      // Normalize every failure (HTTP, non-JSON, malformed envelope, network)
+      // to one bounded, non-leaking message.
+      setError("Failed to load slots");
     } finally {
       setLoading(false);
     }
@@ -219,7 +255,16 @@ function PickupSlotSelector({
                   <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
                 </div>
               ) : error ? (
-                <p className="py-4 text-center text-sm text-red-500">{error}</p>
+                <div className="py-4 text-center">
+                  <p className="text-sm text-red-500">{error}</p>
+                  <button
+                    type="button"
+                    onClick={() => void fetchSlots()}
+                    className="btn-outline mt-3"
+                  >
+                    Try again
+                  </button>
+                </div>
               ) : (
                 <div
                   role="radiogroup"
