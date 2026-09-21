@@ -141,4 +141,15 @@ describe("BottomNav", () => {
       expect(link).not.toHaveAttribute("aria-current");
     }
   });
+
+  it("root exposes the additive 12px + safe-area padding contract", () => {
+    const { container } = render(<BottomNav items={DEFAULT_ITEMS} />);
+    const nav = container.querySelector("nav");
+    expect(nav).not.toBeNull();
+    expect(nav!.className).toContain("fixed inset-x-0 bottom-0 z-50");
+    expect(nav!.className).toContain("pointer-events-none px-4");
+    expect(nav!.className).toContain("pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]");
+    expect(nav!.className).not.toContain("pb-safe");
+    expect(nav!.className).not.toContain("pb-3");
+  });
 });

@@ -42,7 +42,12 @@ const OTP_INPUT = "../OtpInput.tsx";
 const API = "../../lib/api.ts";
 const STORE = "../../lib/store.ts";
 const BOTTOM_NAV = "../../../../packages/ui/src/BottomNav.tsx";
+const CLIENT_PROVIDERS = "../ClientProviders.tsx";
 const SELF = "consumerTouchLayout.test.tsx";
+
+// POLICY_1 additive safe-area contract: 12px / 80px base + dynamic inset.
+const NAV_SAFE_PADDING = "pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]";
+const RESERVED_SAFE_PADDING = "pb-[calc(5rem+env(safe-area-inset-bottom,0px))]";
 
 const HOME_LINK_CLASS =
   "inline-flex min-h-touch min-h-9 items-center gap-1 rounded-full bg-white px-3.5";
@@ -339,15 +344,29 @@ describe("CT-9 no responsive/grid/overflow redesign in the authorized manifest",
   });
 });
 
-describe("CT-10 shared BottomNav / safe-area untouched", () => {
-  it("keeps the safe-area contract and adds no touch utilities", () => {
+describe("CT-10 shared BottomNav additive safe-area contract", () => {
+  it("keeps BottomNav fixed and uses the additive 12px + safe-area padding", () => {
     const src = read(BOTTOM_NAV);
-    expect(src).toContain("fixed inset-x-0 bottom-0 z-50 pb-safe");
-    expect(src).toContain("pointer-events-none px-4 pb-3");
+    expect(src).toContain("fixed inset-x-0 bottom-0 z-50");
+    expect(src).toContain("pointer-events-none px-4");
+    expect(src).toContain(NAV_SAFE_PADDING);
+    // The old source-order-dependent pair must be gone.
+    expect(src).not.toContain("pb-safe");
+    expect(src).not.toContain("pb-3");
+  });
+
+  it("adds no touch utilities and keeps the 44px min-h-11 link anchor", () => {
+    const src = read(BOTTOM_NAV);
     expect(src).not.toContain("min-h-touch");
     expect(src).not.toContain("min-w-touch");
     // Existing 44px anchor policy remains the compliant path here.
     expect(src).toContain("relative flex min-h-11 min-w-0 flex-1 flex-col items-center justify-center gap-0.5");
+  });
+
+  it("reserves 80px + safe-area for non-full-screen Consumer pages", () => {
+    const src = read(CLIENT_PROVIDERS);
+    expect(src).toContain(RESERVED_SAFE_PADDING);
+    expect(src).not.toContain("pb-20");
   });
 
   it("keeps BottomNav out of the A2b production manifest", () => {

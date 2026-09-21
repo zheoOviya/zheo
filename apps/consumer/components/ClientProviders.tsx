@@ -62,7 +62,7 @@ export function ClientProviders({ children }: { children: ReactNode }) {
           <PwaProvider>
             <LazyMotion features={domAnimation} strict>
               <div className="min-h-dvh bg-surface-light dark:bg-surface-dark text-neutral-800 dark:text-neutral-200 font-sans antialiased">
-                <div className={isFullScreen ? "" : "pb-20"}>
+                <div className={isFullScreen ? "" : "pb-[calc(5rem+env(safe-area-inset-bottom,0px))]"}>
                   <OnboardingGate>{children}</OnboardingGate>
                 </div>
                 {!isFullScreen && (

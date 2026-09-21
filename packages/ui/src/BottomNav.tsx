@@ -21,8 +21,9 @@ export function BottomNav({ items, activeHref, onNavigate, className = "" }: Bot
     <nav
       aria-label="Primary"
       className={[
-        "fixed inset-x-0 bottom-0 z-50 pb-safe",
-        "pointer-events-none px-4 pb-3",
+        "fixed inset-x-0 bottom-0 z-50",
+        "pointer-events-none px-4",
+        "pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]",
         className,
       ].join(" ")}
     >
