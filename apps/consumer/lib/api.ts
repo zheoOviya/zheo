@@ -20,6 +20,52 @@ export interface SearchResult {
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? (typeof window === "undefined" ? "http://localhost:3001" : "");
 
+interface ApiEnvelope {
+  success: boolean;
+  data: unknown;
+  error: { code?: string; message?: string } | null;
+}
+
+function isApiEnvelope(value: unknown): value is ApiEnvelope {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { success?: unknown }).success === "boolean" &&
+    "data" in value
+  );
+}
+
+// Parse + validate an API response defensively: a non-2xx status ALWAYS wins
+// over a `success:true` envelope, and a non-JSON/empty body is normalized to a
+// generic Error so a SyntaxError or raw HTML never reaches callers. `attachCode`
+// exposes the envelope error code for the authed helper only, keeping the public
+// `fetcher` contract to a plain Error(message).
+async function parseApiResponse<T>(res: Response, attachCode = false): Promise<T> {
+  let body: unknown = null;
+  try {
+    body = await res.json();
+  } catch (err) {
+    // Preserve abort semantics; never convert an abort into an empty success.
+    if ((err as { name?: string } | null)?.name === "AbortError") throw err;
+  }
+
+  const envelope = isApiEnvelope(body) ? body : null;
+  const message =
+    typeof envelope?.error?.message === "string" && envelope.error.message.length > 0
+      ? envelope.error.message
+      : "Request failed";
+
+  if (!res.ok || envelope === null || !envelope.success || envelope.data == null) {
+    const err = new Error(message) as Error & { code?: string };
+    if (attachCode && typeof envelope?.error?.code === "string") {
+      err.code = envelope.error.code;
+    }
+    throw err;
+  }
+  return envelope.data as T;
+}
+
 async function fetcher<T>(
   path: string,
   signal?: AbortSignal,
@@ -30,15 +76,7 @@ async function fetcher<T>(
     cache: "no-store",
     headers,
   });
-  const body: {
-    success: boolean;
-    data: T | null;
-    error: { code: string; message: string } | null;
-  } = await res.json();
-  if (!body.success || body.data === null) {
-    throw new Error(body.error?.message ?? "Request failed");
-  }
-  return body.data;
+  return parseApiResponse<T>(res);
 }
 
 export function fetchRestaurants(): Promise<Restaurant[]> {
@@ -98,19 +136,7 @@ async function authedFetcher<T>(path: string, token: string, init?: RequestInit)
     },
     credentials: "include",
   });
-  const body: {
-    success: boolean;
-    data: T | null;
-    error: { code: string; message: string } | null;
-  } = await res.json();
-  if (!body.success || body.data === null) {
-    const err = new Error(body.error?.message ?? "Request failed") as Error & {
-      code?: string;
-    };
-    err.code = body.error?.code;
-    throw err;
-  }
-  return body.data;
+  return parseApiResponse<T>(res, true);
 }
 
 export function fetchReferralProfile(token: string): Promise<ReferralProfile> {
