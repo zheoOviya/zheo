@@ -15,6 +15,10 @@ export function DietaryFilter({
   const [selected, setSelected] = useState<readonly string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  // Latest successful request yielded zero matches while a filter is active.
+  // This is a truthful empty result, distinct from a cleared filter or a
+  // failure, and only the latest request may mutate it.
+  const [emptyResult, setEmptyResult] = useState(false);
   // Monotonic request version: only the latest toggle may apply results,
   // errors, or loading transitions; older in-flight responses are ignored.
   const requestVersionRef = useRef(0);
@@ -32,17 +36,20 @@ export function DietaryFilter({
       // previous truthful results with an empty list (no network request).
       setLoading(false);
       setError(false);
+      setEmptyResult(false);
       onResults([]);
       return;
     }
 
     setLoading(true);
     setError(false);
+    setEmptyResult(false);
     try {
       const items = await filterMenuByDietary([...next]);
       if (version !== requestVersionRef.current) return;
       onResults(items);
       setError(false);
+      setEmptyResult(items.length === 0);
     } catch {
       if (version !== requestVersionRef.current) return;
       // Keep the previous truthful results instead of fabricating an empty
@@ -85,6 +92,14 @@ export function DietaryFilter({
       {error && (
         <span className="text-xs text-red-600 dark:text-red-400" role="alert">
           {"Couldn't update filters"}
+        </span>
+      )}
+      {selected.length > 0 && !loading && !error && emptyResult && (
+        <span
+          className="text-xs text-neutral-500 dark:text-neutral-400"
+          aria-live="polite"
+        >
+          No matching dishes
         </span>
       )}
     </div>

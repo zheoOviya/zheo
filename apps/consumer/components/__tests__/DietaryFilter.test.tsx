@@ -186,4 +186,118 @@ describe("DietaryFilter truth states", () => {
     await waitFor(() => expect(onResults).toHaveBeenCalledTimes(1));
     expect(onResults).toHaveBeenLastCalledWith([]);
   });
+
+  it("shows a bounded no-matches message for a valid empty result", async () => {
+    filterMock.mockResolvedValue([]);
+    const onResults = vi.fn();
+
+    render(<DietaryFilter onResults={onResults} />);
+    clickTag("VEG");
+
+    expect(await screen.findByText("No matching dishes")).toBeInTheDocument();
+    await waitFor(() => expect(onResults).toHaveBeenCalledWith([]));
+  });
+
+  it("does not show no-matches for a non-empty result", async () => {
+    filterMock.mockResolvedValue(VEG_ITEMS);
+    const onResults = vi.fn();
+
+    render(<DietaryFilter onResults={onResults} />);
+    clickTag("VEG");
+
+    await waitFor(() => expect(onResults).toHaveBeenCalledWith(VEG_ITEMS));
+    expect(screen.queryByText("No matching dishes")).not.toBeInTheDocument();
+  });
+
+  it("shows the existing error and no no-matches on failure", async () => {
+    filterMock.mockRejectedValue(new Error("Request failed"));
+    const onResults = vi.fn();
+
+    render(<DietaryFilter onResults={onResults} />);
+    clickTag("VEG");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't update filters",
+    );
+    expect(screen.queryByText("No matching dishes")).not.toBeInTheDocument();
+  });
+
+  it("clears no-matches when the filter is deselected", async () => {
+    filterMock.mockResolvedValue([]);
+    const onResults = vi.fn();
+
+    render(<DietaryFilter onResults={onResults} />);
+    clickTag("VEG");
+    expect(await screen.findByText("No matching dishes")).toBeInTheDocument();
+
+    clickTag("VEG");
+
+    await waitFor(() =>
+      expect(screen.queryByText("No matching dishes")).not.toBeInTheDocument(),
+    );
+    expect(onResults).toHaveBeenLastCalledWith([]);
+  });
+
+  it("clears a prior no-matches message while a newer request is loading", async () => {
+    const first = deferred<MenuItem[]>();
+    const second = deferred<MenuItem[]>();
+    filterMock.mockReturnValueOnce(first.promise);
+    filterMock.mockReturnValueOnce(second.promise);
+    const onResults = vi.fn();
+
+    render(<DietaryFilter onResults={onResults} />);
+    clickTag("VEG");
+    first.resolve([]);
+    expect(await screen.findByText("No matching dishes")).toBeInTheDocument();
+
+    clickTag("JAIN");
+
+    expect(screen.queryByText("No matching dishes")).not.toBeInTheDocument();
+    expect(screen.getByText("Filtering…")).toBeInTheDocument();
+
+    second.resolve(JAIN_ITEMS);
+    await waitFor(() => expect(onResults).toHaveBeenCalledWith(JAIN_ITEMS));
+  });
+
+  it("ignores a stale empty success after a newer non-empty success", async () => {
+    const first = deferred<MenuItem[]>();
+    const second = deferred<MenuItem[]>();
+    filterMock.mockReturnValueOnce(first.promise);
+    filterMock.mockReturnValueOnce(second.promise);
+    const onResults = vi.fn();
+
+    render(<DietaryFilter onResults={onResults} />);
+    clickTag("VEG");
+    clickTag("JAIN");
+
+    second.resolve(JAIN_ITEMS);
+    await waitFor(() => expect(onResults).toHaveBeenCalledWith(JAIN_ITEMS));
+
+    first.resolve([]);
+
+    await waitFor(() => expect(filterMock).toHaveBeenCalledTimes(2));
+    expect(onResults).toHaveBeenLastCalledWith(JAIN_ITEMS);
+    expect(screen.queryByText("No matching dishes")).not.toBeInTheDocument();
+  });
+
+  it("does not let a stale failure disturb current no-matches truth", async () => {
+    const first = deferred<MenuItem[]>();
+    const second = deferred<MenuItem[]>();
+    filterMock.mockReturnValueOnce(first.promise);
+    filterMock.mockReturnValueOnce(second.promise);
+    const onResults = vi.fn();
+
+    render(<DietaryFilter onResults={onResults} />);
+    clickTag("VEG");
+    clickTag("JAIN");
+
+    second.resolve([]);
+    expect(await screen.findByText("No matching dishes")).toBeInTheDocument();
+
+    first.reject(new Error("Request failed"));
+
+    await waitFor(() => expect(filterMock).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("No matching dishes")).toBeInTheDocument();
+  });
 });
