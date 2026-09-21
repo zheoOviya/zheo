@@ -11,27 +11,48 @@ export function SearchBar({ onSelect }: { onSelect: (result: SearchResult) => vo
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
+  // Bounded local truth state: a valid empty result and a failed request must
+  // never look the same. Both are cleared whenever a new request starts.
+  const [emptyResult, setEmptyResult] = useState(false);
+  const [searchError, setSearchError] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const q = query.trim();
     if (q.length < 2) {
+      // Short query is truthful idle, not an empty search: no request, no
+      // status message.
       setResults([]);
       setLoading(false);
+      setEmptyResult(false);
+      setSearchError(false);
       return;
     }
 
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
+    // Drop the previous query's results so they cannot be mistaken for this
+    // query's results while it debounces/loads.
+    setResults([]);
+    setEmptyResult(false);
+    setSearchError(false);
     setLoading(true);
 
     const timer = setTimeout(async () => {
       try {
         const data = await searchAutocomplete(q, controller.signal);
-        if (!controller.signal.aborted) setResults(data);
+        if (!controller.signal.aborted) {
+          setResults(data);
+          setEmptyResult(data.length === 0);
+          setSearchError(false);
+        }
       } catch {
-        if (!controller.signal.aborted) setResults([]);
+        if (!controller.signal.aborted) {
+          setResults([]);
+          setEmptyResult(false);
+          setSearchError(true);
+        }
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -71,6 +92,8 @@ export function SearchBar({ onSelect }: { onSelect: (result: SearchResult) => vo
                 onClick={() => {
                   onSelect(result);
                   setResults([]);
+                  setEmptyResult(false);
+                  setSearchError(false);
                 }}
                 className="flex w-full items-center justify-between px-4 py-3 text-left text-sm text-neutral-700 hover:bg-surface-light dark:text-neutral-200 dark:hover:bg-neutral-800"
               >
@@ -82,6 +105,22 @@ export function SearchBar({ onSelect }: { onSelect: (result: SearchResult) => vo
             </li>
           ))}
         </ul>
+      )}
+      {query.trim().length >= 2 && !loading && !searchError && emptyResult && (
+        <p
+          className="absolute z-10 mt-2 w-full rounded-2xl bg-white px-4 py-3 text-sm text-neutral-500 shadow-elevation-3 ring-1 ring-neutral-900/5 dark:bg-neutral-900 dark:text-neutral-400 dark:ring-white/10"
+          aria-live="polite"
+        >
+          No matching dishes or restaurants
+        </p>
+      )}
+      {query.trim().length >= 2 && !loading && searchError && (
+        <p
+          className="absolute z-10 mt-2 w-full rounded-2xl bg-white px-4 py-3 text-sm text-red-600 shadow-elevation-3 ring-1 ring-neutral-900/5 dark:bg-neutral-900 dark:text-red-400 dark:ring-white/10"
+          role="alert"
+        >
+          {"Couldn't search right now"}
+        </p>
       )}
     </div>
   );
