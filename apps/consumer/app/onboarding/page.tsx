@@ -138,7 +138,7 @@ export default function OnboardingPage() {
         </div>
       </div>
 
-      <nav aria-label="Carousel navigation" className="flex items-center justify-between gap-4 p-6">
+      <nav aria-label="Carousel navigation" className="flex flex-wrap items-center justify-between gap-4 p-6">
         <button
           type="button"
           onClick={prev}
@@ -148,22 +148,6 @@ export default function OnboardingPage() {
         >
           &larr; Back
         </button>
-
-        <div className="flex items-center gap-2" role="tablist" aria-label="Slides">
-          {SLIDES.map((slide, i) => (
-            <button
-              key={slide.id}
-              type="button"
-              role="tab"
-              aria-selected={i === index}
-              aria-label={`Go to slide ${i + 1}: ${slide.title}`}
-              onClick={() => goTo(i)}
-              className={`h-2.5 rounded-full transition-all motion-reduce:transition-none ${
-                i === index ? "w-6 bg-primary-500" : "w-2.5 bg-primary-500/30"
-              }`}
-            />
-          ))}
-        </div>
 
         {isLast ? (
           <button
@@ -183,6 +167,31 @@ export default function OnboardingPage() {
             Next
           </button>
         )}
+
+        <div
+          className="order-last flex w-full items-center justify-center gap-2"
+          role="tablist"
+          aria-label="Slides"
+        >
+          {SLIDES.map((slide, i) => (
+            <button
+              key={slide.id}
+              type="button"
+              role="tab"
+              aria-selected={i === index}
+              aria-label={`Go to slide ${i + 1}: ${slide.title}`}
+              onClick={() => goTo(i)}
+              className="flex min-h-touch min-w-touch items-center justify-center"
+            >
+              <span
+                aria-hidden="true"
+                className={`h-2.5 rounded-full transition-all motion-reduce:transition-none ${
+                  i === index ? "w-6 bg-primary-500" : "w-2.5 bg-primary-500/30"
+                }`}
+              />
+            </button>
+          ))}
+        </div>
       </nav>
     </main>
   );

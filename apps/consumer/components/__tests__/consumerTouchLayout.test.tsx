@@ -129,10 +129,16 @@ describe("CT-2 representative standard actions use min-h-touch", () => {
 
   it("onboarding carousel actions", () => {
     const src = read(ONBOARDING);
-    expect(countOf(src, "min-h-touch")).toBe(4);
+    // Source literals: 4 controls (Skip/Back/Next/Get Started) + 1 dot template.
+    // The dot template renders 3 buttons via SLIDES.map, so it contributes one
+    // literal even though the runtime produces three 44x44 targets.
+    expect(countOf(src, "min-h-touch")).toBe(5);
+    expect(countOf(src, "min-w-touch")).toBe(1);
     expect(src).toContain("min-h-touch rounded-full px-4 py-2 text-sm font-semibold text-primary-600");
     expect(src).toContain("min-h-touch rounded-full border border-primary-500/30 px-5 py-2.5");
     expect(countOf(src, "min-h-touch rounded-full bg-primary-500 px-5 py-2.5 text-sm font-bold")).toBe(2);
+    // The pagination dot template carries both 44px utilities.
+    expect(countOf(src, "flex min-h-touch min-w-touch items-center justify-center")).toBe(1);
   });
 
   it("order history + profile + error/not-found actions", () => {
@@ -224,19 +230,38 @@ describe("CT-4 GiftSuccess inline prose URL remains excluded", () => {
   });
 });
 
-describe("CT-5 onboarding pagination dot remains unchanged / deferred", () => {
-  it("leaves the dot without touch utilities and off the 4 migrated controls", () => {
+describe("CT-5 onboarding pagination dots expose a 44x44 hit box with preserved visuals", () => {
+  it("wraps each decorative dot in a 44x44 button without overlapping hit regions", () => {
     const src = read(ONBOARDING);
-    expect(src).toContain("h-2.5 rounded-full transition-all motion-reduce:transition-none");
-    const dotLine = src
-      .split("\n")
-      .find((line) => line.includes("h-2.5 rounded-full transition-all"));
-    expect(dotLine ?? "").not.toContain("min-h-touch");
-    expect(dotLine ?? "").not.toContain("min-w-touch");
 
-    // Exactly the four carousel controls were normalized; the dot was not.
-    expect(countOf(src, "min-h-touch")).toBe(4);
-    expect(countOf(src, "min-w-touch")).toBe(0);
+    // One dot template inside SLIDES.map produces the three tab buttons, each an
+    // outer hit box carrying both 44px utilities.
+    expect(countOf(src, 'role="tab"')).toBe(1);
+    expect(src).toContain("SLIDES.map((slide, i) => (");
+    expect(countOf(src, "flex min-h-touch min-w-touch items-center justify-center")).toBe(1);
+    expect(countOf(src, "min-w-touch")).toBe(1);
+
+    // Visual geometry is preserved on a decorative, aria-hidden inner span.
+    expect(src).toContain('aria-hidden="true"');
+    expect(src).toContain("h-2.5 rounded-full transition-all motion-reduce:transition-none");
+    expect(src).toContain('i === index ? "w-6 bg-primary-500" : "w-2.5 bg-primary-500/30"');
+  });
+
+  it("retains the tablist semantics and goTo handler contract", () => {
+    const src = read(ONBOARDING);
+    expect(src).toContain('role="tablist"');
+    expect(src).toContain('aria-label="Slides"');
+    expect(src).toContain("aria-selected={i === index}");
+    expect(src).toContain("onClick={() => goTo(i)}");
+    expect(src).toContain("`Go to slide ${i + 1}: ${slide.title}`");
+  });
+
+  it("protects the bounded two-row layout amendment (dots own full-width row)", () => {
+    const src = read(ONBOARDING);
+    // Nav wraps instead of forcing the dots to compete with Back/Next on one row.
+    expect(src).toContain("flex flex-wrap items-center justify-between gap-4 p-6");
+    // Dots take their own full-width, centered row after Back/Next/Get Started.
+    expect(src).toContain("order-last flex w-full items-center justify-center gap-2");
   });
 });
 
