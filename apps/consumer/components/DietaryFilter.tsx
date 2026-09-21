@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { filterMenuByDietary, type MenuItem } from "@/lib/api";
 
 const DIETARY_TAGS = ["VEG", "JAIN"] as const;
@@ -14,21 +14,42 @@ export function DietaryFilter({
 }) {
   const [selected, setSelected] = useState<readonly string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+  // Monotonic request version: only the latest toggle may apply results,
+  // errors, or loading transitions; older in-flight responses are ignored.
+  const requestVersionRef = useRef(0);
 
   async function toggle(tag: string) {
     const next = selected.includes(tag)
       ? selected.filter((t) => t !== tag)
       : [...selected, tag];
     setSelected(next);
-    setLoading(true);
-    try {
-      const items =
-        next.length > 0 ? await filterMenuByDietary([...next]) : [];
-      onResults(items);
-    } catch {
-      onResults([]);
-    } finally {
+
+    const version = ++requestVersionRef.current;
+
+    if (next.length === 0) {
+      // Clearing the filter invalidates any in-flight request and replaces the
+      // previous truthful results with an empty list (no network request).
       setLoading(false);
+      setError(false);
+      onResults([]);
+      return;
+    }
+
+    setLoading(true);
+    setError(false);
+    try {
+      const items = await filterMenuByDietary([...next]);
+      if (version !== requestVersionRef.current) return;
+      onResults(items);
+      setError(false);
+    } catch {
+      if (version !== requestVersionRef.current) return;
+      // Keep the previous truthful results instead of fabricating an empty
+      // filter result; surface a bounded local error.
+      setError(true);
+    } finally {
+      if (version === requestVersionRef.current) setLoading(false);
     }
   }
 
@@ -59,6 +80,11 @@ export function DietaryFilter({
       {loading && (
         <span className="text-xs text-primary-500" aria-live="polite">
           Filtering…
+        </span>
+      )}
+      {error && (
+        <span className="text-xs text-red-600 dark:text-red-400" role="alert">
+          {"Couldn't update filters"}
         </span>
       )}
     </div>

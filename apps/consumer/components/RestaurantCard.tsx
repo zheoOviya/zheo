@@ -6,7 +6,7 @@ import Link from "next/link";
 import { BrandImage } from "@/components/BrandImage";
 import { m } from "framer-motion";
 import { Badge, Sheet } from "@snakzap/ui";
-import type { Restaurant, MenuItem } from "@/lib/api";
+import { fetchRestaurantMenu, type Restaurant, type MenuItem } from "@/lib/api";
 import { useCartStore, type CartItem } from "@/lib/store";
 import { DEFAULT_ORIGIN, formatDistanceKm, haversineKm } from "@/lib/geo";
 import toast from "react-hot-toast";
@@ -20,6 +20,7 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [loadingMenu, setLoadingMenu] = useState(false);
+  const [menuError, setMenuError] = useState<string | null>(null);
   const addItem = useCartStore((s) => s.addItem);
 
   const isOpen = restaurant.is_active;
@@ -31,23 +32,25 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
       ? formatDistanceKm(haversineKm(DEFAULT_ORIGIN, { lat: restaurant.lat, lng: restaurant.lng }))
       : null;
 
-  async function openQuickAdd() {
+  async function loadMenu() {
+    setLoadingMenu(true);
+    setMenuError(null);
+    try {
+      const items = await fetchRestaurantMenu(restaurant.id);
+      setMenuItems(items.slice(0, 5));
+    } catch {
+      // Distinguish a genuine load failure from a truly empty menu so the
+      // sheet never fabricates "No items available" on error.
+      setMenuError("Couldn't load menu");
+    } finally {
+      setLoadingMenu(false);
+    }
+  }
+
+  function openQuickAdd() {
     setQuickAddOpen(true);
     if (menuItems.length > 0) return;
-    setLoadingMenu(true);
-    try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
-      const res = await fetch(`${API_BASE}/api/v1/restaurants/${restaurant.id}/menu`, {
-        cache: "no-store",
-      });
-      const body = await res.json();
-      if (body.success) {
-        setMenuItems(body.data.slice(0, 5));
-      }
-    } catch {
-      // silent
-    }
-    setLoadingMenu(false);
+    void loadMenu();
   }
 
   function handleQuickAdd(item: MenuItem) {
@@ -158,6 +161,20 @@ export function RestaurantCard({ restaurant, index }: RestaurantCardProps) {
                 className="h-16 animate-skeleton-teal rounded-lg bg-primary-100 dark:bg-primary-900/30"
               />
             ))}
+          </div>
+        ) : menuError ? (
+          <div className="py-8 text-center">
+            <p role="alert" className="text-sm text-neutral-500">
+              {"Couldn't load menu"}
+            </p>
+            <button
+              type="button"
+              onClick={() => void loadMenu()}
+              disabled={loadingMenu}
+              className="btn-outline mt-3"
+            >
+              Try again
+            </button>
           </div>
         ) : menuItems.length === 0 ? (
           <p className="py-8 text-center text-sm text-neutral-500">No items available</p>
