@@ -32,9 +32,9 @@ export function TrendingCarousel() {
       .then((res) => {
         if (!cancelled) setDishes(res.trending);
       })
-      .catch((err: unknown) => {
+      .catch(() => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load");
+          setError("Couldn't load trending dishes");
         }
       });
     return () => {
@@ -51,7 +51,12 @@ export function TrendingCarousel() {
             <h2 className="section-title">Trending Now</h2>
           </div>
         </div>
-        <p className="surface-card p-3 text-sm text-red-600 dark:text-red-400">{error}</p>
+        <p
+          role="alert"
+          className="surface-card p-3 text-sm text-red-600 dark:text-red-400"
+        >
+          {error}
+        </p>
       </section>
     );
   }
@@ -83,9 +88,10 @@ export function TrendingCarousel() {
         <m.p
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
+          aria-live="polite"
           className="rounded-xl bg-white dark:bg-neutral-900 p-4 text-sm text-neutral-400 dark:text-neutral-500 shadow-elevation-1"
         >
-          No trending dishes in the last hour yet. Order something tasty!
+          No trending dishes in the last hour yet
         </m.p>
       ) : (
         <ul className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 scrollbar-hide">
