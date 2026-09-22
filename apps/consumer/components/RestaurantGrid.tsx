@@ -20,7 +20,7 @@ export function RestaurantGrid({ restaurants }: RestaurantGridProps) {
           No restaurants available right now
         </p>
         <p className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
-          Check back soon — new places are joining SnakZap every week.
+          Check back soon.
         </p>
       </m.div>
     );
