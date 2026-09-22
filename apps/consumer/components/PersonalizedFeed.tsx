@@ -15,14 +15,16 @@ export function PersonalizedFeed() {
 
   useEffect(() => {
     let cancelled = false;
+    // A token/auth-state change starts a new request: clear prior request truth
+    // so a previous identity's feed or error cannot outlive its own request.
+    setFeed(null);
+    setError(null);
     fetchPersonalizedHomepage(accessToken ?? undefined)
       .then((res) => {
         if (!cancelled) setFeed(res);
       })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load");
-        }
+      .catch(() => {
+        if (!cancelled) setError("Couldn't load personalized picks");
       });
     return () => {
       cancelled = true;
@@ -44,7 +46,10 @@ export function PersonalizedFeed() {
       </div>
 
       {error ? (
-        <p className="rounded-xl bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-600 dark:text-red-400">
+        <p
+          role="alert"
+          className="rounded-xl bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-600 dark:text-red-400"
+        >
           {error}
         </p>
       ) : feed === null ? (
