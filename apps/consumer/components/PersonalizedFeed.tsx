@@ -31,6 +31,12 @@ export function PersonalizedFeed() {
     };
   }, [accessToken]);
 
+  // A successful feed with neither source is truthfully empty; a surprise-only
+  // response is not empty because the surprise card is a real pick.
+  const hasPicks =
+    feed !== null &&
+    (feed.personalized_restaurants.length > 0 || feed.surprise_restaurant !== null);
+
   return (
     <section aria-label="Personalized For You" className="mt-8">
       <div className="section-head">
@@ -61,6 +67,13 @@ export function PersonalizedFeed() {
             />
           ))}
         </div>
+      ) : !hasPicks ? (
+        <p
+          aria-live="polite"
+          className="rounded-xl bg-neutral-50 p-3 text-sm text-neutral-500 dark:bg-neutral-900/40 dark:text-neutral-400"
+        >
+          No personalized picks yet
+        </p>
       ) : (
         <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {feed.personalized_restaurants.map((pick, i) => (

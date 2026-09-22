@@ -75,6 +75,38 @@ const AUTH_FEED = feed("auth", "Auth Place", "ml_weighted");
 const FEED_A = feed("a", "Feed A");
 const FEED_B = feed("b", "Feed B");
 
+const SURPRISE_ONLY_FEED: PersonalizedHomepage = {
+  user_profile: {
+    is_cold_start: false,
+    past_order_count: 5,
+    inferred_dietary_tags: [],
+    strategy: "ml_weighted",
+  },
+  personalized_restaurants: [],
+  surprise_restaurant: {
+    restaurant: restaurant("surprise", "Surprise Place"),
+    reason: "Something new for you",
+    score: 0.5,
+  },
+};
+
+const BOTH_FEED: PersonalizedHomepage = {
+  user_profile: {
+    is_cold_start: false,
+    past_order_count: 9,
+    inferred_dietary_tags: [],
+    strategy: "ml_weighted",
+  },
+  personalized_restaurants: [
+    { restaurant: restaurant("pick", "Pick One"), reason: "Because you liked similar places", score: 0.9 },
+  ],
+  surprise_restaurant: {
+    restaurant: restaurant("surprise2", "Surprise Two"),
+    reason: "Something new for you",
+    score: 0.4,
+  },
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -360,13 +392,94 @@ describe("PersonalizedFeed token-transition truth", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("renders a valid empty success without loading or error", async () => {
+  it("renders truthful empty feedback for a valid empty success", async () => {
     feedMock.mockResolvedValue(EMPTY_FEED);
 
     const { container } = render(<PersonalizedFeed />);
 
     expect(await screen.findByText("Fresh picks")).toBeInTheDocument();
+    expect(screen.getByText("No personalized picks yet")).toBeInTheDocument();
     expect(skeletonCount(container)).toBe(0);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("marks the empty message as a polite live region", async () => {
+    feedMock.mockResolvedValue(EMPTY_FEED);
+
+    render(<PersonalizedFeed />);
+
+    const message = await screen.findByText("No personalized picks yet");
+    expect(message).toHaveAttribute("aria-live", "polite");
+    expect(message).not.toHaveAttribute("role", "alert");
+  });
+
+  it("does not show the empty copy while the initial request is loading", async () => {
+    const pending = deferred<PersonalizedHomepage>();
+    feedMock.mockReturnValueOnce(pending.promise);
+
+    render(<PersonalizedFeed />);
+
+    expect(screen.queryByText("No personalized picks yet")).not.toBeInTheDocument();
+
+    await act(async () => {
+      pending.resolve(ANON_FEED);
+    });
+  });
+
+  it("does not show the empty copy on failure", async () => {
+    feedMock.mockRejectedValue(new Error("boom"));
+
+    render(<PersonalizedFeed />);
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByText("No personalized picks yet")).not.toBeInTheDocument();
+  });
+
+  it("does not show the empty copy for a personalized-only success", async () => {
+    feedMock.mockResolvedValue(ANON_FEED);
+
+    render(<PersonalizedFeed />);
+
+    expect(await screen.findByText("Anon Place")).toBeInTheDocument();
+    expect(screen.queryByText("No personalized picks yet")).not.toBeInTheDocument();
+  });
+
+  it("renders the surprise card without the empty copy for a surprise-only feed", async () => {
+    feedMock.mockResolvedValue(SURPRISE_ONLY_FEED);
+
+    render(<PersonalizedFeed />);
+
+    expect(await screen.findByText("Surprise Place")).toBeInTheDocument();
+    expect(screen.getByText("Surprise")).toBeInTheDocument();
+    expect(screen.queryByText("No personalized picks yet")).not.toBeInTheDocument();
+  });
+
+  it("renders both card types without the empty copy", async () => {
+    feedMock.mockResolvedValue(BOTH_FEED);
+
+    render(<PersonalizedFeed />);
+
+    expect(await screen.findByText("Pick One")).toBeInTheDocument();
+    expect(screen.getByText("Surprise Two")).toBeInTheDocument();
+    expect(screen.queryByText("No personalized picks yet")).not.toBeInTheDocument();
+  });
+
+  it("does not transiently show the empty copy during a token-change load", async () => {
+    const second = deferred<PersonalizedHomepage>();
+    feedMock.mockResolvedValueOnce(FEED_A);
+    feedMock.mockReturnValueOnce(second.promise);
+
+    render(<PersonalizedFeed />);
+    expect(await screen.findByText("Feed A")).toBeInTheDocument();
+
+    act(() => {
+      useAuthStore.setState({ accessToken: "tok-b" });
+    });
+
+    expect(screen.queryByText("No personalized picks yet")).not.toBeInTheDocument();
+
+    await act(async () => {
+      second.resolve(FEED_B);
+    });
   });
 });
