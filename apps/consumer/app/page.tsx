@@ -10,19 +10,19 @@ import { BrandMark } from "@/components/AppHeader";
 
 export default async function HomePage() {
   let restaurants: Awaited<ReturnType<typeof fetchRestaurants>> = [];
-  let loadError = "";
+  let loadFailed = false;
 
   try {
     restaurants = await fetchRestaurants();
-  } catch (err) {
-    loadError = err instanceof Error ? err.message : "Failed to load restaurants";
+  } catch {
+    loadFailed = true;
   }
 
   const openCount = restaurants.filter((r) => r.is_active).length;
   const avgEta =
     restaurants.length > 0
       ? Math.round(restaurants.reduce((sum, r) => sum + r.pickup_eta_min, 0) / restaurants.length)
-      : 20;
+      : null;
 
   return (
     <main className="pb-2 pt-4">
@@ -68,20 +68,28 @@ export default async function HomePage() {
             </Link>
           </div>
           <dl className="mt-6 flex items-center gap-6 text-white">
-            <div>
-              <dt className="text-2xs font-semibold uppercase tracking-wider text-teal-200">
-                Open now
-              </dt>
-              <dd className="text-lg font-bold">{openCount}</dd>
-            </div>
-            <div aria-hidden="true" className="h-8 w-px bg-white/20" />
-            <div>
-              <dt className="text-2xs font-semibold uppercase tracking-wider text-teal-200">
-                Avg. pickup
-              </dt>
-              <dd className="text-lg font-bold">~{avgEta} min</dd>
-            </div>
-            <div aria-hidden="true" className="h-8 w-px bg-white/20" />
+            {!loadFailed && (
+              <>
+                <div>
+                  <dt className="text-2xs font-semibold uppercase tracking-wider text-teal-200">
+                    Open now
+                  </dt>
+                  <dd className="text-lg font-bold">{openCount}</dd>
+                </div>
+                <div aria-hidden="true" className="h-8 w-px bg-white/20" />
+              </>
+            )}
+            {!loadFailed && restaurants.length > 0 && (
+              <>
+                <div>
+                  <dt className="text-2xs font-semibold uppercase tracking-wider text-teal-200">
+                    Avg. pickup
+                  </dt>
+                  <dd className="text-lg font-bold">~{avgEta} min</dd>
+                </div>
+                <div aria-hidden="true" className="h-8 w-px bg-white/20" />
+              </>
+            )}
             <div>
               <dt className="text-2xs font-semibold uppercase tracking-wider text-teal-200">
                 Mode
@@ -105,13 +113,15 @@ export default async function HomePage() {
             <p className="section-eyebrow">For you</p>
             <h2 className="section-title">Restaurants near you</h2>
           </div>
-          <span className="text-xs font-medium text-neutral-400 dark:text-neutral-500">
-            {restaurants.length} available
-          </span>
+          {!loadFailed && (
+            <span className="text-xs font-medium text-neutral-400 dark:text-neutral-500">
+              {restaurants.length} available
+            </span>
+          )}
         </div>
-        {loadError ? (
+        {loadFailed ? (
           <p role="alert" className="surface-card mb-4 p-3 text-sm text-red-600 dark:text-red-400">
-            {loadError}. Please try again later.
+            {"Couldn't load restaurants. Please try again later."}
           </p>
         ) : (
           <RestaurantGrid restaurants={restaurants} />
