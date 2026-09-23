@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AccountEntry } from "./AccountEntry";
+import { SkipLink } from "./SkipLink";
 
 // ============================================
 // Global header shared by every protected page.
@@ -35,9 +36,15 @@ export function BrandMark() {
 
 export function AppHeader() {
   return (
-    <header className="mb-5 flex items-center justify-between">
-      <BrandMark />
-      <AccountEntry />
-    </header>
+    <>
+      <SkipLink />
+
+      <header className="mb-5 flex items-center justify-between">
+        <BrandMark />
+        <AccountEntry />
+      </header>
+
+      <div id="main-content" tabIndex={-1} />
+    </>
   );
 }

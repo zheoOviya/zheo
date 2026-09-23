@@ -7,6 +7,7 @@ import { PersonalizedFeed } from "@/components/PersonalizedFeed";
 import { TrendingCarousel } from "@/components/TrendingCarousel";
 import { AccountEntry } from "@/components/AccountEntry";
 import { BrandMark } from "@/components/AppHeader";
+import { SkipLink } from "@/components/SkipLink";
 
 export default async function HomePage() {
   let restaurants: Awaited<ReturnType<typeof fetchRestaurants>> = [];
@@ -26,6 +27,8 @@ export default async function HomePage() {
 
   return (
     <main className="pb-2 pt-4">
+      <SkipLink />
+
       <header className="mb-5 flex items-center justify-between">
         <BrandMark />
         <div className="flex items-center gap-2">
@@ -36,6 +39,8 @@ export default async function HomePage() {
           <AccountEntry />
         </div>
       </header>
+
+      <div id="main-content" tabIndex={-1} />
 
       <section className="hero-panel relative overflow-hidden rounded-3xl p-6 shadow-elevation-2 sm:p-8">
         <div aria-hidden="true" className="pointer-events-none absolute inset-0">

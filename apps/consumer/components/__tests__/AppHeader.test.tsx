@@ -126,3 +126,58 @@ describe("AppHeader", () => {
     });
   });
 });
+
+// CONSUMER_SKIP_LINK-A3 — shared header owns the bypass control and the
+// post-header target, so all AppHeader routes land after repeated chrome.
+describe("AppHeader skip-link bypass", () => {
+  beforeEach(() => {
+    setMatchMedia(false);
+    useAuthStore.setState({
+      accessToken: null,
+      user: null,
+      isAuthenticated: false,
+      refreshAccessToken: vi.fn().mockResolvedValue(false),
+      logout: vi.fn().mockResolvedValue(undefined),
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("exposes a skip link and exactly one post-header target", () => {
+    const { container } = render(<AppHeader />);
+    expect(screen.getByRole("link", { name: "Skip to main content" })).toBeDefined();
+    expect(container.querySelectorAll("#main-content")).toHaveLength(1);
+  });
+
+  it("targets tabIndex -1 without aria-hidden", () => {
+    const { container } = render(<AppHeader />);
+    const target = container.querySelector("#main-content") as HTMLElement;
+    expect(target.getAttribute("tabindex")).toBe("-1");
+    expect(target.hasAttribute("aria-hidden")).toBe(false);
+  });
+
+  it("orders skip link before header before target", () => {
+    const { container } = render(<AppHeader />);
+    const ordered = Array.from(
+      container.querySelectorAll("a.skip-link, header, #main-content"),
+    ).map((node) => (node as HTMLElement).id || node.tagName.toLowerCase());
+    expect(ordered).toEqual(["a", "header", "main-content"]);
+  });
+
+  it("moves focus to the target when the skip link is activated", () => {
+    const { container } = render(<AppHeader />);
+    const target = container.querySelector("#main-content") as HTMLElement;
+    fireEvent.click(screen.getByRole("link", { name: "Skip to main content" }));
+    expect(document.activeElement).toBe(target);
+  });
+
+  it("preserves the BrandMark class and aria-label contract", () => {
+    render(<AppHeader />);
+    const brand = screen.getByRole("link", { name: "SnakZap home" });
+    expect(brand).toHaveClass("flex", "min-h-touch", "items-center", "gap-2.5");
+    expect(brand.getAttribute("aria-label")).toBe("SnakZap home");
+  });
+});

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import { render, screen, within } from "@testing-library/react";
+import { render, fireEvent, screen, within } from "@testing-library/react";
 import HomePage from "./page";
 import { fetchRestaurants, type Restaurant } from "@/lib/api";
 
@@ -133,5 +133,40 @@ describe("HomePage restaurant fetch truth", () => {
     fetchRestaurantsMock.mockRejectedValue(new Error("boom"));
     await renderPage();
     expect(screen.getByText("Pickup")).toBeInTheDocument();
+  });
+});
+
+// CONSUMER_SKIP_LINK-A3 — home owns its inline header, so it repeats the
+// skip-link + post-header target contract locally.
+describe("HomePage skip-link bypass", () => {
+  it("renders a skip link before the home header and target", async () => {
+    fetchRestaurantsMock.mockResolvedValue([ACTIVE_A]);
+    const { container } = render(await HomePage());
+    const ordered = Array.from(
+      container.querySelectorAll("a.skip-link, header, #main-content"),
+    ).map((node) => (node as HTMLElement).id || node.tagName.toLowerCase());
+    expect(ordered).toEqual(["a", "header", "main-content"]);
+  });
+
+  it("renders exactly one #main-content target with tabIndex -1", async () => {
+    fetchRestaurantsMock.mockResolvedValue([ACTIVE_A]);
+    const { container } = render(await HomePage());
+    const targets = container.querySelectorAll("#main-content");
+    expect(targets).toHaveLength(1);
+    expect((targets[0] as HTMLElement).getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("does not create duplicate target ids", async () => {
+    fetchRestaurantsMock.mockResolvedValue([ACTIVE_A]);
+    const { container } = render(await HomePage());
+    expect(container.querySelectorAll("#main-content")).toHaveLength(1);
+  });
+
+  it("moves focus to the target when the skip link is activated", async () => {
+    fetchRestaurantsMock.mockResolvedValue([ACTIVE_A]);
+    const { container } = render(await HomePage());
+    const target = container.querySelector("#main-content") as HTMLElement;
+    fireEvent.click(screen.getByRole("link", { name: "Skip to main content" }));
+    expect(document.activeElement).toBe(target);
   });
 });
