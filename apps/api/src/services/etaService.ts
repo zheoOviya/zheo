@@ -3,8 +3,11 @@ import { config } from "../config";
 // ============================================
 // P04 Traffic-based ETA (pickup enhancements)
 // getTrafficETA(origin_lat, origin_lng, destination_lat, destination_lng)
-// Calls the Google Distance Matrix API when GOOGLE_MAPS_API_KEY is set;
-// otherwise returns a traffic-aware mock so the demo is fully offline.
+// Calls the Google Distance Matrix API when GOOGLE_MAPS_API_KEY is set.
+// When the key is absent, the provider errors, the payload is malformed, or
+// the provider times out, it returns an explicit heuristic estimate. A
+// provider response is only ever reported as `source: "google"` when the
+// duration and distance are both present and finite.
 // ============================================
 
 export interface TrafficEta {
@@ -15,7 +18,7 @@ export interface TrafficEta {
   eta_seconds: number;
   duration_text: string;
   distance_km: number;
-  source: "google" | "mock";
+  source: "google" | "heuristic";
 }
 
 export function haversineKm(
@@ -47,7 +50,12 @@ export function istTrafficFactor(date: Date = new Date()): number {
 
 const MOCK_AVG_KMH = 25;
 
-function mockEta(
+// Bounded upstream budget (ETA_PRODUCTION_TRUTH-W1): an unbounded provider
+// request could hold the route open indefinitely. On timeout the service
+// aborts and degrades to the heuristic estimate. No retry, no cache.
+const GOOGLE_ETA_TIMEOUT_MS = 4000;
+
+function heuristicEta(
   originLat: number,
   originLng: number,
   destLat: number,
@@ -66,7 +74,7 @@ function mockEta(
     eta_seconds: etaSeconds,
     duration_text: `${minutes} mins`,
     distance_km: Math.round(distanceKm * 10) / 10,
-    source: "mock",
+    source: "heuristic",
   };
 }
 
@@ -96,7 +104,7 @@ export class EtaService {
     destinationLng: number,
   ): Promise<TrafficEta> {
     if (!this.apiKey) {
-      return mockEta(originLat, originLng, destinationLat, destinationLng);
+      return heuristicEta(originLat, originLng, destinationLat, destinationLng);
     }
     try {
       return await this.googleEta(
@@ -106,7 +114,10 @@ export class EtaService {
         destinationLng,
       );
     } catch {
-      return mockEta(originLat, originLng, destinationLat, destinationLng);
+      // Network/HTTP/status/payload/timeout failures all degrade to the
+      // explicit heuristic estimate; none of them may masquerade as a
+      // provider-backed (`source: "google"`) ETA.
+      return heuristicEta(originLat, originLng, destinationLat, destinationLng);
     }
   }
 
@@ -124,32 +135,59 @@ export class EtaService {
     url.searchParams.set("units", "metric");
     url.searchParams.set("key", this.apiKey);
 
-    const res = await this.fetchImpl(url.toString());
-    if (!res.ok) {
-      throw new Error(`Distance Matrix API responded ${res.status}`);
-    }
-    const data = (await res.json()) as DistanceMatrixResponse;
-    if (data.status !== "OK" || !data.rows?.[0]?.elements?.[0]) {
-      throw new Error(`Distance Matrix API status ${data.status}`);
-    }
-    const element = data.rows[0].elements[0]!;
-    if (element.status !== "OK") {
-      throw new Error(`Distance Matrix element status ${element.status}`);
-    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), GOOGLE_ETA_TIMEOUT_MS);
+    try {
+      const res = await this.fetchImpl(url.toString(), {
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        throw new Error(`Distance Matrix API responded ${res.status}`);
+      }
+      const data = (await res.json()) as DistanceMatrixResponse;
+      if (data.status !== "OK" || !data.rows?.[0]?.elements?.[0]) {
+        throw new Error(`Distance Matrix API status ${data.status}`);
+      }
+      const element = data.rows[0].elements[0]!;
+      if (element.status !== "OK") {
+        throw new Error(`Distance Matrix element status ${element.status}`);
+      }
 
-    const duration = element.duration_in_traffic ?? element.duration;
-    const etaSeconds = duration?.value ?? 0;
-    const minutes = Math.max(1, Math.round(etaSeconds / 60));
-    return {
-      origin_lat: originLat,
-      origin_lng: originLng,
-      destination_lat: destinationLat,
-      destination_lng: destinationLng,
-      eta_seconds: etaSeconds,
-      duration_text: `${minutes} mins`,
-      distance_km: Math.round(((element.distance?.value ?? 0) / 1000) * 10) / 10,
-      source: "google",
-    };
+      const duration = element.duration_in_traffic ?? element.duration;
+      if (
+        !duration ||
+        typeof duration.value !== "number" ||
+        !Number.isFinite(duration.value) ||
+        duration.value <= 0
+      ) {
+        throw new Error("Distance Matrix API returned no valid duration");
+      }
+      if (
+        !element.distance ||
+        typeof element.distance.value !== "number" ||
+        !Number.isFinite(element.distance.value) ||
+        element.distance.value < 0
+      ) {
+        throw new Error("Distance Matrix API returned no valid distance");
+      }
+
+      const etaSeconds = duration.value;
+      const minutes = Math.max(1, Math.round(etaSeconds / 60));
+      return {
+        origin_lat: originLat,
+        origin_lng: originLng,
+        destination_lat: destinationLat,
+        destination_lng: destinationLng,
+        eta_seconds: etaSeconds,
+        duration_text: `${minutes} mins`,
+        distance_km: Math.round((element.distance.value / 1000) * 10) / 10,
+        source: "google",
+      };
+    } finally {
+      // The timer is always cleared, so a late abort can never fire after a
+      // successful response and disturb the returned result.
+      clearTimeout(timeout);
+    }
   }
 }
 

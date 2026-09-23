@@ -128,6 +128,22 @@ function deferred<T>() {
 const restaurant = (id: string): Restaurant =>
   ({ id, lat: 19.07, lng: 72.87 }) as unknown as Restaurant;
 
+const restaurantWithCoords = (
+  id: string,
+  lat: number,
+  lng: number,
+): Restaurant => ({ id, lat, lng }) as unknown as Restaurant;
+
+const restaurantWithoutCoords = (id: string): Restaurant =>
+  ({ id, lat: undefined, lng: undefined }) as unknown as Restaurant;
+
+function stubGeolocation(value: unknown) {
+  Object.defineProperty(navigator, "geolocation", {
+    configurable: true,
+    value,
+  });
+}
+
 const stampCard: StampCard = {
   user_id: "u1",
   restaurant_id: "r1",
@@ -142,7 +158,7 @@ const trafficEta: TrafficEta = {
   eta_seconds: 300,
   duration_text: "5 min",
   distance_km: 1,
-  source: "mock",
+  source: "heuristic",
 };
 
 const notify = (status: string) =>
@@ -163,6 +179,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  delete (navigator as { geolocation?: unknown }).geolocation;
 });
 
 describe("order detail freshness", () => {
@@ -473,5 +490,200 @@ describe("order detail freshness", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
     await act(async () => {});
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("eta truth and location disclosure", () => {
+  function geoSuccess() {
+    stubGeolocation({
+      getCurrentPosition: (success: (pos: unknown) => void) =>
+        success({ coords: { latitude: 10, longitude: 20 } }),
+    });
+  }
+
+  function geoError(code: number) {
+    stubGeolocation({
+      getCurrentPosition: (_success: unknown, error: (err: unknown) => void) =>
+        error({ code }),
+    });
+  }
+
+  it("shows a Live traffic badge and live copy for a google-source ETA", async () => {
+    fetchMock.mockResolvedValue(success(orderData()));
+    vi.mocked(fetchRestaurants).mockResolvedValue([restaurant("r1")]);
+    vi.mocked(fetchTrafficEta).mockResolvedValue({
+      ...trafficEta,
+      source: "google",
+    });
+    geoSuccess();
+
+    render(<OrderTrackingPage />);
+
+    expect(await screen.findByText("Live traffic")).toBeInTheDocument();
+    expect(
+      screen.getByText("Based on live traffic from Google Maps."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows an Estimated badge and truthful heuristic copy for a heuristic ETA", async () => {
+    fetchMock.mockResolvedValue(success(orderData()));
+    vi.mocked(fetchRestaurants).mockResolvedValue([restaurant("r1")]);
+    geoSuccess();
+
+    render(<OrderTrackingPage />);
+
+    expect(await screen.findByText("Estimated")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Estimated travel time based on distance and typical traffic.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("does not disclose an approximate location when geolocation succeeds", async () => {
+    fetchMock.mockResolvedValue(success(orderData()));
+    vi.mocked(fetchRestaurants).mockResolvedValue([restaurant("r1")]);
+    geoSuccess();
+
+    render(<OrderTrackingPage />);
+    await screen.findByText("Estimated");
+
+    expect(
+      screen.queryByText("Using an approximate starting location."),
+    ).toBeNull();
+  });
+
+  it("discloses an approximate location when geolocation is denied", async () => {
+    fetchMock.mockResolvedValue(success(orderData()));
+    vi.mocked(fetchRestaurants).mockResolvedValue([restaurant("r1")]);
+    geoError(1);
+
+    render(<OrderTrackingPage />);
+
+    expect(
+      await screen.findByText("Using an approximate starting location."),
+    ).toBeInTheDocument();
+  });
+
+  it("discloses an approximate location when geolocation errors or times out", async () => {
+    fetchMock.mockResolvedValue(success(orderData()));
+    vi.mocked(fetchRestaurants).mockResolvedValue([restaurant("r1")]);
+    geoError(3);
+
+    render(<OrderTrackingPage />);
+
+    expect(
+      await screen.findByText("Using an approximate starting location."),
+    ).toBeInTheDocument();
+  });
+
+  it("discloses an approximate location when geolocation is unavailable", async () => {
+    fetchMock.mockResolvedValue(success(orderData()));
+    vi.mocked(fetchRestaurants).mockResolvedValue([restaurant("r1")]);
+    stubGeolocation(undefined);
+
+    render(<OrderTrackingPage />);
+
+    expect(
+      await screen.findByText("Using an approximate starting location."),
+    ).toBeInTheDocument();
+  });
+
+  it("attempts the ETA request when the restaurant latitude is 0", async () => {
+    fetchMock.mockResolvedValue(success(orderData()));
+    vi.mocked(fetchRestaurants).mockResolvedValue([
+      restaurantWithCoords("r1", 0, 72.87),
+    ]);
+    geoSuccess();
+
+    render(<OrderTrackingPage />);
+
+    await waitFor(() => expect(fetchTrafficEta).toHaveBeenCalledTimes(1));
+  });
+
+  it("attempts the ETA request when the restaurant longitude is 0", async () => {
+    fetchMock.mockResolvedValue(success(orderData()));
+    vi.mocked(fetchRestaurants).mockResolvedValue([
+      restaurantWithCoords("r1", 19.07, 0),
+    ]);
+    geoSuccess();
+
+    render(<OrderTrackingPage />);
+
+    await waitFor(() => expect(fetchTrafficEta).toHaveBeenCalledTimes(1));
+  });
+
+  it("preserves the ETA-unavailable message when the ETA fetch fails", async () => {
+    fetchMock.mockResolvedValue(success(orderData()));
+    vi.mocked(fetchRestaurants).mockResolvedValue([restaurant("r1")]);
+    vi.mocked(fetchTrafficEta).mockRejectedValue(new Error("eta down"));
+    geoSuccess();
+
+    render(<OrderTrackingPage />);
+
+    expect(
+      await screen.findByText("ETA unavailable for this restaurant."),
+    ).toBeInTheDocument();
+  });
+
+  it("clears the fallback disclosure when a later restaurant uses a real origin", async () => {
+    fetchMock
+      .mockResolvedValueOnce(success(orderData()))
+      .mockResolvedValue(
+        success(orderData({ status: "PREPARING", restaurant_id: "r2" })),
+      );
+    vi.mocked(fetchRestaurants).mockResolvedValue([
+      restaurant("r1"),
+      restaurant("r2"),
+    ]);
+    geoError(1);
+
+    render(<OrderTrackingPage />);
+
+    expect(
+      await screen.findByText("Using an approximate starting location."),
+    ).toBeInTheDocument();
+
+    geoSuccess();
+    await notify("PREPARING");
+
+    await waitFor(() => expect(fetchTrafficEta).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Using an approximate starting location."),
+      ).toBeNull(),
+    );
+  });
+
+  it("keeps the fallback disclosure hidden when the next restaurant has invalid coordinates", async () => {
+    fetchMock
+      .mockResolvedValueOnce(success(orderData()))
+      .mockResolvedValue(
+        success(orderData({ status: "PREPARING", restaurant_id: "r2" })),
+      );
+    vi.mocked(fetchRestaurants).mockResolvedValue([
+      restaurant("r1"),
+      restaurantWithoutCoords("r2"),
+    ]);
+    vi.mocked(fetchTrafficEta).mockRejectedValue(new Error("eta down"));
+    geoError(1);
+
+    render(<OrderTrackingPage />);
+
+    expect(
+      await screen.findByText("Using an approximate starting location."),
+    ).toBeInTheDocument();
+
+    await notify("PREPARING");
+
+    await waitFor(() => expect(fetchRestaurants).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Using an approximate starting location."),
+      ).toBeNull(),
+    );
+    expect(
+      screen.getByText("ETA unavailable for this restaurant."),
+    ).toBeInTheDocument();
   });
 });

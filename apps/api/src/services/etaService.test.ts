@@ -41,12 +41,12 @@ describe("EtaService", () => {
     vi.useRealTimers();
   });
 
-  describe("mock mode (no API key)", () => {
+  describe("heuristic mode (no API key)", () => {
     beforeEach(() => {
       vi.useFakeTimers();
     });
 
-    it("returns a mock ETA proportional to distance, source=mock", async () => {
+    it("returns a heuristic ETA proportional to distance, source=heuristic", async () => {
       vi.setSystemTime(new Date("2026-08-05T01:00:00Z")); // off-peak IST
       const service = new EtaService("", "http://unused");
       const eta = await service.getTrafficETA(
@@ -56,7 +56,7 @@ describe("EtaService", () => {
         DEST.lng,
       );
 
-      expect(eta.source).toBe("mock");
+      expect(eta.source).toBe("heuristic");
       expect(eta.distance_km).toBeGreaterThan(3);
       expect(eta.distance_km).toBeLessThan(6);
       expect(eta.eta_seconds).toBeGreaterThan(0);
@@ -127,7 +127,7 @@ describe("EtaService", () => {
       expect(url).toContain("key=AIza-test-key");
     });
 
-    it("falls back to mock when the API errors", async () => {
+    it("falls back to heuristic when the API errors", async () => {
       const fakeFetch = vi.fn(async (_url: string) => {
         throw new Error("network down");
       });
@@ -138,7 +138,258 @@ describe("EtaService", () => {
         DEST.lat,
         DEST.lng,
       );
-      expect(eta.source).toBe("mock");
+      expect(eta.source).toBe("heuristic");
+    });
+
+    it("falls back to heuristic when duration is missing", async () => {
+      const fakeFetch = vi.fn(async (_url: string) => ({
+        ok: true,
+        json: async () => ({
+          status: "OK",
+          rows: [
+            {
+              elements: [
+                {
+                  status: "OK",
+                  distance: { value: 5000, text: "5.0 km" },
+                },
+              ],
+            },
+          ],
+        }),
+      }));
+      const service = new EtaService("AIza-test-key", "https://maps.example/distancematrix/json", fakeFetch as unknown as typeof fetch);
+      const eta = await service.getTrafficETA(
+        ORIGIN.lat,
+        ORIGIN.lng,
+        DEST.lat,
+        DEST.lng,
+      );
+      expect(eta.source).toBe("heuristic");
+    });
+
+    it("falls back to heuristic when distance is missing", async () => {
+      const fakeFetch = vi.fn(async (_url: string) => ({
+        ok: true,
+        json: async () => ({
+          status: "OK",
+          rows: [
+            {
+              elements: [
+                {
+                  status: "OK",
+                  duration: { value: 780, text: "13 mins" },
+                },
+              ],
+            },
+          ],
+        }),
+      }));
+      const service = new EtaService("AIza-test-key", "https://maps.example/distancematrix/json", fakeFetch as unknown as typeof fetch);
+      const eta = await service.getTrafficETA(
+        ORIGIN.lat,
+        ORIGIN.lng,
+        DEST.lat,
+        DEST.lng,
+      );
+      expect(eta.source).toBe("heuristic");
+    });
+
+    it("falls back to heuristic when the duration is zero", async () => {
+      const fakeFetch = vi.fn(async (_url: string) => ({
+        ok: true,
+        json: async () => ({
+          status: "OK",
+          rows: [
+            {
+              elements: [
+                {
+                  status: "OK",
+                  duration: { value: 0, text: "0 mins" },
+                  distance: { value: 5000, text: "5.0 km" },
+                },
+              ],
+            },
+          ],
+        }),
+      }));
+      const service = new EtaService("AIza-test-key", "https://maps.example/distancematrix/json", fakeFetch as unknown as typeof fetch);
+      const eta = await service.getTrafficETA(
+        ORIGIN.lat,
+        ORIGIN.lng,
+        DEST.lat,
+        DEST.lng,
+      );
+      expect(eta.source).toBe("heuristic");
+    });
+
+    it("falls back to heuristic when the duration is not finite", async () => {
+      const fakeFetch = vi.fn(async (_url: string) => ({
+        ok: true,
+        json: async () => ({
+          status: "OK",
+          rows: [
+            {
+              elements: [
+                {
+                  status: "OK",
+                  duration: { value: Number.POSITIVE_INFINITY },
+                  distance: { value: 5000, text: "5.0 km" },
+                },
+              ],
+            },
+          ],
+        }),
+      }));
+      const service = new EtaService("AIza-test-key", "https://maps.example/distancematrix/json", fakeFetch as unknown as typeof fetch);
+      const eta = await service.getTrafficETA(
+        ORIGIN.lat,
+        ORIGIN.lng,
+        DEST.lat,
+        DEST.lng,
+      );
+      expect(eta.source).toBe("heuristic");
+    });
+
+    it("falls back to heuristic when the element status is not OK", async () => {
+      const fakeFetch = vi.fn(async (_url: string) => ({
+        ok: true,
+        json: async () => ({
+          status: "OK",
+          rows: [{ elements: [{ status: "ZERO_RESULTS" }] }],
+        }),
+      }));
+      const service = new EtaService("AIza-test-key", "https://maps.example/distancematrix/json", fakeFetch as unknown as typeof fetch);
+      const eta = await service.getTrafficETA(
+        ORIGIN.lat,
+        ORIGIN.lng,
+        DEST.lat,
+        DEST.lng,
+      );
+      expect(eta.source).toBe("heuristic");
+    });
+
+    it("falls back to heuristic when the top-level status is not OK", async () => {
+      const fakeFetch = vi.fn(async (_url: string) => ({
+        ok: true,
+        json: async () => ({ status: "REQUEST_DENIED", rows: [] }),
+      }));
+      const service = new EtaService("AIza-test-key", "https://maps.example/distancematrix/json", fakeFetch as unknown as typeof fetch);
+      const eta = await service.getTrafficETA(
+        ORIGIN.lat,
+        ORIGIN.lng,
+        DEST.lat,
+        DEST.lng,
+      );
+      expect(eta.source).toBe("heuristic");
+    });
+
+    it("falls back to heuristic on a non-OK HTTP response", async () => {
+      const fakeFetch = vi.fn(async (_url: string) => ({
+        ok: false,
+        status: 503,
+        json: async () => ({}),
+      }));
+      const service = new EtaService("AIza-test-key", "https://maps.example/distancematrix/json", fakeFetch as unknown as typeof fetch);
+      const eta = await service.getTrafficETA(
+        ORIGIN.lat,
+        ORIGIN.lng,
+        DEST.lat,
+        DEST.lng,
+      );
+      expect(eta.source).toBe("heuristic");
+    });
+
+    it("aborts the provider request and falls back to heuristic on timeout", async () => {
+      vi.useFakeTimers();
+      try {
+        const fakeFetch = vi.fn((_url: string, init?: RequestInit) => {
+          return new Promise<never>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new Error("aborted")),
+            );
+          });
+        });
+        const service = new EtaService("AIza-test-key", "https://maps.example/distancematrix/json", fakeFetch as unknown as typeof fetch);
+        const pending = service.getTrafficETA(
+          ORIGIN.lat,
+          ORIGIN.lng,
+          DEST.lat,
+          DEST.lng,
+        );
+        await vi.advanceTimersByTimeAsync(4000);
+        const eta = await pending;
+        expect(eta.source).toBe("heuristic");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("passes an AbortSignal and clears the timeout on success", async () => {
+      vi.useFakeTimers();
+      try {
+        const fakeFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+          expect(init?.signal).toBeInstanceOf(AbortSignal);
+          return {
+            ok: true,
+            json: async () => ({
+              status: "OK",
+              rows: [
+                {
+                  elements: [
+                    {
+                      status: "OK",
+                      duration_in_traffic: { value: 780, text: "13 mins" },
+                      distance: { value: 5000, text: "5.0 km" },
+                    },
+                  ],
+                },
+              ],
+            }),
+          };
+        });
+        const service = new EtaService("AIza-test-key", "https://maps.example/distancematrix/json", fakeFetch as unknown as typeof fetch);
+        const eta = await service.getTrafficETA(
+          ORIGIN.lat,
+          ORIGIN.lng,
+          DEST.lat,
+          DEST.lng,
+        );
+        expect(eta.source).toBe("google");
+        await vi.advanceTimersByTimeAsync(4000);
+        expect(eta.source).toBe("google");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("accepts a zero distance from the provider", async () => {
+      const fakeFetch = vi.fn(async (_url: string) => ({
+        ok: true,
+        json: async () => ({
+          status: "OK",
+          rows: [
+            {
+              elements: [
+                {
+                  status: "OK",
+                  duration_in_traffic: { value: 60, text: "1 min" },
+                  distance: { value: 0, text: "0.0 km" },
+                },
+              ],
+            },
+          ],
+        }),
+      }));
+      const service = new EtaService("AIza-test-key", "https://maps.example/distancematrix/json", fakeFetch as unknown as typeof fetch);
+      const eta = await service.getTrafficETA(
+        ORIGIN.lat,
+        ORIGIN.lng,
+        DEST.lat,
+        DEST.lng,
+      );
+      expect(eta.source).toBe("google");
+      expect(eta.distance_km).toBe(0);
     });
   });
 });

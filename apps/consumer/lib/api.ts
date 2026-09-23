@@ -123,7 +123,7 @@ export interface TrafficEta {
   eta_seconds: number;
   duration_text: string;
   distance_km: number;
-  source: "google" | "mock";
+  source: "google" | "heuristic";
 }
 
 async function authedFetcher<T>(path: string, token: string, init?: RequestInit): Promise<T> {

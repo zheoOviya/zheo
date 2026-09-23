@@ -54,6 +54,7 @@ function TrackingContent() {
 
   const [eta, setEta] = useState<TrafficEta | null>(null);
   const [etaLoading, setEtaLoading] = useState(true);
+  const [usedFallbackLocation, setUsedFallbackLocation] = useState(false);
   const [stampCard, setStampCard] = useState<StampCard | null>(null);
 
   // Single-flight order loader shared by the initial load and the WebSocket
@@ -148,33 +149,53 @@ function TrackingContent() {
   useEffect(() => {
     const restaurantId = order?.restaurant_id;
     if (!restaurantId) return;
+    // Reset the previous lifecycle's origin disclosure before any async work,
+    // so a stale fallback note can never leak into a new restaurant context.
+    setUsedFallbackLocation(false);
     let cancelled = false;
     (async () => {
       try {
         const restaurants = await fetchRestaurants();
         const restaurant = restaurants.find((r) => r.id === restaurantId);
-        if (!restaurant?.lat || !restaurant.lng) {
+        const destinationLat = restaurant?.lat;
+        const destinationLng = restaurant?.lng;
+        if (
+          typeof destinationLat !== "number" ||
+          !Number.isFinite(destinationLat) ||
+          typeof destinationLng !== "number" ||
+          !Number.isFinite(destinationLng)
+        ) {
           setEtaLoading(false);
           return;
         }
-        const origin = await new Promise<{ lat: number; lng: number }>((resolve) => {
+        // Geolocation failure/timeout/unavailability must never silently look
+        // like a precise origin, so whether the fallback was used is tracked
+        // explicitly and surfaced to the user.
+        const origin = await new Promise<{
+          location: { lat: number; lng: number };
+          usedFallback: boolean;
+        }>((resolve) => {
           if (typeof navigator === "undefined" || !navigator.geolocation) {
-            resolve(FALLBACK_LOCATION);
+            resolve({ location: FALLBACK_LOCATION, usedFallback: true });
             return;
           }
           navigator.geolocation.getCurrentPosition(
             (pos) =>
               resolve({
-                lat: pos.coords.latitude,
-                lng: pos.coords.longitude,
+                location: {
+                  lat: pos.coords.latitude,
+                  lng: pos.coords.longitude,
+                },
+                usedFallback: false,
               }),
-            () => resolve(FALLBACK_LOCATION),
+            () => resolve({ location: FALLBACK_LOCATION, usedFallback: true }),
             { timeout: 4000 },
           );
         });
-        const result = await fetchTrafficEta(origin, {
-          lat: restaurant.lat,
-          lng: restaurant.lng,
+        if (!cancelled) setUsedFallbackLocation(origin.usedFallback);
+        const result = await fetchTrafficEta(origin.location, {
+          lat: destinationLat,
+          lng: destinationLng,
         });
         if (!cancelled) setEta(result);
       } catch {
@@ -315,11 +336,16 @@ function TrackingContent() {
               <p className="mt-2 text-xs text-neutral-400">
                 {eta.source === "google"
                   ? "Based on live traffic from Google Maps."
-                  : "Estimate based on typical city traffic."}
+                  : "Estimated travel time based on distance and typical traffic."}
               </p>
             </div>
           ) : (
             <p className="mt-3 text-sm text-neutral-400">ETA unavailable for this restaurant.</p>
+          )}
+          {usedFallbackLocation && (
+            <p className="mt-2 text-xs text-neutral-400">
+              Using an approximate starting location.
+            </p>
           )}
         </div>
 

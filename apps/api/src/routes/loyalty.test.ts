@@ -206,14 +206,14 @@ describe("Loyalty routes", () => {
   });
 
   describe("GET /api/v1/eta (P04)", () => {
-    it("returns a traffic-aware mock ETA", async () => {
+    it("returns a traffic-aware heuristic ETA", async () => {
       const res = await request(app)
         .get(
           "/api/v1/eta?origin_lat=19.076&origin_lng=72.8777&destination_lat=19.1136&destination_lng=72.8697",
         )
         .expect(200);
 
-      expect(res.body.data.source).toBe("mock");
+      expect(res.body.data.source).toBe("heuristic");
       expect(res.body.data.eta_seconds).toBeGreaterThan(0);
       expect(res.body.data.duration_text).toMatch(/^\d+ mins$/);
       expect(res.body.data.distance_km).toBeGreaterThan(0);
