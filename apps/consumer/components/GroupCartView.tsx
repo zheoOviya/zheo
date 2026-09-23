@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   addToGroupCart,
@@ -10,7 +10,7 @@ import {
 import { useAuthStore, useCartStore } from "@/lib/store";
 import { formatINR } from "@/lib/pricing";
 
-// Live Group Cart (O02): polls the share-token snapshot every 2s and renders
+// Live Group Cart (O02): polls the share-token snapshot and renders
 // the contributors as colored avatar circles (masked identity, never raw
 // phone numbers) with their item lines. Any signed-in viewer can tap
 // "Add my cart items" to merge their picks into the single DRAFT order.
@@ -35,6 +35,22 @@ function avatarLabel(seed: string): string {
   return digits.length > 0 ? digits.slice(-2) : "??";
 }
 
+// Bounded recursive polling. A healthy DRAFT snapshot refreshes every 2s; a
+// failed load backs off before retrying. The next timer is only armed after
+// the in-flight request settles, so requests can never overlap.
+const SUCCESS_POLL_MS = 2000;
+const ERROR_RETRY_MS = 5000;
+
+function documentIsVisible(): boolean {
+  if (typeof document === "undefined") return true;
+  return document.visibilityState === "visible";
+}
+
+function browserIsOnline(): boolean {
+  if (typeof navigator === "undefined") return true;
+  return navigator.onLine;
+}
+
 export function GroupCartView({ token }: { token: string }) {
   const accessToken = useAuthStore((s) => s.accessToken);
   const { items, restaurantId, clear } = useCartStore();
@@ -43,23 +59,146 @@ export function GroupCartView({ token }: { token: string }) {
   const [adding, setAdding] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const load = useCallback(async () => {
+  // Monotonic lifecycle generation. Bumped on token change and unmount so a
+  // response from an old lifecycle can never mutate current state.
+  const generationRef = useRef(0);
+  // Single-flight guard shared by automatic polling, manual retry and the
+  // post-add refresh: no second request starts while one is unresolved.
+  const inFlightRef = useRef(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Latest successful status drives continuation; kept in a ref so the
+  // scheduler does not need to re-subscribe on status changes.
+  const statusRef = useRef<string | null>(null);
+  const mountedRef = useRef(false);
+  // Set when a refresh is requested while a request is already in flight, so
+  // the refresh still happens immediately after the in-flight request settles.
+  const pendingRefreshRef = useRef(false);
+  const tickRef = useRef<() => void>(() => {});
+
+  const clearPending = useCallback(() => {
+    if (timeoutRef.current !== null) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  }, []);
+
+  const eligibleToPoll = useCallback(() => {
+    return (
+      mountedRef.current &&
+      documentIsVisible() &&
+      browserIsOnline() &&
+      (statusRef.current === null || statusRef.current === "DRAFT")
+    );
+  }, []);
+
+  const scheduleNext = useCallback(
+    (delay: number) => {
+      if (!eligibleToPoll()) return;
+      clearPending();
+      timeoutRef.current = setTimeout(() => {
+        timeoutRef.current = null;
+        tickRef.current();
+      }, delay);
+    },
+    [clearPending, eligibleToPoll],
+  );
+
+  const tick = useCallback(async () => {
+    if (inFlightRef.current || !mountedRef.current) return;
+    const generation = generationRef.current;
+    inFlightRef.current = true;
+    let succeeded = false;
     try {
       const snap = await fetchGroupCart(token);
+      if (generation !== generationRef.current || !mountedRef.current) return;
       setSnapshot(snap);
       setError(null);
+      statusRef.current = snap.status;
+      succeeded = true;
     } catch (err) {
+      if (generation !== generationRef.current || !mountedRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to load group cart");
+    } finally {
+      if (generation === generationRef.current) inFlightRef.current = false;
     }
-  }, [token]);
+    if (generation !== generationRef.current || !mountedRef.current) return;
 
-  // Live view: fetch immediately, then poll every 2s so concurrent
-  // contributors' additions appear without a manual refresh.
+    // A refresh requested mid-flight (manual retry / post-add) wins next.
+    if (pendingRefreshRef.current) {
+      pendingRefreshRef.current = false;
+      scheduleNext(0);
+      return;
+    }
+
+    if (!succeeded) {
+      // Bounded retry: never a tight zero-delay loop.
+      scheduleNext(ERROR_RETRY_MS);
+    } else if (statusRef.current === "DRAFT") {
+      scheduleNext(SUCCESS_POLL_MS);
+    }
+    // Terminal (non-DRAFT) snapshot: automatic polling stops.
+  }, [token, scheduleNext]);
+
+  const requestRefresh = useCallback(() => {
+    if (inFlightRef.current) {
+      pendingRefreshRef.current = true;
+      return;
+    }
+    if (!mountedRef.current) return;
+    clearPending();
+    tickRef.current();
+  }, [clearPending]);
+
   useEffect(() => {
-    void load();
-    const interval = setInterval(() => void load(), 2000);
-    return () => clearInterval(interval);
-  }, [load]);
+    tickRef.current = () => {
+      void tick();
+    };
+  }, [tick]);
+
+  useEffect(() => {
+    generationRef.current += 1;
+    mountedRef.current = true;
+    statusRef.current = null;
+    inFlightRef.current = false;
+    pendingRefreshRef.current = false;
+    clearPending();
+    if (eligibleToPoll()) void tick();
+
+    const onVisibility = () => {
+      if (documentIsVisible()) {
+        if (eligibleToPoll()) {
+          clearPending();
+          void tick();
+        }
+      } else {
+        clearPending();
+      }
+    };
+    const onOnline = () => {
+      if (eligibleToPoll()) {
+        clearPending();
+        void tick();
+      }
+    };
+    const onOffline = () => {
+      clearPending();
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+
+    return () => {
+      mountedRef.current = false;
+      generationRef.current += 1;
+      inFlightRef.current = false;
+      pendingRefreshRef.current = false;
+      clearPending();
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, [token, clearPending, eligibleToPoll, tick]);
 
   const shareLink =
     typeof window === "undefined"
@@ -91,7 +230,7 @@ export function GroupCartView({ token }: { token: string }) {
         })),
       );
       clear();
-      await load();
+      requestRefresh();
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Could not add your items",
@@ -107,7 +246,7 @@ export function GroupCartView({ token }: { token: string }) {
         <p className="text-sm text-red-600">{error}</p>
         <button
           type="button"
-          onClick={() => void load()}
+          onClick={requestRefresh}
           className="min-h-touch mt-4 rounded-full bg-primary-500 px-5 py-2 text-sm font-semibold text-white hover:bg-primary-hover"
         >
           Try Again
