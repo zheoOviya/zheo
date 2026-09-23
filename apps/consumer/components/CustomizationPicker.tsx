@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { CheckIcon } from "@heroicons/react/24/outline";
 import type { CartCustomization } from "@/lib/store";
 import { formatINR } from "@/lib/pricing";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 
 // O06 Customization Picker - bottom sheet for selecting add-ons.
 // Live price updates as customizations are toggled. 3-tap flow:
@@ -39,18 +40,11 @@ export function CustomizationPicker({
 
   const isLocked = pending || success;
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isLocked) onCancel();
-    };
-    document.addEventListener("keydown", onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [isLocked, onCancel]);
+  const dialogRef = useDialogFocus({
+    open: true,
+    onEscape: onCancel,
+    escapeDisabled: isLocked,
+  });
 
   function toggle(c: CartCustomization) {
     if (isLocked) return;
@@ -73,6 +67,8 @@ export function CustomizationPicker({
         role="dialog"
         aria-modal="true"
         aria-label={`Customize ${itemName}`}
+        ref={dialogRef}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className="w-full max-w-sm rounded-t-2xl bg-white p-6 shadow-xl"
       >

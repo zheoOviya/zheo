@@ -10,6 +10,7 @@ import {
 import toast from "react-hot-toast";
 import type { Gift } from "@/lib/api";
 import { formatINR } from "@/lib/pricing";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 
 export function GiftSuccess({
   gift,
@@ -23,6 +24,12 @@ export function GiftSuccess({
     typeof window !== "undefined"
       ? `${window.location.origin}/gift/${encodeURIComponent(gift.claim_token)}`
       : `/gift/${encodeURIComponent(gift.claim_token)}`;
+
+  const dialogRef = useDialogFocus({
+    open: true,
+    onEscape: () => onClose?.(),
+    escapeDisabled: !onClose,
+  });
 
   async function copy(text: string, which: "link" | "code") {
     try {
@@ -57,6 +64,8 @@ export function GiftSuccess({
         role="dialog"
         aria-modal="true"
         aria-label="Gift sent"
+        ref={dialogRef}
+        tabIndex={-1}
         className="relative w-full max-w-md rounded-t-3xl bg-white p-6 text-center shadow-elevation-3 dark:bg-neutral-900"
       >
         {onClose && (

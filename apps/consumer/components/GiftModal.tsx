@@ -7,6 +7,7 @@ import { useAuthStore } from "@/lib/store";
 import { loadRazorpayScript, createRazorpayInstance } from "@/lib/razorpay";
 import { formatINR } from "@/lib/pricing";
 import { GiftSuccess } from "./GiftSuccess";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 
 export default function GiftModal({
   restaurantId,
@@ -30,6 +31,12 @@ export default function GiftModal({
   const [paidGift, setPaidGift] = useState<Gift | null>(null);
   /** The created gift is reused on retry so a failed webhook never double-charges. */
   const [createdGift, setCreatedGift] = useState<Gift | null>(null);
+
+  const dialogRef = useDialogFocus({
+    open: paidGift === null,
+    onEscape: onClose,
+    escapeDisabled: paying,
+  });
 
   const customizationTotal = customizations.reduce((s, c) => s + c.price_delta, 0);
   const amount = item.price + customizationTotal;
@@ -99,6 +106,8 @@ export default function GiftModal({
         role="dialog"
         aria-modal="true"
         aria-label="Gift this item"
+        ref={dialogRef}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className="w-full max-w-md rounded-t-3xl bg-white p-6 shadow-elevation-3 dark:bg-neutral-900"
       >
