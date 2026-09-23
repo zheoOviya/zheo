@@ -219,4 +219,128 @@ describe("OrderTracker status notification", () => {
     expect(screen.getByText("Live")).toBeInTheDocument();
     expect(screen.getByText("Almost Ready")).toBeInTheDocument();
   });
+
+  it("renders an explicit terminal panel for an initial CANCELLED status", () => {
+    render(<OrderTracker orderId="o1" initialStatus="CANCELLED" />);
+    expect(screen.getByText("Order Cancelled")).toBeInTheDocument();
+    expect(
+      screen.getByText("This order has been cancelled."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("In progress")).not.toBeInTheDocument();
+    // Connection indicator is preserved alongside the terminal panel.
+    expect(screen.getByText("Connecting...")).toBeInTheDocument();
+  });
+
+  it("renders an explicit terminal panel for an initial PAYMENT_FAILED status", () => {
+    render(<OrderTracker orderId="o1" initialStatus="PAYMENT_FAILED" />);
+    expect(screen.getByText("Payment Failed")).toBeInTheDocument();
+    expect(
+      screen.getByText("Payment could not be completed for this order."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("In progress")).not.toBeInTheDocument();
+  });
+
+  it("does not render the normal progress timeline for a terminal status", () => {
+    render(<OrderTracker orderId="o1" initialStatus="CANCELLED" />);
+    expect(screen.queryByText("Confirmed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Preparing")).not.toBeInTheDocument();
+    expect(screen.queryByText("Almost Ready")).not.toBeInTheDocument();
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
+    expect(screen.queryByText("Picked Up")).not.toBeInTheDocument();
+  });
+
+  it("shows terminal UI and notifies once when the live status becomes CANCELLED", () => {
+    const onStatusChange = vi.fn();
+    const { rerender } = render(
+      <OrderTracker
+        orderId="o1"
+        initialStatus="CONFIRMED"
+        onStatusChange={onStatusChange}
+      />,
+    );
+
+    wsMock.status = "CANCELLED";
+    rerender(
+      <OrderTracker
+        orderId="o1"
+        initialStatus="CONFIRMED"
+        onStatusChange={onStatusChange}
+      />,
+    );
+
+    expect(screen.getByText("Order Cancelled")).toBeInTheDocument();
+    expect(onStatusChange).toHaveBeenCalledTimes(1);
+    expect(onStatusChange).toHaveBeenCalledWith("CANCELLED");
+  });
+
+  it("shows terminal UI and notifies once when the live status becomes PAYMENT_FAILED", () => {
+    const onStatusChange = vi.fn();
+    const { rerender } = render(
+      <OrderTracker
+        orderId="o1"
+        initialStatus="CONFIRMED"
+        onStatusChange={onStatusChange}
+      />,
+    );
+
+    wsMock.status = "PAYMENT_FAILED";
+    rerender(
+      <OrderTracker
+        orderId="o1"
+        initialStatus="CONFIRMED"
+        onStatusChange={onStatusChange}
+      />,
+    );
+
+    expect(screen.getByText("Payment Failed")).toBeInTheDocument();
+    expect(onStatusChange).toHaveBeenCalledTimes(1);
+    expect(onStatusChange).toHaveBeenCalledWith("PAYMENT_FAILED");
+  });
+
+  it("does not notify twice for a duplicate terminal status", () => {
+    const onStatusChange = vi.fn();
+    const { rerender } = render(
+      <OrderTracker
+        orderId="o1"
+        initialStatus="CONFIRMED"
+        onStatusChange={onStatusChange}
+      />,
+    );
+
+    wsMock.status = "CANCELLED";
+    rerender(
+      <OrderTracker
+        orderId="o1"
+        initialStatus="CONFIRMED"
+        onStatusChange={onStatusChange}
+      />,
+    );
+    rerender(
+      <OrderTracker
+        orderId="o1"
+        initialStatus="CONFIRMED"
+        onStatusChange={onStatusChange}
+      />,
+    );
+
+    expect(onStatusChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the normal timeline and progress affordance for PREPARING", () => {
+    wsMock.status = "PREPARING";
+    wsMock.connected = true;
+    render(<OrderTracker orderId="o1" initialStatus="CONFIRMED" />);
+    expect(screen.getByText("Preparing")).toBeInTheDocument();
+    expect(screen.getByText("In progress")).toBeInTheDocument();
+    expect(screen.queryByText("Order Cancelled")).not.toBeInTheDocument();
+    expect(screen.queryByText("Payment Failed")).not.toBeInTheDocument();
+  });
+
+  it("keeps the PICKED_UP timeline state without a terminal panel", () => {
+    render(<OrderTracker orderId="o1" initialStatus="PICKED_UP" />);
+    expect(screen.getByText("Picked Up")).toBeInTheDocument();
+    expect(screen.queryByText("In progress")).not.toBeInTheDocument();
+    expect(screen.queryByText("Order Cancelled")).not.toBeInTheDocument();
+    expect(screen.queryByText("Payment Failed")).not.toBeInTheDocument();
+  });
 });

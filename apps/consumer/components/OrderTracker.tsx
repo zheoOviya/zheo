@@ -15,6 +15,21 @@ const STATUS_STEPS = [
 
 const STATUS_ORDER = STATUS_STEPS.map((s) => s.key);
 
+// Terminal statuses fall outside the linear progress chain: rendering them as
+// an inactive five-step timeline misrepresents a cancelled/failed order as an
+// order that is merely not started. They get an explicit terminal panel
+// instead. Unknown statuses keep the existing (empty) timeline fallback.
+const TERMINAL_PRESENTATION: Record<string, { title: string; copy: string }> = {
+  CANCELLED: {
+    title: "Order Cancelled",
+    copy: "This order has been cancelled.",
+  },
+  PAYMENT_FAILED: {
+    title: "Payment Failed",
+    copy: "Payment could not be completed for this order.",
+  },
+};
+
 interface OrderTrackerProps {
   orderId: string;
   initialStatus: string;
@@ -27,6 +42,7 @@ export function OrderTracker({ orderId, initialStatus, onStatusChange }: OrderTr
   const currentIdx = STATUS_ORDER.indexOf(currentStatus);
   const animated = useFeatureFlags().isEnabled("ab_animated_tracker");
   const motionClass = animated ? "transition-colors duration-500" : "";
+  const terminal = TERMINAL_PRESENTATION[currentStatus];
 
   // Keep the latest callback without re-subscribing the notification effect.
   const onStatusChangeRef = useRef(onStatusChange);
@@ -66,6 +82,16 @@ export function OrderTracker({ orderId, initialStatus, onStatusChange }: OrderTr
         <span className="text-xs text-neutral-400">{connected ? "Live" : "Connecting..."}</span>
       </div>
 
+      {terminal ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-lg border border-red-500/20 bg-red-500/10 p-4"
+        >
+          <p className="text-sm font-semibold text-red-700">{terminal.title}</p>
+          <p className="mt-1 text-xs text-neutral-500">{terminal.copy}</p>
+        </div>
+      ) : (
       <div className="relative space-y-0">
         {STATUS_STEPS.map((step, idx) => {
           const isDone = idx <= currentIdx;
@@ -122,6 +148,7 @@ export function OrderTracker({ orderId, initialStatus, onStatusChange }: OrderTr
           );
         })}
       </div>
+      )}
     </div>
   );
 }
