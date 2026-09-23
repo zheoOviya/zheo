@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeftIcon, CheckIcon } from "@heroicons/react/24/outline";
 import { useParams, useRouter } from "next/navigation";
 import AuthGate from "@/components/AuthGate";
@@ -56,40 +56,103 @@ function TrackingContent() {
   const [etaLoading, setEtaLoading] = useState(true);
   const [stampCard, setStampCard] = useState<StampCard | null>(null);
 
-  useEffect(() => {
+  // Single-flight order loader shared by the initial load and the WebSocket
+  // driven refreshes. Each request owns the single-flight guard via a monotonic
+  // request id tied to the lifecycle generation, so a late response from a
+  // previous lifecycle can neither write stale state nor release the guard of
+  // the current lifecycle's request. At most one coalesced follow-up refresh is
+  // queued while a request is already in flight.
+  const generationRef = useRef(0);
+  const requestIdRef = useRef(0);
+  const activeRequestRef = useRef<number | null>(null);
+  const queuedRef = useRef(false);
+  const mountedRef = useRef(false);
+  const orderRef = useRef<OrderInfo | null>(null);
+  const loadOrderRef = useRef<() => Promise<void>>(async () => {});
+
+  const loadOrder = useCallback(async () => {
     if (!accessToken) return;
-    let cancelled = false;
-    async function fetchOrder() {
-      try {
-        const res = await fetch(`/api/v1/orders/${orderId}`, {
-          credentials: "include",
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        if (!res.ok) throw new Error("Order not found");
-        const body = await res.json();
-        if (!body.success) throw new Error(body.error?.message ?? "Order not found");
-        if (!cancelled) {
-          setOrder(body.data);
-          setCheckedIn(body.data.checked_in);
+    if (activeRequestRef.current !== null) {
+      queuedRef.current = true;
+      return;
+    }
+    const requestId = ++requestIdRef.current;
+    const generation = generationRef.current;
+    activeRequestRef.current = requestId;
+    try {
+      const res = await fetch(`/api/v1/orders/${orderId}`, {
+        credentials: "include",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!res.ok) throw new Error("Order not found");
+      const body = await res.json();
+      if (!body.success) throw new Error(body.error?.message ?? "Order not found");
+      if (generation !== generationRef.current || !mountedRef.current) return;
+      setOrder(body.data);
+      orderRef.current = body.data;
+      setCheckedIn(body.data.checked_in);
+    } catch (err) {
+      if (generation !== generationRef.current || !mountedRef.current) return;
+      // A failed refresh must never blank an already-valid snapshot.
+      if (!orderRef.current) {
+        setError(err instanceof Error ? err.message : "Failed to load order");
+      }
+    } finally {
+      // Only the owner of the guard may release it. A stale request from an
+      // older lifecycle must not clear the guard of the current request, which
+      // would otherwise admit an overlapping third fetch.
+      if (activeRequestRef.current === requestId) {
+        activeRequestRef.current = null;
+        if (
+          generation === generationRef.current &&
+          mountedRef.current &&
+          queuedRef.current
+        ) {
+          queuedRef.current = false;
+          void loadOrderRef.current();
         }
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load order");
       }
     }
-    fetchOrder();
+  }, [orderId, accessToken]);
+
+  useEffect(() => {
+    loadOrderRef.current = loadOrder;
+  }, [loadOrder]);
+
+  // Initial fetch per order/token lifecycle. Supersedes ownership held by any
+  // request from the previous lifecycle and invalidates its late responses.
+  useEffect(() => {
+    generationRef.current += 1;
+    mountedRef.current = true;
+    activeRequestRef.current = null;
+    queuedRef.current = false;
+    orderRef.current = null;
+    void loadOrderRef.current();
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
+      generationRef.current += 1;
+      activeRequestRef.current = null;
     };
   }, [orderId, accessToken]);
 
-  // P04 Traffic-based ETA: user location -> restaurant pickup location.
+  // WebSocket status notification -> authoritative one-shot refresh. This is
+  // never a polling loop; the tracker only tells us which order changed, and
+  // the freshly fetched snapshot is the only source for QR/OTP/check-in state.
+  const handleStatusChange = useCallback((status: string) => {
+    if (orderRef.current?.status === status) return;
+    void loadOrderRef.current();
+  }, []);
+
+  // P04 Traffic-based ETA: user location -> restaurant pickup location. Keyed
+  // on the restaurant identity so a status-only refresh does not refetch it.
   useEffect(() => {
-    if (!order) return;
+    const restaurantId = order?.restaurant_id;
+    if (!restaurantId) return;
     let cancelled = false;
     (async () => {
       try {
         const restaurants = await fetchRestaurants();
-        const restaurant = restaurants.find((r) => r.id === order.restaurant_id);
+        const restaurant = restaurants.find((r) => r.id === restaurantId);
         if (!restaurant?.lat || !restaurant.lng) {
           setEtaLoading(false);
           return;
@@ -123,13 +186,14 @@ function TrackingContent() {
     return () => {
       cancelled = true;
     };
-  }, [order]);
+  }, [order?.restaurant_id]);
 
   // L01 Stamp card progress for this restaurant.
   useEffect(() => {
-    if (!order || !accessToken) return;
+    const restaurantId = order?.restaurant_id;
+    if (!restaurantId || !accessToken) return;
     let cancelled = false;
-    fetchStampCard(accessToken, order.restaurant_id)
+    fetchStampCard(accessToken, restaurantId)
       .then((card) => {
         if (!cancelled) setStampCard(card);
       })
@@ -139,7 +203,7 @@ function TrackingContent() {
     return () => {
       cancelled = true;
     };
-  }, [order, accessToken]);
+  }, [order?.restaurant_id, accessToken]);
 
   async function handleCheckIn() {
     try {
@@ -185,6 +249,10 @@ function TrackingContent() {
 
   const isReady = order.status === "READY_FOR_PICKUP";
   const isPickedUp = order.status === "PICKED_UP";
+  const isTerminal =
+    order.status === "CANCELLED" || order.status === "PAYMENT_FAILED";
+  // Terminal orders are not eligible for check-in.
+  const canCheckIn = !isReady && !isPickedUp && !isTerminal;
 
   return (
     <main className="py-6">
@@ -207,7 +275,11 @@ function TrackingContent() {
       <div className="space-y-6">
         {/* Live tracker */}
         <div className="surface-card p-6">
-          <OrderTracker orderId={orderId} initialStatus={order.status} />
+          <OrderTracker
+            orderId={orderId}
+            initialStatus={order.status}
+            onStatusChange={handleStatusChange}
+          />
         </div>
 
         {/* P04 Traffic-based ETA: know exactly when to leave */}
@@ -263,7 +335,7 @@ function TrackingContent() {
         </div>
 
         {/* Check-in button */}
-        {!isReady && !isPickedUp && (
+        {canCheckIn && (
           <div className="surface-card p-6">
             {checkedIn ? (
               <div className="flex items-center gap-2 text-sm text-green-600">

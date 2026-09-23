@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { CheckIcon } from "@heroicons/react/24/outline";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useFeatureFlags } from "@/components/FeatureFlagProvider";
@@ -17,14 +18,46 @@ const STATUS_ORDER = STATUS_STEPS.map((s) => s.key);
 interface OrderTrackerProps {
   orderId: string;
   initialStatus: string;
+  onStatusChange?: (status: string) => void;
 }
 
-export function OrderTracker({ orderId, initialStatus }: OrderTrackerProps) {
+export function OrderTracker({ orderId, initialStatus, onStatusChange }: OrderTrackerProps) {
   const { status: liveStatus, connected } = useWebSocket(orderId);
   const currentStatus = liveStatus ?? initialStatus;
   const currentIdx = STATUS_ORDER.indexOf(currentStatus);
   const animated = useFeatureFlags().isEnabled("ab_animated_tracker");
   const motionClass = animated ? "transition-colors duration-500" : "";
+
+  // Keep the latest callback without re-subscribing the notification effect.
+  const onStatusChangeRef = useRef(onStatusChange);
+  useEffect(() => {
+    onStatusChangeRef.current = onStatusChange;
+  }, [onStatusChange]);
+
+  // Presentation-only status notification: the tracker reports genuine live
+  // status transitions upward but never fetches or writes parent state. The
+  // hook does not reset its own status when the order id changes, so a new
+  // order adopts whatever the hook currently reports as its baseline instead
+  // of null; otherwise a retained status from the previous order would be
+  // re-reported for the new order on the next render. The callback never fires
+  // during render.
+  const prevRef = useRef<{ orderId: string; status: string | null }>({
+    orderId,
+    status: liveStatus,
+  });
+
+  useEffect(() => {
+    const prev = prevRef.current;
+    const orderChanged = prev.orderId !== orderId;
+    const statusChanged = prev.status !== liveStatus;
+    // Always adopt the currently observed status as the baseline. On an order
+    // change that suppresses a retained stale status without also swallowing
+    // the new order's subsequent genuine transition.
+    prevRef.current = { orderId, status: liveStatus };
+    if (orderChanged) return;
+    if (!statusChanged || liveStatus === null) return;
+    onStatusChangeRef.current?.(liveStatus);
+  }, [liveStatus, orderId]);
 
   return (
     <div className="space-y-6">
