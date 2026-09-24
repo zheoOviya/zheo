@@ -185,8 +185,8 @@ describe("Loyalty routes", () => {
 
       const ready = await sharedOrderRepo.getById(orderId);
       await request(app)
-        .post(`/api/v1/orders/${orderId}/confirm-pickup`)
-        .set(auth(CLAIMANT_A))
+        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+        .set(vendorAuthHeaders())
         .send({ pickup_otp: ready?.pickup_otp })
         .expect(200);
 

@@ -64,8 +64,8 @@ async function createReadyOrder(app: Express): Promise<string> {
 async function confirmPickup(app: Express, orderId: string): Promise<void> {
   const order = await sharedOrderRepo.getById(orderId);
   await request(app)
-    .post(`/api/v1/orders/${orderId}/confirm-pickup`)
-        .set(authHeaders())
+    .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+    .set(vendorAuthHeaders())
     .send({ pickup_otp: order?.pickup_otp })
     .expect(200);
 }

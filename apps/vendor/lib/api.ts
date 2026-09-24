@@ -446,7 +446,7 @@ export async function confirmPickup(
   pickupOtp: string,
 ): Promise<{ status: OrderStatus; picked_up: boolean }> {
   return read(
-    await authedFetch(`/api/v1/orders/${orderId}/confirm-pickup`, {
+    await authedFetch(`/api/vendor/orders/${orderId}/confirm-pickup`, {
       method: "POST",
       body: JSON.stringify({ pickup_otp: pickupOtp }),
     }),

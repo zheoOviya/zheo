@@ -16,8 +16,8 @@ import { GeoFenceService } from "../services/geoFence";
 
 // ============================================
 // Fulfillment context routes
-// Consumer: check-in, confirm-pickup
-// Vendor: advance order status
+// Consumer: check-in, location-update
+// Vendor: advance status, confirm-pickup
 // ============================================
 
 const ConfirmPickupSchema = z
@@ -58,53 +58,58 @@ const pickupLimiter = rateLimiter({
 
 export const fulfillmentRouter: Router = Router();
 
-// Consumer check-in (requires auth)
+// Consumer check-in (requires auth + order ownership).
+// The ownership guard lives at the route boundary (HTTP authorization is not a
+// service concern) and mirrors GET /orders/:id: 404 when missing, 403 FORBIDDEN
+// when the order belongs to another user.
 fulfillmentRouter.post(
   "/orders/:id/check-in",
   authenticate,
   asyncHandler(async (req, res) => {
-    const order = await fulfillmentService.checkIn(orderId(req.params.id));
+    const id = orderId(req.params.id);
+    const existing = await sharedOrderRepo.getById(id);
+    if (!existing) {
+      throw new AppError("ORDER_NOT_FOUND", "Order not found", 404);
+    }
+    if (existing.user_id !== res.locals.userId) {
+      throw new AppError("FORBIDDEN", "You do not have access to this order", 403);
+    }
+    const order = await fulfillmentService.checkIn(id);
     ok(res, { checked_in: order.checked_in, status: order.status });
   }),
 );
 
 // P02 Geo-fence Detection: consumer reports live location.
 // Within 100m + READY_FOR_PICKUP => auto check-in + UserArrivedAtRestaurant.
+// Owner-only: a foreign caller must never be able to trigger distance
+// evaluation, auto-check-in, or an arrival event for another user's order.
+// The guard stays at the route boundary (caller identity is an HTTP concern).
 fulfillmentRouter.post(
   "/orders/:id/location-update",
   authenticate,
   asyncHandler(async (req, res) => {
+    const id = orderId(req.params.id);
+    const existing = await sharedOrderRepo.getById(id);
+    if (!existing) {
+      throw new AppError("ORDER_NOT_FOUND", "Order not found", 404);
+    }
+    if (existing.user_id !== res.locals.userId) {
+      throw new AppError("FORBIDDEN", "You do not have access to this order", 403);
+    }
     const body = LocationUpdateSchema.safeParse(req.body);
     if (!body.success) {
       throw new AppError("VALIDATION_ERROR", "lat/lng required", 400, body.error.flatten());
     }
-    const result = await geoFenceService.handleLocationUpdate(orderId(req.params.id), body.data);
+    const result = await geoFenceService.handleLocationUpdate(id, body.data);
     ok(res, result);
   }),
 );
 
-// Consumer confirm-pickup (QR or OTP). Requires authentication.
-// Pickup is protected by a fail-closed per-order rate limiter because the
-// OTP space is only 4 digits (10k combinations).
-fulfillmentRouter.post(
-  "/orders/:id/confirm-pickup",
-  authenticate,
-  pickupLimiter,
-  asyncHandler(async (req, res) => {
-    const body = ConfirmPickupSchema.safeParse(req.body);
-    if (!body.success) {
-      throw new AppError("VALIDATION_ERROR", "Invalid request", 400, body.error.flatten());
-    }
-
-    const order = await fulfillmentService.confirmPickup(
-      orderId(req.params.id),
-      body.data.qr_token,
-      body.data.pickup_otp,
-    );
-
-    ok(res, { status: order.status, picked_up: true });
-  }),
-);
+// Vendor/staff pickup handover (QR or OTP). F2 actor separation: pickup
+// completion is a restaurant action, so it is a vendor route behind the
+// vendor/admin role gate and requires access to the order's restaurant. The
+// customer still presents the credential; staff enter it. The 4-digit OTP
+// space is defended by the fail-closed per-order pickup rate limiter.
 
 // Vendor status advancement (requires staff auth in production)
 export const vendorRouter: Router = Router();
@@ -136,6 +141,40 @@ vendorRouter.put(
       qr_token: result.order.qr_token,
       early_ready_alerted: result.earlyReadyAlerted,
     });
+  }),
+);
+
+// Vendor/staff pickup handover. Order access is authorized BEFORE the pickup
+// rate limiter: an unauthorized caller must not be able to consume the target
+// order's pickup quota before being denied. Effective sequence: load order ->
+// 404 if missing -> assertRestaurantAccess -> pickupLimiter -> schema -> mutate.
+const requirePickupOrderAccess = asyncHandler(async (req, res, next) => {
+  const id = orderId(req.params.id);
+  const existing = await sharedOrderRepo.getById(id);
+  if (!existing) {
+    throw new AppError("ORDER_NOT_FOUND", "Order not found", 404);
+  }
+  await assertRestaurantAccess(res, existing.restaurant_id);
+  next();
+});
+
+vendorRouter.post(
+  "/orders/:id/confirm-pickup",
+  requirePickupOrderAccess,
+  pickupLimiter,
+  asyncHandler(async (req, res) => {
+    const body = ConfirmPickupSchema.safeParse(req.body);
+    if (!body.success) {
+      throw new AppError("VALIDATION_ERROR", "Invalid request", 400, body.error.flatten());
+    }
+
+    const order = await fulfillmentService.confirmPickup(
+      orderId(req.params.id),
+      body.data.qr_token,
+      body.data.pickup_otp,
+    );
+
+    ok(res, { status: order.status, picked_up: true });
   }),
 );
 

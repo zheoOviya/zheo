@@ -10,6 +10,7 @@ import { sharedPaymentRepo, sharedIdentityRepo } from "../repositories/shared";
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001";
 const USER_ID = "u00000000-0000-4000-8000-000000000001";
+const OTHER_CONSUMER_ID = "u00000000-0000-4000-8000-000000000002";
 const OWNER_ID = "e0000000-0000-4000-a000-000000000001"; // Biryani House owner
 
 function authHeaders(userId?: string) {
@@ -175,8 +176,8 @@ describe("Fulfillment routes", () => {
       const { orderId } = await createConfirmedOrder(app);
 
       await request(app)
-        .post(`/api/v1/orders/${orderId}/confirm-pickup`)
-        .set(authHeaders())
+        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+        .set(vendorAuthHeaders())
         .send({ pickup_otp: (await sharedOrderRepo.getById(orderId))?.pickup_otp })
         .expect(200);
 
@@ -249,15 +250,38 @@ describe("Fulfillment routes", () => {
         .expect(401);
       expect(res.body.error.code).toBe("UNAUTHORIZED");
     });
+
+    it("forbids a foreign consumer from checking in another user's order (403)", async () => {
+      const orderRes = await request(app)
+        .post("/api/v1/orders")
+        .set(authHeaders())
+        .send({
+          restaurant_id: REST_ID,
+          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
+        })
+        .expect(201);
+
+      const res = await request(app)
+        .post(`/api/v1/orders/${orderRes.body.data.id}/check-in`)
+        .set(authHeaders(OTHER_CONSUMER_ID))
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
+
+      const order = await sharedOrderRepo.getById(orderRes.body.data.id);
+      expect(order?.checked_in).toBe(false);
+    });
   });
 
-  describe("Confirm pickup", () => {
+  describe("Confirm pickup (vendor handover)", () => {
+    const FOREIGN_VENDOR_ID = "e0000000-0000-4000-a000-000000000002"; // Green Bowl owner
+
     it("verifies valid OTP and transitions to PICKED_UP", async () => {
       const { orderId, otp } = await createConfirmedOrder(app);
 
       const res = await request(app)
-        .post(`/api/v1/orders/${orderId}/confirm-pickup`)
-        .set(authHeaders())
+        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+        .set(vendorAuthHeaders())
         .send({ pickup_otp: otp })
         .expect(200);
 
@@ -272,20 +296,85 @@ describe("Fulfillment routes", () => {
       const { orderId, qrToken } = await createConfirmedOrder(app);
 
       const res = await request(app)
-        .post(`/api/v1/orders/${orderId}/confirm-pickup`)
-        .set(authHeaders())
+        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+        .set(vendorAuthHeaders())
         .send({ qr_token: qrToken })
         .expect(200);
 
       expect(res.body.data.status).toBe("PICKED_UP");
     });
 
+    it("forbids a foreign restaurant vendor with the correct OTP (403)", async () => {
+      const { orderId, otp } = await createConfirmedOrder(app);
+
+      const res = await request(app)
+        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+        .set(vendorAuthHeaders(FOREIGN_VENDOR_ID))
+        .send({ pickup_otp: otp })
+        .expect(403);
+
+      expect(res.body.error.code).toBe("FORBIDDEN");
+
+      const order = await sharedOrderRepo.getById(orderId);
+      expect(order?.status).toBe("READY_FOR_PICKUP");
+    });
+
+    it("does not let a foreign vendor consume the pickup rate-limit quota (403 then owner 200)", async () => {
+      const { orderId, otp } = await createConfirmedOrder(app);
+
+      // Unauthorized attempts must be rejected by restaurant access BEFORE the
+      // rate limiter, so they never consume the target order's pickup quota.
+      // 12 attempts exceed the limiter max (10); under a limiter-first ordering
+      // these would start returning 429 and poison the owner's valid handover.
+      for (let i = 0; i < 12; i++) {
+        const denied = await request(app)
+          .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+          .set(vendorAuthHeaders(FOREIGN_VENDOR_ID))
+          .send({ pickup_otp: otp })
+          .expect(403);
+        expect(denied.body.error.code).toBe("FORBIDDEN");
+      }
+
+      // The authorized owner can still complete the handover.
+      const res = await request(app)
+        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+        .set(vendorAuthHeaders())
+        .send({ pickup_otp: otp })
+        .expect(200);
+
+      expect(res.body.data.status).toBe("PICKED_UP");
+      expect(res.body.data.picked_up).toBe(true);
+    });
+
+    it("rejects a consumer token on the vendor pickup route (403)", async () => {
+      const { orderId, otp } = await createConfirmedOrder(app);
+
+      await request(app)
+        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+        .set(authHeaders())
+        .send({ pickup_otp: otp })
+        .expect(403);
+    });
+
+    it("retires the legacy consumer confirm-pickup route (404, no mutation)", async () => {
+      const { orderId, otp } = await createConfirmedOrder(app);
+
+      await request(app)
+        .post(`/api/v1/orders/${orderId}/confirm-pickup`)
+        .set(authHeaders())
+        .send({ pickup_otp: otp })
+        .expect(404);
+
+      const order = await sharedOrderRepo.getById(orderId);
+      expect(order?.status).toBe("READY_FOR_PICKUP");
+    });
+
     it("rejects invalid OTP", async () => {
       const { orderId } = await createConfirmedOrder(app);
 
       const res = await request(app)
-        .post(`/api/v1/orders/${orderId}/confirm-pickup`)
-        .set(authHeaders())
+        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+        .set(vendorAuthHeaders())
         .send({ pickup_otp: "9999" })
         .expect(400);
 
@@ -296,8 +385,8 @@ describe("Fulfillment routes", () => {
       const { orderId } = await createConfirmedOrder(app);
 
       const res = await request(app)
-        .post(`/api/v1/orders/${orderId}/confirm-pickup`)
-        .set(authHeaders())
+        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+        .set(vendorAuthHeaders())
         .send({ qr_token: "00000000-0000-4000-8000-000000000099" })
         .expect(400);
 
@@ -315,8 +404,8 @@ describe("Fulfillment routes", () => {
         .expect(201);
 
       const res = await request(app)
-        .post(`/api/v1/orders/${orderRes.body.data.id}/confirm-pickup`)
-        .set(authHeaders())
+        .post(`/api/vendor/orders/${orderRes.body.data.id}/confirm-pickup`)
+        .set(vendorAuthHeaders())
         .send({ pickup_otp: "1234" })
         .expect(400);
 
@@ -327,8 +416,8 @@ describe("Fulfillment routes", () => {
       const { orderId } = await createConfirmedOrder(app);
 
       const res = await request(app)
-        .post(`/api/v1/orders/${orderId}/confirm-pickup`)
-        .set(authHeaders())
+        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+        .set(vendorAuthHeaders())
         .send({})
         .expect(400);
 
@@ -339,14 +428,14 @@ describe("Fulfillment routes", () => {
       const { orderId, otp } = await createConfirmedOrder(app);
 
       await request(app)
-        .post(`/api/v1/orders/${orderId}/confirm-pickup`)
-        .set(authHeaders())
+        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+        .set(vendorAuthHeaders())
         .send({ pickup_otp: otp })
         .expect(200);
 
       const res = await request(app)
-        .post(`/api/v1/orders/${orderId}/confirm-pickup`)
-        .set(authHeaders())
+        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+        .set(vendorAuthHeaders())
         .send({ pickup_otp: otp })
         .expect(400);
 
@@ -359,8 +448,8 @@ describe("Fulfillment routes", () => {
       let saw429 = false;
       for (let i = 0; i < 12; i++) {
         const res = await request(app)
-          .post(`/api/v1/orders/${orderId}/confirm-pickup`)
-          .set(authHeaders())
+          .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+          .set(vendorAuthHeaders())
           .send({ pickup_otp: "9999" });
         if (res.status === 429) {
           saw429 = true;

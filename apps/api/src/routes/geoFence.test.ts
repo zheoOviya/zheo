@@ -16,6 +16,7 @@ import { haversineKm } from "../services/discovery";
 const REST_ID = "a0000000-0000-4000-8000-000000000001"; // Biryani House
 const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001";
 const USER_ID = "u00000000-0000-4000-8000-000000000001";
+const OTHER_CONSUMER_ID = "u00000000-0000-4000-8000-000000000002";
 const OWNER_ID = "e0000000-0000-4000-a000-000000000001"; // Biryani House owner
 
 function authHeaders(userId?: string) {
@@ -152,5 +153,25 @@ describe("Geo-fence routes (P02)", () => {
       .set(authHeaders())
       .send({ lat: 19.076, lng: 72.8777 })
       .expect(404);
+  });
+
+  it("forbids a foreign consumer and leaves checked_in untouched (403)", async () => {
+    const restaurant = (await getCatalogRepository().getRestaurantById(REST_ID))!;
+    const orderId = await createReadyOrder(app);
+    const near = { lat: restaurant.lat! + 0.0004, lng: restaurant.lng! };
+
+    const before = await sharedOrderRepo.getById(orderId);
+    expect(before?.checked_in).toBe(false);
+
+    const res = await request(app)
+      .post(`/api/v1/orders/${orderId}/location-update`)
+      .set(authHeaders(OTHER_CONSUMER_ID))
+      .send({ lat: near.lat, lng: near.lng })
+      .expect(403);
+
+    expect(res.body.error.code).toBe("FORBIDDEN");
+
+    const after = await sharedOrderRepo.getById(orderId);
+    expect(after?.checked_in).toBe(false);
   });
 });
