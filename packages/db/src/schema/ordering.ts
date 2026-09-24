@@ -56,6 +56,10 @@ export const orders = pgTable(
     is_catering: boolean("is_catering").notNull().default(false),
     headcount: integer("headcount"),
     pickup_otp: text("pickup_otp"),
+    // CONSUMER_PICKUP_TRUTH-W2A: durable arrival truth. "I am Here" / staff
+    // "knows you are here" must survive a reread and a process restart, so this
+    // is a real persisted column (not DTO-only). Status eligibility is W2B.
+    checked_in: boolean("checked_in").notNull().default(false),
     scheduled_pickup_time: timestamp("scheduled_pickup_time", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true })
       .notNull()

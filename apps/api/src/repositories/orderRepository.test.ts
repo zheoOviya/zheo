@@ -109,4 +109,46 @@ describe("MemoryOrderRepository CAS primitives", () => {
       expect(await repo.consumePickupOtp(OID, "READY_FOR_PICKUP", "1234")).toBeNull();
     });
   });
+
+  describe("setCheckedIn (durable check-in lifecycle)", () => {
+    it("M1 create starts checked_in=false", async () => {
+      const created = await repo.create({
+        user_id: "22222222-2222-4222-8222-222222222222",
+        restaurant_id: "33333333-3333-4333-8333-333333333333",
+        items: [],
+        breakdown: {
+          items: [],
+          food_subtotal: 0,
+          packaging_fee: 0,
+          packaging_fee_per_item: 0,
+          gst_food: 0,
+          gst_packaging: 0,
+          total_amount: 0,
+          commission_rate: 0,
+          commission_amount: 0,
+        },
+      });
+      expect(created.checked_in).toBe(false);
+      expect((await repo.getById(created.id))?.checked_in).toBe(false);
+    });
+
+    it("M2 setCheckedIn persists and a fresh getById returns true", async () => {
+      repo._seed(makeOrder("CONFIRMED"));
+      const out = await repo.setCheckedIn(OID);
+      expect(out?.checked_in).toBe(true);
+      expect((await repo.getById(OID))?.checked_in).toBe(true);
+    });
+
+    it("M3 second setCheckedIn is idempotent (current true, not failure)", async () => {
+      repo._seed(makeOrder("CONFIRMED"));
+      await repo.setCheckedIn(OID);
+      const second = await repo.setCheckedIn(OID);
+      expect(second?.checked_in).toBe(true);
+      expect((await repo.getById(OID))?.checked_in).toBe(true);
+    });
+
+    it("M4 missing id returns null", async () => {
+      expect(await repo.setCheckedIn(OID)).toBeNull();
+    });
+  });
 });

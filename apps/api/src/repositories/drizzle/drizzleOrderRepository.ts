@@ -68,7 +68,9 @@ function mapOrderRow(
     headcount: (row.headcount as number | null) ?? null,
     pickup_otp: (row.pickup_otp as string) ?? null,
     qr_token: ((row as Record<string, unknown>).qr_token as string) ?? null,
-    checked_in: ((row as Record<string, unknown>).checked_in as boolean) ?? false,
+    // CONSUMER_PICKUP_TRUTH-W2A: persisted boolean column is the source of
+    // truth; no DTO-only fallback.
+    checked_in: row.checked_in as boolean,
     scheduled_pickup_time:
       ((row as Record<string, unknown>).scheduled_pickup_time as string) ?? null,
     created_at: (row.created_at as Date).toISOString(),
@@ -366,14 +368,27 @@ export class DrizzleOrderRepository implements OrderRepository {
   }
 
   async setCheckedIn(orderId: string): Promise<OrderDTO | null> {
-    // checked_in is not a DB column; update timestamp as a marker.
-    await this.db
+    // CONSUMER_PICKUP_TRUTH-W2A: C2 atomic CAS. false -> true is a single
+    // durable write; status eligibility (C3) is deliberately NOT enforced here
+    // (that is W2B). An already-checked-in row is idempotent success, not a
+    // failure.
+    const rows = (await (this.db
       .update(orders)
-      .set({ updated_at: new Date() })
-      .where(eq(orders.id, orderId));
-    const dto = await this.getById(orderId);
-    if (dto) dto.checked_in = true;
-    return dto;
+      .set({ checked_in: true, updated_at: new Date() })
+      .where(
+        and(eq(orders.id, orderId), eq(orders.checked_in, false)),
+      ) as unknown as ReturningUpdate).returning()) as Record<string, unknown>[];
+    const row = rows[0];
+    if (row) {
+      const items = await this.loadItems(orderId);
+      return mapOrderRow(row, items);
+    }
+
+    // CAS miss: the row is either missing or already checked in. Only a missing
+    // row is null; an already-true row returns the current persisted order.
+    const current = await this.getById(orderId);
+    if (!current) return null;
+    return current.checked_in ? current : null;
   }
 
   async findByQrToken(qrToken: string): Promise<OrderDTO | null> {
@@ -457,6 +472,7 @@ export class DrizzleOrderRepository implements OrderRepository {
       is_catering: order.is_catering ?? false,
       headcount: order.headcount ?? null,
       pickup_otp: order.pickup_otp,
+      checked_in: order.checked_in,
       created_at: new Date(order.created_at),
       updated_at: new Date(order.updated_at),
     }).catch((err) => {

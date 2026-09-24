@@ -162,6 +162,13 @@
       "when": 1792560009170,
       "tag": "0022_classy_susan_delgado",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792560009171,
+      "tag": "0023_abandoned_grey_gargoyle",
+      "breakpoints": true
     }
   ]
 }
