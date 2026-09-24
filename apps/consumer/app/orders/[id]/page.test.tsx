@@ -493,6 +493,65 @@ describe("order detail freshness", () => {
   });
 });
 
+describe("manual check-in eligibility", () => {
+  const allowed = [
+    "CONFIRMED",
+    "PREPARING",
+    "ALMOST_READY",
+    "READY_FOR_PICKUP",
+  ];
+  const rejected = [
+    "DRAFT",
+    "PAYMENT_PENDING",
+    "PICKED_UP",
+    "CANCELLED",
+    "REFUNDED",
+    "PAYMENT_FAILED",
+    "EXPIRED",
+    "DISPUTED",
+    "SETTLED",
+  ];
+  const CHECKIN_BUTTON = "I am Here (Check In)";
+
+  it.each(allowed)("shows the check-in button for %s", async (status) => {
+    fetchMock.mockResolvedValue(success(orderData({ status })));
+
+    render(<OrderTrackingPage />);
+    await screen.findByTestId("order-tracker");
+
+    expect(
+      screen.getByRole("button", { name: CHECKIN_BUTTON }),
+    ).toBeInTheDocument();
+  });
+
+  it.each(rejected)("hides the check-in button for %s", async (status) => {
+    fetchMock.mockResolvedValue(success(orderData({ status })));
+
+    render(<OrderTrackingPage />);
+    await screen.findByTestId("order-tracker");
+
+    expect(
+      screen.queryByRole("button", { name: CHECKIN_BUTTON }),
+    ).toBeNull();
+  });
+
+  it("keeps the truthful checked-in message for an eligible state", async () => {
+    fetchMock.mockResolvedValue(
+      success(orderData({ status: "READY_FOR_PICKUP", checked_in: true })),
+    );
+
+    render(<OrderTrackingPage />);
+    await screen.findByTestId("order-tracker");
+
+    expect(
+      screen.getByText("You are checked in. Staff knows you are here."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: CHECKIN_BUTTON }),
+    ).toBeNull();
+  });
+});
+
 describe("eta truth and location disclosure", () => {
   function geoSuccess() {
     stubGeolocation({

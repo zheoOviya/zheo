@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
+import type { OrderStatus } from "@snakzap/types";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
@@ -200,7 +201,25 @@ describe("Fulfillment routes", () => {
   });
 
   describe("Check-in (consumer)", () => {
-    it("records consumer check-in", async () => {
+    const CHECKIN_ALLOWED: OrderStatus[] = [
+      "CONFIRMED",
+      "PREPARING",
+      "ALMOST_READY",
+      "READY_FOR_PICKUP",
+    ];
+    const CHECKIN_REJECTED: OrderStatus[] = [
+      "DRAFT",
+      "PAYMENT_PENDING",
+      "PICKED_UP",
+      "CANCELLED",
+      "REFUNDED",
+      "PAYMENT_FAILED",
+      "EXPIRED",
+      "DISPUTED",
+      "SETTLED",
+    ];
+
+    async function createOrder(): Promise<string> {
       const orderRes = await request(app)
         .post("/api/v1/orders")
         .set(authHeaders())
@@ -209,39 +228,74 @@ describe("Fulfillment routes", () => {
           items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
         })
         .expect(201);
+      return orderRes.body.data.id;
+    }
 
-      const res = await request(app)
-        .post(`/api/v1/orders/${orderRes.body.data.id}/check-in`)
-        .set(authHeaders())
-        .expect(200);
+    it.each(CHECKIN_ALLOWED)(
+      "allows manual check-in from %s (200 + checked_in=true)",
+      async (status) => {
+        const orderId = await createOrder();
+        await sharedOrderRepo.updateStatus(orderId, status);
 
-      expect(res.body.data.checked_in).toBe(true);
+        const res = await request(app)
+          .post(`/api/v1/orders/${orderId}/check-in`)
+          .set(authHeaders())
+          .expect(200);
 
-      const order = await sharedOrderRepo.getById(orderRes.body.data.id);
-      expect(order?.checked_in).toBe(true);
-    });
+        expect(res.body.data.checked_in).toBe(true);
 
-    it("check-in is idempotent", async () => {
-      const orderRes = await request(app)
-        .post("/api/v1/orders")
-        .set(authHeaders())
-        .send({
-          restaurant_id: REST_ID,
-          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
-        })
-        .expect(201);
+        const order = await sharedOrderRepo.getById(orderId);
+        expect(order?.checked_in).toBe(true);
+      },
+    );
+
+    it.each(CHECKIN_REJECTED)(
+      "rejects manual check-in from %s (400 CHECKIN_NOT_ALLOWED, no mutation)",
+      async (status) => {
+        const orderId = await createOrder();
+        await sharedOrderRepo.updateStatus(orderId, status);
+
+        const res = await request(app)
+          .post(`/api/v1/orders/${orderId}/check-in`)
+          .set(authHeaders())
+          .expect(400);
+
+        expect(res.body.error.code).toBe("CHECKIN_NOT_ALLOWED");
+        expect(res.body.error.message).toContain(status);
+
+        const order = await sharedOrderRepo.getById(orderId);
+        expect(order?.checked_in).toBe(false);
+      },
+    );
+
+    it("check-in is idempotent in an eligible state", async () => {
+      const orderId = await createOrder();
+      await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
 
       await request(app)
-        .post(`/api/v1/orders/${orderRes.body.data.id}/check-in`)
+        .post(`/api/v1/orders/${orderId}/check-in`)
         .set(authHeaders())
         .expect(200);
 
       const res = await request(app)
-        .post(`/api/v1/orders/${orderRes.body.data.id}/check-in`)
+        .post(`/api/v1/orders/${orderId}/check-in`)
         .set(authHeaders())
         .expect(200);
 
       expect(res.body.data.checked_in).toBe(true);
+    });
+
+    it("enforces status eligibility before checked_in idempotency", async () => {
+      const orderId = await createOrder();
+      await sharedOrderRepo.updateStatus(orderId, "PICKED_UP");
+      await sharedOrderRepo.setCheckedIn(orderId);
+
+      const res = await request(app)
+        .post(`/api/v1/orders/${orderId}/check-in`)
+        .set(authHeaders())
+        .expect(400);
+
+      expect(res.body.error.code).toBe("CHECKIN_NOT_ALLOWED");
     });
 
     it("requires authentication", async () => {
@@ -252,23 +306,17 @@ describe("Fulfillment routes", () => {
     });
 
     it("forbids a foreign consumer from checking in another user's order (403)", async () => {
-      const orderRes = await request(app)
-        .post("/api/v1/orders")
-        .set(authHeaders())
-        .send({
-          restaurant_id: REST_ID,
-          items: [{ menu_item_id: MENU_ITEM_1, quantity: 1, customizations: [] }],
-        })
-        .expect(201);
+      const orderId = await createOrder();
+      await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
 
       const res = await request(app)
-        .post(`/api/v1/orders/${orderRes.body.data.id}/check-in`)
+        .post(`/api/v1/orders/${orderId}/check-in`)
         .set(authHeaders(OTHER_CONSUMER_ID))
         .expect(403);
 
       expect(res.body.error.code).toBe("FORBIDDEN");
 
-      const order = await sharedOrderRepo.getById(orderRes.body.data.id);
+      const order = await sharedOrderRepo.getById(orderId);
       expect(order?.checked_in).toBe(false);
     });
   });

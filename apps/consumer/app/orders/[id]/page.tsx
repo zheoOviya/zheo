@@ -42,6 +42,15 @@ interface OrderInfo {
 // Fallback consumer location (Colaba, Mumbai) when geolocation is denied.
 const FALLBACK_LOCATION = { lat: 18.9218, lng: 72.8308 };
 
+// Manual check-in is allowed only while the order is actively being fulfilled.
+// Keep this in lockstep with the API's FulfillmentService.checkIn() allowed set.
+const MANUAL_CHECKIN_ALLOWED_STATUSES = new Set([
+  "CONFIRMED",
+  "PREPARING",
+  "ALMOST_READY",
+  "READY_FOR_PICKUP",
+]);
+
 function TrackingContent() {
   const params = useParams();
   const router = useRouter();
@@ -270,10 +279,10 @@ function TrackingContent() {
 
   const isReady = order.status === "READY_FOR_PICKUP";
   const isPickedUp = order.status === "PICKED_UP";
-  const isTerminal =
-    order.status === "CANCELLED" || order.status === "PAYMENT_FAILED";
-  // Terminal orders are not eligible for check-in.
-  const canCheckIn = !isReady && !isPickedUp && !isTerminal;
+  // Eligible only while the order is actively being fulfilled; every other
+  // state (including READY_FOR_PICKUP's post-terminal successors) hides the
+  // manual check-in action.
+  const canCheckIn = MANUAL_CHECKIN_ALLOWED_STATUSES.has(order.status);
 
   return (
     <main className="py-6">

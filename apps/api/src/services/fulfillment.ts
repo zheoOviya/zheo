@@ -41,6 +41,18 @@ const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   SETTLED: [],
 };
 
+// Manual consumer check-in is allowed only while the order is actively being
+// fulfilled. DRAFT/PAYMENT_PENDING are not yet confirmed, and every terminal
+// state (PICKED_UP/CANCELLED/REFUNDED/PAYMENT_FAILED/EXPIRED/DISPUTED/SETTLED)
+// must never admit a new check-in. Geo auto-arrival keeps its own READY-only
+// gate in geoFence.ts; this set governs manual check-in only.
+const MANUAL_CHECKIN_ALLOWED = new Set<OrderStatus>([
+  "CONFIRMED",
+  "PREPARING",
+  "ALMOST_READY",
+  "READY_FOR_PICKUP",
+]);
+
 export class FulfillmentService {
   constructor(
     private readonly orderRepo: OrderRepository,
@@ -224,6 +236,17 @@ export class FulfillmentService {
     const order = await this.orderRepo.getById(orderId);
     if (!order) {
       throw new AppError("ORDER_NOT_FOUND", "Order not found", 404);
+    }
+
+    // Status eligibility is evaluated BEFORE the checked_in idempotency
+    // short-circuit, so a historical terminal order that happens to carry
+    // checked_in=true cannot make a new request appear valid.
+    if (!MANUAL_CHECKIN_ALLOWED.has(order.status)) {
+      throw new AppError(
+        "CHECKIN_NOT_ALLOWED",
+        `Order in ${order.status} cannot be checked in`,
+        400,
+      );
     }
 
     if (order.checked_in) {
