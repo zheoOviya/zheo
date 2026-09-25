@@ -24,7 +24,6 @@ export interface FulfillmentOrderRepo {
     orderId: string,
     fromStatus: OrderStatus,
     otp: string,
-    qrToken?: string,
   ): Promise<OrderDTO | null>;
   /** CAS single-use pickup consuming the OTP and setting PICKED_UP. */
   consumePickupOtp(

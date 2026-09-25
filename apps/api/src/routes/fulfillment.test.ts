@@ -38,7 +38,7 @@ function vendorAuthHeaders(userId?: string, role?: string) {
 
 async function createConfirmedOrder(
   app: Express,
-): Promise<{ orderId: string; otp: string; qrToken: string }> {
+): Promise<{ orderId: string; otp: string }> {
   // Create order
   const orderRes = await request(app)
     .post("/api/v1/orders")
@@ -59,7 +59,7 @@ async function createConfirmedOrder(
   await request(app)
     .put(`/api/vendor/orders/${orderId}/status`)
     .set(vendorAuthHeaders())
-    .expect(200); // CONFIRMED -> PREPARING (generates OTP/QR)
+    .expect(200); // CONFIRMED -> PREPARING (generates OTP)
 
   await request(app)
     .put(`/api/vendor/orders/${orderId}/status`)
@@ -75,7 +75,6 @@ async function createConfirmedOrder(
   return {
     orderId,
     otp: finalOrder?.pickup_otp ?? "0000",
-    qrToken: finalOrder?.qr_token ?? "missing",
   };
 }
 
@@ -92,7 +91,7 @@ describe("Fulfillment routes", () => {
   });
 
   describe("State machine (vendor)", () => {
-    it("advances CONFIRMED -> PREPARING and generates OTP + QR token", async () => {
+    it("advances CONFIRMED -> PREPARING and generates only an OTP", async () => {
       const orderRes = await request(app)
         .post("/api/v1/orders")
         .set(authHeaders())
@@ -112,7 +111,7 @@ describe("Fulfillment routes", () => {
 
       expect(res.body.data.status).toBe("PREPARING");
       expect(res.body.data.pickup_otp).toMatch(/^\d{4}$/);
-      expect(res.body.data.qr_token).toBeTruthy();
+      expect(res.body.data.qr_token).toBeNull();
     });
 
     it("advances through full state machine to READY_FOR_PICKUP", async () => {
@@ -340,16 +339,32 @@ describe("Fulfillment routes", () => {
       expect(order?.status).toBe("PICKED_UP");
     });
 
-    it("verifies valid QR token and transitions to PICKED_UP", async () => {
-      const { orderId, qrToken } = await createConfirmedOrder(app);
+    it("rejects a legacy qr_token-only body as a wire validation error", async () => {
+      const { orderId } = await createConfirmedOrder(app);
 
       const res = await request(app)
         .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
         .set(vendorAuthHeaders())
-        .send({ qr_token: qrToken })
+        .send({ qr_token: "00000000-0000-4000-8000-000000000099" })
+        .expect(400);
+
+      expect(res.body.error.code).toBe("VALIDATION_ERROR");
+
+      const order = await sharedOrderRepo.getById(orderId);
+      expect(order?.status).toBe("READY_FOR_PICKUP");
+    });
+
+    it("completes via OTP when qr_token is also present (unknown field ignored)", async () => {
+      const { orderId, otp } = await createConfirmedOrder(app);
+
+      const res = await request(app)
+        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
+        .set(vendorAuthHeaders())
+        .send({ qr_token: "00000000-0000-4000-8000-000000000099", pickup_otp: otp })
         .expect(200);
 
       expect(res.body.data.status).toBe("PICKED_UP");
+      expect(res.body.data.picked_up).toBe(true);
     });
 
     it("forbids a foreign restaurant vendor with the correct OTP (403)", async () => {
@@ -427,18 +442,6 @@ describe("Fulfillment routes", () => {
         .expect(400);
 
       expect(res.body.error.code).toBe("INVALID_OTP");
-    });
-
-    it("rejects invalid QR token", async () => {
-      const { orderId } = await createConfirmedOrder(app);
-
-      const res = await request(app)
-        .post(`/api/vendor/orders/${orderId}/confirm-pickup`)
-        .set(vendorAuthHeaders())
-        .send({ qr_token: "00000000-0000-4000-8000-000000000099" })
-        .expect(400);
-
-      expect(res.body.error.code).toBe("INVALID_QR");
     });
 
     it("rejects pickup when order is not READY_FOR_PICKUP", async () => {

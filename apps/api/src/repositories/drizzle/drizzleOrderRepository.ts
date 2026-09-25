@@ -67,7 +67,9 @@ function mapOrderRow(
     is_catering: (row.is_catering as boolean) ?? false,
     headcount: (row.headcount as number | null) ?? null,
     pickup_otp: (row.pickup_otp as string) ?? null,
-    qr_token: ((row as Record<string, unknown>).qr_token as string) ?? null,
+    // CONSUMER_PICKUP_TRUTH-W2C: the OTP is the only handover credential and
+    // the DB has no qr_token column, so this compat field is always null.
+    qr_token: null,
     // CONSUMER_PICKUP_TRUTH-W2A: persisted boolean column is the source of
     // truth; no DTO-only fallback.
     checked_in: row.checked_in as boolean,
@@ -317,10 +319,6 @@ export class DrizzleOrderRepository implements OrderRepository {
     orderId: string,
     fromStatus: OrderStatus,
     otp: string,
-    // Accepted for interface parity with Memory. Postgres has no qr_token
-    // column, so the token is intentionally not persisted (F5 held) and no
-    // second UPDATE is issued.
-    _qrToken?: string,
   ): Promise<OrderDTO | null> {
     const rows = (await (this.db
       .update(orders)
@@ -355,18 +353,6 @@ export class DrizzleOrderRepository implements OrderRepository {
     return mapOrderRow(row, items);
   }
 
-  async setPickupOtp(
-    orderId: string,
-    otp: string,
-    qrToken: string,
-  ): Promise<OrderDTO | null> {
-    await this.db
-      .update(orders)
-      .set({ pickup_otp: otp, updated_at: new Date() })
-      .where(eq(orders.id, orderId));
-    return this.getById(orderId);
-  }
-
   async setCheckedIn(orderId: string): Promise<OrderDTO | null> {
     // CONSUMER_PICKUP_TRUTH-W2A: C2 atomic CAS. false -> true is a single
     // durable write; status eligibility (C3) is deliberately NOT enforced here
@@ -389,23 +375,6 @@ export class DrizzleOrderRepository implements OrderRepository {
     const current = await this.getById(orderId);
     if (!current) return null;
     return current.checked_in ? current : null;
-  }
-
-  async findByQrToken(qrToken: string): Promise<OrderDTO | null> {
-    // qr_token is not in the orders schema; scan all orders and match in-memory.
-    // In production this would use a dedicated column.
-    const allRows = (await (this.db as unknown as {
-      select: () => { from: (t: unknown) => Promise<unknown[]> };
-    })
-      .select()
-      .from(orders)) as Record<string, unknown>[];
-    for (const row of allRows) {
-      const dto = mapOrderRow(row, []);
-      if (dto.pickup_otp === qrToken || dto.qr_token === qrToken) {
-        return this.getById(row.id as string);
-      }
-    }
-    return null;
   }
 
   async setItems(

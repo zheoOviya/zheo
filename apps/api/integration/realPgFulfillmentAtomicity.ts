@@ -25,8 +25,8 @@
 //   P6 replay of a consumed OTP is rejected with no duplicate side effect
 //   P7 cancel + gift release rollback restores both, then retry cancels once
 //
-// DOES NOT claim: memory rollback (memory port is passthrough), F5 qr_token
-// persistence, F6 checked_in persistence, order_status_history, outbox /
+// DOES NOT claim: memory rollback (memory port is passthrough), F6 checked_in
+// persistence, order_status_history, outbox /
 // durable event delivery. POST_COMMIT_EVENT_CRASH_WINDOW_REMAINS: YES.
 // This is external CI evidence. No false CI coverage is claimed.
 // ============================================================
@@ -344,19 +344,19 @@ async function main(): Promise<void> {
   const p1Times: Record<string, number> = {};
   let p1LockObserved = false;
 
-  const claim = (handle: DrizzleDb, label: string, otp: string, qr: string) =>
+  const claim = (handle: DrizzleDb, label: string, otp: string) =>
     createFulfillmentTransactionPort(handle).runInTransaction(async ({ orders }) => {
       p1Times[`s${label}`] = Date.now();
       await p1Gate.promise;
-      const row = await orders.claimPreparingWithOtp(p1.orderId, "CONFIRMED", otp, qr);
+      const row = await orders.claimPreparingWithOtp(p1.orderId, "CONFIRMED", otp);
       if (row) await sleep(450);
       p1Times[`e${label}`] = Date.now();
       return { label, otp, row };
     });
 
   const p1Race = Promise.all([
-    claim(dbA, "A", otpA, `qr-${randomUUID()}`),
-    claim(dbB, "B", otpB, `qr-${randomUUID()}`),
+    claim(dbA, "A", otpA),
+    claim(dbB, "B", otpB),
   ]);
   p1Gate.resolve();
 
@@ -387,7 +387,6 @@ async function main(): Promise<void> {
     p1.orderId,
     "CONFIRMED",
     p1Loser?.otp ?? "9999",
-    `qr-${randomUUID()}`,
   );
 
   check("P1_ONE_WINNER_ONE_LOSER", p1Winners.length === 1 && p1Losers.length === 1, `winners=${p1Winners.length} losers=${p1Losers.length}`);
@@ -414,7 +413,7 @@ async function main(): Promise<void> {
   try {
     await dbMain.transaction(async (tx) => {
       const orders = new DrizzleOrderRepository(tx as unknown as DrizzleDb);
-      const row = await orders.claimPreparingWithOtp(p2.orderId, "CONFIRMED", "3333", `qr-${randomUUID()}`);
+      const row = await orders.claimPreparingWithOtp(p2.orderId, "CONFIRMED", "3333");
       if (!row) throw new Error("P2_UNEXPECTED_NO_CLAIM");
       throw new Error("HARNESS_FORCED_ROLLBACK_P2");
     });
@@ -445,9 +444,9 @@ async function main(): Promise<void> {
   );
   const p3ServiceB = makeService(dbB);
 
-  const p3PromiseA = outcome(p3ServiceA.confirmPickup(p3.orderId, undefined, "4444"));
+  const p3PromiseA = outcome(p3ServiceA.confirmPickup(p3.orderId, "4444"));
   await withTimeout(p3Locked.promise, 10000, "P3 winner never acquired the row lock");
-  const p3PromiseB = outcome(p3ServiceB.confirmPickup(p3.orderId, undefined, "4444"));
+  const p3PromiseB = outcome(p3ServiceB.confirmPickup(p3.orderId, "4444"));
   const p3LoserBlocked = await waitUntilLocked("fgaB", 8000);
   p3Release.resolve();
   const [p3ResA, p3ResB] = await Promise.all([p3PromiseA, p3PromiseB]);
@@ -480,13 +479,13 @@ async function main(): Promise<void> {
   );
   let p4Threw = false;
   try {
-    await p4FailingService.confirmPickup(p4.orderId, undefined, "5555");
+    await p4FailingService.confirmPickup(p4.orderId, "5555");
   } catch (err) {
     p4Threw = err instanceof Error && err.message === "HARNESS_FORCED_GIFT_FAILURE";
   }
   const p4AfterFail = await orderState(p4.orderId);
   const p4GiftAfterFail = await giftRepoMain.getById(p4GiftId);
-  const p4Retry = await makeService(dbMain).confirmPickup(p4.orderId, undefined, "5555");
+  const p4Retry = await makeService(dbMain).confirmPickup(p4.orderId, "5555");
   const p4AfterRetry = await orderState(p4.orderId);
   const p4GiftAfterRetry = await giftRepoMain.getById(p4GiftId);
 
@@ -551,7 +550,7 @@ async function main(): Promise<void> {
   // P6 — REPLAY AFTER PICKUP
   // ============================================================
   const p6FulfilledAt = p3Gift?.fulfilled_at ?? null;
-  const p6ReplayService = await outcome(makeService(dbMain).confirmPickup(p3.orderId, undefined, "4444"));
+  const p6ReplayService = await outcome(makeService(dbMain).confirmPickup(p3.orderId, "4444"));
   const p6State = await orderState(p3.orderId);
   const p6Gift = await giftRepoMain.getById(p3GiftId);
   check(

@@ -20,14 +20,9 @@ import { GeoFenceService } from "../services/geoFence";
 // Vendor: advance status, confirm-pickup
 // ============================================
 
-const ConfirmPickupSchema = z
-  .object({
-    qr_token: z.string().uuid().optional(),
-    pickup_otp: z.string().length(4).optional(),
-  })
-  .refine((d) => d.qr_token || d.pickup_otp, {
-    message: "Either qr_token or pickup_otp is required",
-  });
+const ConfirmPickupSchema = z.object({
+  pickup_otp: z.string().length(4),
+});
 
 const LocationUpdateSchema = z.object({
   lat: z.number().min(-90).max(90),
@@ -105,7 +100,7 @@ fulfillmentRouter.post(
   }),
 );
 
-// Vendor/staff pickup handover (QR or OTP). F2 actor separation: pickup
+// Vendor/staff pickup handover (OTP). F2 actor separation: pickup
 // completion is a restaurant action, so it is a vendor route behind the
 // vendor/admin role gate and requires access to the order's restaurant. The
 // customer still presents the credential; staff enter it. The 4-digit OTP
@@ -170,7 +165,6 @@ vendorRouter.post(
 
     const order = await fulfillmentService.confirmPickup(
       orderId(req.params.id),
-      body.data.qr_token,
       body.data.pickup_otp,
     );
 

@@ -16,7 +16,6 @@ const OID = "11111111-1111-4111-8111-111111111111";
 function makeOrder(
   status: OrderStatus,
   pickupOtp: string | null = null,
-  qrToken: string | null = null,
 ): OrderDTO {
   const now = new Date().toISOString();
   return {
@@ -29,7 +28,7 @@ function makeOrder(
     commission_rate: 0.08,
     commission_amount: 8,
     pickup_otp: pickupOtp,
-    qr_token: qrToken,
+    qr_token: null,
     checked_in: false,
     scheduled_pickup_time: null,
     created_at: now,
@@ -69,21 +68,21 @@ describe("MemoryOrderRepository CAS primitives", () => {
   });
 
   describe("claimPreparingWithOtp", () => {
-    it("R5 sets PREPARING + OTP + QR in one logical mutation", async () => {
+    it("R5 sets PREPARING + OTP in one logical mutation, with no QR credential", async () => {
       repo._seed(makeOrder("CONFIRMED"));
-      const out = await repo.claimPreparingWithOtp(OID, "CONFIRMED", "4321", "qr-token-abc");
+      const out = await repo.claimPreparingWithOtp(OID, "CONFIRMED", "4321");
       expect(out?.status).toBe("PREPARING");
       expect(out?.pickup_otp).toBe("4321");
-      expect(out?.qr_token).toBe("qr-token-abc");
+      expect(out?.qr_token).toBeNull();
     });
 
-    it("R6 repeat/wrong-state claim is null and does not overwrite OTP/QR", async () => {
+    it("R6 repeat/wrong-state claim is null and does not overwrite the OTP", async () => {
       repo._seed(makeOrder("CONFIRMED"));
-      await repo.claimPreparingWithOtp(OID, "CONFIRMED", "4321", "qr-1");
-      expect(await repo.claimPreparingWithOtp(OID, "CONFIRMED", "9999", "qr-2")).toBeNull();
+      await repo.claimPreparingWithOtp(OID, "CONFIRMED", "4321");
+      expect(await repo.claimPreparingWithOtp(OID, "CONFIRMED", "9999")).toBeNull();
       const stored = await repo.getById(OID);
       expect(stored?.pickup_otp).toBe("4321");
-      expect(stored?.qr_token).toBe("qr-1");
+      expect(stored?.qr_token).toBeNull();
     });
   });
 

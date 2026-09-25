@@ -1,4 +1,4 @@
-import { randomInt, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomInt, timingSafeEqual } from "node:crypto";
 import { createEventEnvelope, emit } from "../lib/eventBus";
 import { publishStatusUpdate } from "../lib/websocket";
 import { AppError } from "../middleware/envelope";
@@ -149,8 +149,7 @@ export class FulfillmentService {
     let refreshed: OrderDTO | null;
     if (nextStatus === "PREPARING") {
       const otp = randomInt(1000, 10000).toString().padStart(4, "0");
-      const qrToken = randomUUID();
-      refreshed = await this.orderRepo.claimPreparingWithOtp(orderId, observedStatus, otp, qrToken);
+      refreshed = await this.orderRepo.claimPreparingWithOtp(orderId, observedStatus, otp);
     } else {
       refreshed = await this.orderRepo.transitionStatus(orderId, observedStatus, nextStatus);
     }
@@ -261,7 +260,7 @@ export class FulfillmentService {
     return updated;
   }
 
-  async confirmPickup(orderId: string, qrToken?: string, pickupOtp?: string): Promise<OrderDTO> {
+  async confirmPickup(orderId: string, pickupOtp?: string): Promise<OrderDTO> {
     const order = await this.orderRepo.getById(orderId);
     if (!order) {
       throw new AppError("ORDER_NOT_FOUND", "Order not found", 404);
@@ -275,31 +274,9 @@ export class FulfillmentService {
       throw new AppError("NOT_READY", `Order is ${order.status}, not READY_FOR_PICKUP`, 400);
     }
 
-    // Verify QR token or OTP. safeEqual is a cheap early reject only; the
-    // authoritative consumption/transition is the CAS below.
-    if (qrToken) {
-      const byQr = await this.orderRepo.findByQrToken(qrToken);
-      if (!byQr || byQr.id !== orderId) {
-        throw new AppError("INVALID_QR", "Invalid QR token", 400);
-      }
-
-      // QR resolves the order; the status transition is still a CAS so exactly
-      // one concurrent pickup wins. QR persistence itself is HELD (F5).
-      const result = await this.getTransactionPort().runInTransaction(
-        async ({ orders, gifts }) => {
-          const picked = await orders.transitionStatus(orderId, "READY_FOR_PICKUP", "PICKED_UP");
-          if (!picked) return null;
-          const fulfilled = await this.fulfillGiftsTx(gifts, picked);
-          return { picked, fulfilled };
-        },
-      );
-      if (!result) {
-        throw await this.pickupConflict(orderId);
-      }
-      await this.afterPickup(result.picked, result.fulfilled, order);
-      return result.picked;
-    }
-
+    // The pickup OTP is the only handover credential. safeEqual is a cheap
+    // early reject only; the authoritative consumption/transition is the CAS
+    // below.
     if (pickupOtp) {
       if (!order.pickup_otp || !safeEqual(order.pickup_otp, pickupOtp)) {
         throw new AppError("INVALID_OTP", "Invalid pickup OTP", 400);
@@ -321,7 +298,7 @@ export class FulfillmentService {
       return result.picked;
     }
 
-    throw new AppError("MISSING_VERIFICATION", "Provide either qr_token or pickup_otp", 400);
+    throw new AppError("MISSING_VERIFICATION", "Provide pickup_otp", 400);
   }
 
   /** Maps a pickup CAS miss to the truthful existing contract. */

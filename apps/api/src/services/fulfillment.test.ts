@@ -49,7 +49,7 @@ const REST_ID = "33333333-3333-4333-8333-333333333333";
 function orderDto(
   id: string,
   status: OrderStatus,
-  opts: { otp?: string; qr?: string; giftId?: string } = {},
+  opts: { otp?: string; giftId?: string } = {},
 ): OrderDTO {
   const now = new Date().toISOString();
   return {
@@ -76,7 +76,7 @@ function orderDto(
     commission_rate: 0.08,
     commission_amount: 8,
     pickup_otp: opts.otp ?? null,
-    qr_token: opts.qr ?? null,
+    qr_token: null,
     checked_in: false,
     scheduled_pickup_time: null,
     created_at: now,
@@ -112,7 +112,6 @@ class ControllableOrderRepository extends MemoryOrderRepository {
     orderId: string,
     fromStatus: OrderStatus,
     otp: string,
-    qrToken?: string,
   ): Promise<OrderDTO | null> {
     log("orders.claimPreparingWithOtp");
     if (this.advanceRace) {
@@ -121,7 +120,7 @@ class ControllableOrderRepository extends MemoryOrderRepository {
       await this.updateStatus(orderId, "PREPARING");
       return null;
     }
-    return super.claimPreparingWithOtp(orderId, fromStatus, otp, qrToken);
+    return super.claimPreparingWithOtp(orderId, fromStatus, otp);
   }
 
   override async consumePickupOtp(
@@ -157,8 +156,8 @@ class Harness {
       getById: (id) => this.orders.getById(id),
       transitionStatus: (id, from, to) =>
         this.orders.transitionStatus(id, from, to),
-      claimPreparingWithOtp: (id, from, otp, qr) =>
-        this.orders.claimPreparingWithOtp(id, from, otp, qr),
+      claimPreparingWithOtp: (id, from, otp) =>
+        this.orders.claimPreparingWithOtp(id, from, otp),
       consumePickupOtp: (id, from, otp) =>
         this.orders.consumePickupOtp(id, from, otp),
     };
@@ -237,18 +236,18 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
   // ---------------- advance ----------------
 
   describe("advanceOrderStatus", () => {
-    it("A1 CONFIRMED->PREPARING persists OTP+QR via one claim CAS", async () => {
+    it("A1 CONFIRMED->PREPARING persists only the OTP via one claim CAS", async () => {
       h.seed(OID, "CONFIRMED");
       const res = await h.service.advanceOrderStatus(OID);
       expect(res.order.status).toBe("PREPARING");
       expect(res.order.pickup_otp).toMatch(/^\d{4}$/);
-      expect(res.order.qr_token).toBeTruthy();
+      expect(res.order.qr_token).toBeNull();
       expect(state.log).toContain("orders.claimPreparingWithOtp");
       expect(state.log).not.toContain("orders.transitionStatus");
     });
 
     it("A2 PREPARING->ALMOST_READY uses the plain CAS transition", async () => {
-      h.seed(OID, "PREPARING", { otp: "1234", qr: "qr-1" });
+      h.seed(OID, "PREPARING", { otp: "1234" });
       const res = await h.service.advanceOrderStatus(OID);
       expect(res.order.status).toBe("ALMOST_READY");
       expect(state.log).toContain("orders.transitionStatus");
@@ -299,7 +298,7 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
   describe("confirmPickup via OTP", () => {
     it("P1 valid OTP consumes it and sets PICKED_UP", async () => {
       h.seed(OID, "READY_FOR_PICKUP", { otp: "1234" });
-      const out = await h.service.confirmPickup(OID, undefined, "1234");
+      const out = await h.service.confirmPickup(OID, "1234");
       expect(out.status).toBe("PICKED_UP");
       expect(out.pickup_otp).toBeNull();
       expect(state.log).toContain("orders.consumePickupOtp");
@@ -309,7 +308,7 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
       const gift = await h.claimedGift();
       await h.gifts.bindToOrder(gift.id, OID);
       h.seed(OID, "READY_FOR_PICKUP", { otp: "1234", giftId: gift.id });
-      await h.service.confirmPickup(OID, undefined, "1234");
+      await h.service.confirmPickup(OID, "1234");
       expect(state.log).toContain("gifts.markFulfilled");
       const begin = state.log.indexOf("tx.begin");
       const fulfill = state.log.indexOf("gifts.markFulfilled");
@@ -323,7 +322,7 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
     it("P3 invalid OTP is rejected, state intact, nothing emitted", async () => {
       h.seed(OID, "READY_FOR_PICKUP", { otp: "1234" });
       await expect(
-        h.service.confirmPickup(OID, undefined, "9999"),
+        h.service.confirmPickup(OID, "9999"),
       ).rejects.toMatchObject({ code: "INVALID_OTP", status: 400 });
       expect((await h.orders.getById(OID))?.status).toBe("READY_FOR_PICKUP");
       expect(published()).toBe(false);
@@ -333,18 +332,18 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
     it("P4 not READY_FOR_PICKUP is rejected as NOT_READY", async () => {
       h.seed(OID, "PREPARING", { otp: "1234" });
       await expect(
-        h.service.confirmPickup(OID, undefined, "1234"),
+        h.service.confirmPickup(OID, "1234"),
       ).rejects.toMatchObject({ code: "NOT_READY", status: 400 });
     });
 
     it("P5 already picked up is ALREADY_PICKED_UP", async () => {
       h.seed(OID, "PICKED_UP");
       await expect(
-        h.service.confirmPickup(OID, undefined, "1234"),
+        h.service.confirmPickup(OID, "1234"),
       ).rejects.toMatchObject({ code: "ALREADY_PICKED_UP", status: 400 });
     });
 
-    it("P6 neither QR nor OTP is MISSING_VERIFICATION", async () => {
+    it("P6 no OTP is MISSING_VERIFICATION", async () => {
       h.seed(OID, "READY_FOR_PICKUP", { otp: "1234" });
       await expect(h.service.confirmPickup(OID)).rejects.toMatchObject({
         code: "MISSING_VERIFICATION",
@@ -354,7 +353,7 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
 
     it("P7 missing order is ORDER_NOT_FOUND", async () => {
       await expect(
-        h.service.confirmPickup(OID, undefined, "1234"),
+        h.service.confirmPickup(OID, "1234"),
       ).rejects.toMatchObject({ code: "ORDER_NOT_FOUND", status: 404 });
     });
 
@@ -365,7 +364,7 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
       h.txGiftFulfillThrow = true;
 
       await expect(
-        h.service.confirmPickup(OID, undefined, "1234"),
+        h.service.confirmPickup(OID, "1234"),
       ).rejects.toThrow("controlled fulfill failure");
 
       const consume = state.log.indexOf("orders.consumePickupOtp");
@@ -385,7 +384,7 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
       h.orders.consumeRace = true;
 
       await expect(
-        h.service.confirmPickup(OID, undefined, "1234"),
+        h.service.confirmPickup(OID, "1234"),
       ).rejects.toMatchObject({ code: "INVALID_OTP", status: 400 });
 
       expect(state.log).toContain("orders.consumePickupOtp");
@@ -395,40 +394,25 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
     });
   });
 
-  // ---------------- QR pickup ----------------
+  // ---------------- OTP-only credential ----------------
 
-  describe("confirmPickup via QR", () => {
-    it("Q1 valid QR resolves the order, transitions, fulfills gift", async () => {
+  describe("confirmPickup OTP-only", () => {
+    it("R1 a legacy qr_token value is not a valid pickup credential", async () => {
+      h.seed(OID, "READY_FOR_PICKUP", { otp: "1234" });
+      await expect(h.service.confirmPickup(OID, "qr-abc")).rejects.toMatchObject({
+        code: "INVALID_OTP",
+        status: 400,
+      });
+    });
+
+    it("R2 a matching OTP consumes the order", async () => {
       const gift = await h.claimedGift();
       await h.gifts.bindToOrder(gift.id, OID);
-      h.seed(OID, "READY_FOR_PICKUP", { qr: "qr-abc", giftId: gift.id });
-      const out = await h.service.confirmPickup(OID, "qr-abc");
+      h.seed(OID, "READY_FOR_PICKUP", { otp: "1234", giftId: gift.id });
+      const out = await h.service.confirmPickup(OID, "1234");
       expect(out.status).toBe("PICKED_UP");
       expect((await h.gifts.getById(gift.id))?.status).toBe("FULFILLED");
-    });
-
-    it("Q2 unknown QR is INVALID_QR", async () => {
-      h.seed(OID, "READY_FOR_PICKUP", { qr: "qr-abc" });
-      await expect(h.service.confirmPickup(OID, "qr-nope")).rejects.toMatchObject({
-        code: "INVALID_QR",
-        status: 400,
-      });
-    });
-
-    it("Q3 QR belonging to another order is INVALID_QR", async () => {
-      h.seed(OID, "READY_FOR_PICKUP", { qr: "qr-abc" });
-      h.seed(OID_2, "READY_FOR_PICKUP", { qr: "qr-other" });
-      await expect(h.service.confirmPickup(OID_2, "qr-abc")).rejects.toMatchObject(
-        { code: "INVALID_QR", status: 400 },
-      );
-    });
-
-    it("Q4 QR on an already-picked order is ALREADY_PICKED_UP", async () => {
-      h.seed(OID, "PICKED_UP", { qr: "qr-abc" });
-      await expect(h.service.confirmPickup(OID, "qr-abc")).rejects.toMatchObject({
-        code: "ALREADY_PICKED_UP",
-        status: 400,
-      });
+      expect(out.qr_token).toBeNull();
     });
   });
 
@@ -558,7 +542,7 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
       const gift = await h.claimedGift();
       await h.gifts.bindToOrder(gift.id, OID);
       h.seed(OID, "READY_FOR_PICKUP", { otp: "1234", giftId: gift.id });
-      await h.service.confirmPickup(OID, undefined, "1234");
+      await h.service.confirmPickup(OID, "1234");
       const consume = state.log.indexOf("orders.consumePickupOtp");
       const giftMark = state.log.indexOf("gifts.markFulfilled");
       const commit = state.log.indexOf("tx.end");
@@ -576,7 +560,7 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
     it("E3 rejected pickup emits no publish/event", async () => {
       h.seed(OID, "READY_FOR_PICKUP", { otp: "1234" });
       await expect(
-        h.service.confirmPickup(OID, undefined, "0000"),
+        h.service.confirmPickup(OID, "0000"),
       ).rejects.toBeTruthy();
       expect(published()).toBe(false);
       expect(state.log.some((e) => e.startsWith("emit:"))).toBe(false);

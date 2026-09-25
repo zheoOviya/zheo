@@ -95,14 +95,12 @@ export interface OrderRepository {
   ): Promise<OrderDTO | null>;
   /**
    * Atomic CONFIRMED->PREPARING claim that persists the pickup OTP in the same
-   * mutation, so PREPARING can never commit without its OTP. `qrToken` is
-   * carried for Memory parity only; Postgres has no qr_token column (F5 held).
+   * mutation, so PREPARING can never commit without its OTP.
    */
   claimPreparingWithOtp(
     orderId: string,
     fromStatus: OrderStatus,
     otp: string,
-    qrToken?: string,
   ): Promise<OrderDTO | null>;
   /**
    * Atomic single-use pickup: consumes the stored OTP and flips the order to
@@ -114,9 +112,7 @@ export interface OrderRepository {
     fromStatus: OrderStatus,
     otp: string,
   ): Promise<OrderDTO | null>;
-  setPickupOtp(orderId: string, otp: string, qrToken: string): Promise<OrderDTO | null>;
   setCheckedIn(orderId: string): Promise<OrderDTO | null>;
-  findByQrToken(qrToken: string): Promise<OrderDTO | null>;
   /**
    * O02 group cart: atomically replaces the order's line items and recomputed
    * totals. Used ONLY by the group-order service under its per-token lock so
@@ -237,7 +233,6 @@ export class MemoryOrderRepository implements OrderRepository {
     orderId: string,
     fromStatus: OrderStatus,
     otp: string,
-    qrToken?: string,
   ): Promise<OrderDTO | null> {
     const order = this.orders.get(orderId);
     if (!order || order.status !== fromStatus) return null;
@@ -245,7 +240,6 @@ export class MemoryOrderRepository implements OrderRepository {
       ...order,
       status: "PREPARING",
       pickup_otp: otp,
-      qr_token: qrToken ?? null,
       updated_at: new Date().toISOString(),
     };
     this.orders.set(orderId, updated);
@@ -320,23 +314,6 @@ export class MemoryOrderRepository implements OrderRepository {
       );
   }
 
-  async setPickupOtp(
-    orderId: string,
-    otp: string,
-    qrToken: string,
-  ): Promise<OrderDTO | null> {
-    const order = this.orders.get(orderId);
-    if (!order) return null;
-    const updated: OrderDTO = {
-      ...order,
-      pickup_otp: otp,
-      qr_token: qrToken,
-      updated_at: new Date().toISOString(),
-    };
-    this.orders.set(orderId, updated);
-    return updated;
-  }
-
   async setCheckedIn(orderId: string): Promise<OrderDTO | null> {
     const order = this.orders.get(orderId);
     if (!order) return null;
@@ -347,13 +324,6 @@ export class MemoryOrderRepository implements OrderRepository {
     };
     this.orders.set(orderId, updated);
     return updated;
-  }
-
-  async findByQrToken(qrToken: string): Promise<OrderDTO | null> {
-    for (const o of this.orders.values()) {
-      if (o.qr_token === qrToken) return o;
-    }
-    return null;
   }
 
   async setItems(
