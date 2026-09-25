@@ -30,7 +30,6 @@ function seedOrder(
     commission_rate: 0.08,
     commission_amount: 0,
     pickup_otp: null,
-    qr_token: null,
     checked_in: false,
     scheduled_pickup_time: null,
     created_at: createdAt,

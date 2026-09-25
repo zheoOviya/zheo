@@ -222,7 +222,6 @@ describe("Discovery routes", () => {
         commission_rate: 0.08,
         commission_amount: 88,
         pickup_otp: null,
-        qr_token: null,
         checked_in: false,
         scheduled_pickup_time: null,
         created_at: new Date(now - 2 * 60 * 60 * 1000).toISOString(),

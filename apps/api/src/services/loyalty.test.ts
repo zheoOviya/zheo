@@ -46,7 +46,6 @@ function seedOrder(id: string): OrderDTO {
     commission_rate: 0.08,
     commission_amount: 0,
     pickup_otp: "1234",
-    qr_token: null,
     checked_in: false,
     scheduled_pickup_time: null,
     created_at: new Date().toISOString(),

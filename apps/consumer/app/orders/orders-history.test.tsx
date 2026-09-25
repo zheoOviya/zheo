@@ -60,7 +60,6 @@ const ORDER: OrderHistoryEntry = {
   status: "CONFIRMED",
   total_amount: 450,
   pickup_otp: null,
-  qr_token: null,
   checked_in: false,
   scheduled_pickup_time: null,
   created_at: "2026-08-01T10:00:00Z",

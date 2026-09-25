@@ -67,9 +67,6 @@ function mapOrderRow(
     is_catering: (row.is_catering as boolean) ?? false,
     headcount: (row.headcount as number | null) ?? null,
     pickup_otp: (row.pickup_otp as string) ?? null,
-    // CONSUMER_PICKUP_TRUTH-W2C: the OTP is the only handover credential and
-    // the DB has no qr_token column, so this compat field is always null.
-    qr_token: null,
     // CONSUMER_PICKUP_TRUTH-W2A: persisted boolean column is the source of
     // truth; no DTO-only fallback.
     checked_in: row.checked_in as boolean,
@@ -166,7 +163,6 @@ export class DrizzleOrderRepository implements OrderRepository {
       is_catering: input.is_catering ?? false,
       headcount: input.headcount ?? null,
       pickup_otp: null,
-      qr_token: null,
       checked_in: false,
       scheduled_pickup_time: input.scheduled_pickup_time ?? null,
       created_at: now.toISOString(),

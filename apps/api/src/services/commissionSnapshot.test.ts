@@ -80,7 +80,6 @@ function orderWithSnapshot(
     commission_rate: rate,
     commission_amount: amount,
     pickup_otp: null,
-    qr_token: null,
     checked_in: false,
     scheduled_pickup_time: null,
     created_at: created,

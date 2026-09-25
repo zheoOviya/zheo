@@ -34,7 +34,6 @@ function makeOrder(
     is_catering: false,
     headcount: null,
     pickup_otp: null,
-    qr_token: null,
     checked_in: false,
     scheduled_pickup_time: null,
     created_at: createdAtIso,

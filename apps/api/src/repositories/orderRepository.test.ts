@@ -28,7 +28,6 @@ function makeOrder(
     commission_rate: 0.08,
     commission_amount: 8,
     pickup_otp: pickupOtp,
-    qr_token: null,
     checked_in: false,
     scheduled_pickup_time: null,
     created_at: now,
@@ -68,12 +67,11 @@ describe("MemoryOrderRepository CAS primitives", () => {
   });
 
   describe("claimPreparingWithOtp", () => {
-    it("R5 sets PREPARING + OTP in one logical mutation, with no QR credential", async () => {
+    it("R5 sets PREPARING + OTP in one logical mutation", async () => {
       repo._seed(makeOrder("CONFIRMED"));
       const out = await repo.claimPreparingWithOtp(OID, "CONFIRMED", "4321");
       expect(out?.status).toBe("PREPARING");
       expect(out?.pickup_otp).toBe("4321");
-      expect(out?.qr_token).toBeNull();
     });
 
     it("R6 repeat/wrong-state claim is null and does not overwrite the OTP", async () => {
@@ -82,7 +80,6 @@ describe("MemoryOrderRepository CAS primitives", () => {
       expect(await repo.claimPreparingWithOtp(OID, "CONFIRMED", "9999")).toBeNull();
       const stored = await repo.getById(OID);
       expect(stored?.pickup_otp).toBe("4321");
-      expect(stored?.qr_token).toBeNull();
     });
   });
 

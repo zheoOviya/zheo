@@ -133,7 +133,6 @@ vendorRouter.put(
       order_id: result.order.id,
       status: result.nextStatus,
       pickup_otp: result.order.pickup_otp,
-      qr_token: result.order.qr_token,
       early_ready_alerted: result.earlyReadyAlerted,
     });
   }),
@@ -249,7 +248,6 @@ vendorRouter.get(
             customizations: i.customizations,
           })),
           pickup_otp: o.pickup_otp,
-          qr_token: o.qr_token,
           checked_in: o.checked_in,
           created_at: o.created_at,
           payment_method: payment?.method ?? null,

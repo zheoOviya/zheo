@@ -111,7 +111,7 @@ describe("Fulfillment routes", () => {
 
       expect(res.body.data.status).toBe("PREPARING");
       expect(res.body.data.pickup_otp).toMatch(/^\d{4}$/);
-      expect(res.body.data.qr_token).toBeNull();
+      expect(res.body.data).not.toHaveProperty("qr_token");
     });
 
     it("advances through full state machine to READY_FOR_PICKUP", async () => {

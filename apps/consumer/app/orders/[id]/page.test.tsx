@@ -83,7 +83,6 @@ interface OrderData {
   restaurant_id: string;
   status: string;
   pickup_otp: string | null;
-  qr_token: string | null;
   total_amount: number;
   items: Array<{ name: string; quantity: number }>;
   checked_in: boolean;
@@ -95,7 +94,6 @@ function orderData(overrides: Partial<OrderData> = {}): OrderData {
     restaurant_id: "r1",
     status: "CONFIRMED",
     pickup_otp: null,
-    qr_token: null,
     total_amount: 100,
     items: [{ name: "Burger", quantity: 1 }],
     checked_in: false,
@@ -265,7 +263,6 @@ describe("order detail freshness", () => {
         success(
           orderData({
             status: "READY_FOR_PICKUP",
-            qr_token: "qr-1",
             pickup_otp: "123456",
           }),
         ),
@@ -278,6 +275,43 @@ describe("order detail freshness", () => {
     await notify("READY_FOR_PICKUP");
 
     expect(await screen.findByTestId("qr-code")).toHaveTextContent("123456");
+  });
+
+  it("5a. hides the QR/OTP card when a READY order has no OTP", async () => {
+    fetchMock.mockResolvedValue(
+      success(orderData({ status: "READY_FOR_PICKUP", pickup_otp: null })),
+    );
+
+    render(<OrderTrackingPage />);
+    await screen.findByTestId("order-tracker");
+    await act(async () => {});
+
+    expect(screen.queryByTestId("qr-code")).toBeNull();
+    expect(screen.queryByText("Pickup Code")).toBeNull();
+  });
+
+  it("5b. hides the QR/OTP card before the order is READY", async () => {
+    fetchMock.mockResolvedValue(
+      success(orderData({ status: "PREPARING", pickup_otp: "123456" })),
+    );
+
+    render(<OrderTrackingPage />);
+    await screen.findByTestId("order-tracker");
+    await act(async () => {});
+
+    expect(screen.queryByTestId("qr-code")).toBeNull();
+  });
+
+  it("5c. hides the QR/OTP card after pickup", async () => {
+    fetchMock.mockResolvedValue(
+      success(orderData({ status: "PICKED_UP", pickup_otp: "123456" })),
+    );
+
+    render(<OrderTrackingPage />);
+    await screen.findByTestId("order-tracker");
+    await act(async () => {});
+
+    expect(screen.queryByTestId("qr-code")).toBeNull();
   });
 
   it("6. shows the pickup confirmation from the authoritative PICKED_UP snapshot", async () => {

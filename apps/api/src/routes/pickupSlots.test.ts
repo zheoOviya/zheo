@@ -61,7 +61,6 @@ describe("Pickup Slots API", () => {
       commission_rate: 0.08,
       commission_amount: 8,
       pickup_otp: null,
-      qr_token: null,
       checked_in: false,
       scheduled_pickup_time: iso,
       created_at: "2026-08-24T00:00:00.000Z",

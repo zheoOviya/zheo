@@ -322,7 +322,6 @@ export interface OrderHistoryEntry {
   status: string;
   total_amount: number;
   pickup_otp: string | null;
-  qr_token: string | null;
   checked_in: boolean;
   scheduled_pickup_time: string | null;
   created_at: string;

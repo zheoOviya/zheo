@@ -37,7 +37,6 @@ export interface OrderDTO {
   /** W12 (Phase 4): event headcount. NULL for standard orders. */
   headcount?: number | null;
   pickup_otp: string | null;
-  qr_token: string | null;
   checked_in: boolean;
   scheduled_pickup_time: string | null;
   created_at: string;
@@ -147,7 +146,6 @@ export class MemoryOrderRepository implements OrderRepository {
       is_catering: input.is_catering ?? false,
       headcount: input.headcount ?? null,
       pickup_otp: null,
-      qr_token: null,
       checked_in: false,
       scheduled_pickup_time: input.scheduled_pickup_time ?? null,
       created_at: now,

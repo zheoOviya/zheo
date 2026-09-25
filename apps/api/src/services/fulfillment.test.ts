@@ -76,7 +76,6 @@ function orderDto(
     commission_rate: 0.08,
     commission_amount: 8,
     pickup_otp: opts.otp ?? null,
-    qr_token: null,
     checked_in: false,
     scheduled_pickup_time: null,
     created_at: now,
@@ -241,7 +240,6 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
       const res = await h.service.advanceOrderStatus(OID);
       expect(res.order.status).toBe("PREPARING");
       expect(res.order.pickup_otp).toMatch(/^\d{4}$/);
-      expect(res.order.qr_token).toBeNull();
       expect(state.log).toContain("orders.claimPreparingWithOtp");
       expect(state.log).not.toContain("orders.transitionStatus");
     });
@@ -412,7 +410,6 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
       const out = await h.service.confirmPickup(OID, "1234");
       expect(out.status).toBe("PICKED_UP");
       expect((await h.gifts.getById(gift.id))?.status).toBe("FULFILLED");
-      expect(out.qr_token).toBeNull();
     });
   });
 

@@ -33,7 +33,6 @@ interface OrderInfo {
   restaurant_id: string;
   status: string;
   pickup_otp: string | null;
-  qr_token: string | null;
   total_amount: number;
   items: Array<{ name: string; quantity: number }>;
   checked_in: boolean;
@@ -390,7 +389,7 @@ function TrackingContent() {
         )}
 
         {/* QR Code + OTP for pickup */}
-        {isReady && order.qr_token && order.pickup_otp && (
+        {isReady && order.pickup_otp && (
           <div className="surface-card p-6">
             <h2 className="mb-4 text-lg font-semibold text-neutral-800 dark:text-neutral-100">
               Show this at the counter
