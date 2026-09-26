@@ -19,6 +19,7 @@ import {
   getStorageMode,
 } from "../repositories/shared";
 import { getRedis } from "../lib/redis";
+import { probePostgres } from "../lib/db";
 import {
   decodeNotificationInspectionCursor,
   encodeNotificationInspectionCursor,
@@ -89,10 +90,32 @@ adminRouter.get(
         redisStatus = "degraded";
       }
     }
+
+    // Live Postgres truth. Only probed when we are actually running against
+    // Postgres (neither test nor in-memory fallback), so no real pool is ever
+    // opened in test/memory mode. `storage_mode` is boot-time configuration and
+    // does not by itself prove the DB is reachable now.
+    let postgresStatus: "reachable" | "degraded" | "memory";
+    if (process.env.NODE_ENV === "test" || storageMode === "memory") {
+      postgresStatus = "memory";
+    } else {
+      try {
+        postgresStatus = (await probePostgres(1500)) ? "reachable" : "degraded";
+      } catch {
+        postgresStatus = "degraded";
+      }
+    }
+
+    // Top-level status reflects live dependency truth. "memory" is a
+    // non-degraded operating mode, not an outage.
+    const status: "ok" | "degraded" =
+      redisStatus === "degraded" || postgresStatus === "degraded" ? "degraded" : "ok";
+
     ok(res, {
-      status: "ok",
+      status,
       storage_mode: storageMode,
       redis: redisStatus,
+      postgres: postgresStatus,
       uptime_seconds: Math.round(process.uptime()),
       latency_ms: Date.now() - started,
       timestamp: new Date().toISOString(),

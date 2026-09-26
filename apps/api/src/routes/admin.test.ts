@@ -1,13 +1,41 @@
 import type { Express } from "express";
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { jwtService } from "../services/jwt";
 import { sharedKillSwitchRepo, sharedIdentityRepo, sharedSupportRepo, sharedRoleRepo, sharedOrderRepo, sharedPaymentRepo, sharedLoyaltyRepo, sharedAuditRepo, sharedVendorApplicationRepo, sharedNotificationRepo } from "../repositories/shared";
 import type { OrderDTO } from "../repositories/orderRepository";
 import type { OrderStatus } from "@snakzap/types";
-import { resetRedisForTests } from "../lib/redis";
+import { MemoryRedis, resetRedisForTests, setRedisForTests } from "../lib/redis";
 import { computeSettlementLine } from "../services/settlement";
+
+// Deterministic seams for the admin /health dependency truth table. The
+// storage mode and the live Postgres probe are the only two inputs the route
+// takes from outside itself; both are driven here without touching production
+// code or requiring a live Postgres instance.
+const healthState = vi.hoisted(() => ({
+  storageMode: "memory" as "postgres" | "memory",
+  probeReachable: true,
+}));
+
+vi.mock("../repositories/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../repositories/shared")>();
+  return { ...actual, getStorageMode: () => healthState.storageMode };
+});
+
+vi.mock("../lib/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/db")>();
+  return {
+    ...actual,
+    probePostgres: async () => healthState.probeReachable,
+  };
+});
+
+function redisMock(ping: () => Promise<string>): MemoryRedis {
+  const mock = new MemoryRedis();
+  mock.ping = ping;
+  return mock;
+}
 
 function adminToken(role: string) {
   return `Bearer ${jwtService.signAccessToken({
@@ -1002,6 +1030,17 @@ describe("Admin RBAC (A-01, A-11)", () => {
   });
 
   describe("System Health (A-11)", () => {
+    beforeEach(() => {
+      healthState.storageMode = "memory";
+      healthState.probeReachable = true;
+      resetRedisForTests();
+    });
+
+    afterEach(() => {
+      resetRedisForTests();
+      vi.unstubAllEnvs();
+    });
+
     it("GET /admin/health reports storage mode, redis, uptime and latency", async () => {
       const res = await request(app)
         .get("/api/v1/admin/health")
@@ -1014,6 +1053,99 @@ describe("Admin RBAC (A-01, A-11)", () => {
       expect(typeof data.uptime_seconds).toBe("number");
       expect(typeof data.latency_ms).toBe("number");
       expect(typeof data.timestamp).toBe("string");
+    });
+
+    it("H1: test/memory mode -> redis=memory, postgres=memory, status=ok over HTTP 200", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/health")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      expect(res.body.data.redis).toBe("memory");
+      expect(res.body.data.postgres).toBe("memory");
+      expect(res.body.data.status).toBe("ok");
+    });
+
+    it("H2: degraded Redis + reachable Postgres -> status=degraded, HTTP 200", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      healthState.storageMode = "postgres";
+      healthState.probeReachable = true;
+      setRedisForTests(
+        redisMock(async () => {
+          throw new Error("redis down");
+        }),
+      );
+      const res = await request(app)
+        .get("/api/v1/admin/health")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      expect(res.body.data.redis).toBe("degraded");
+      expect(res.body.data.postgres).toBe("reachable");
+      expect(res.body.data.status).toBe("degraded");
+    });
+
+    it("H3: reachable Redis + degraded Postgres -> status=degraded, HTTP 200", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      healthState.storageMode = "postgres";
+      healthState.probeReachable = false;
+      setRedisForTests(redisMock(async () => "PONG"));
+      const res = await request(app)
+        .get("/api/v1/admin/health")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      expect(res.body.data.redis).toBe("reachable");
+      expect(res.body.data.postgres).toBe("degraded");
+      expect(res.body.data.status).toBe("degraded");
+    });
+
+    it("H4: both dependencies degraded -> status=degraded, HTTP 200", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      healthState.storageMode = "postgres";
+      healthState.probeReachable = false;
+      setRedisForTests(redisMock(async () => "ERR"));
+      const res = await request(app)
+        .get("/api/v1/admin/health")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      expect(res.body.data.redis).toBe("degraded");
+      expect(res.body.data.postgres).toBe("degraded");
+      expect(res.body.data.status).toBe("degraded");
+    });
+
+    it("H5: both dependencies healthy -> status=ok, HTTP 200", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      healthState.storageMode = "postgres";
+      healthState.probeReachable = true;
+      setRedisForTests(redisMock(async () => "PONG"));
+      const res = await request(app)
+        .get("/api/v1/admin/health")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      expect(res.body.data.redis).toBe("reachable");
+      expect(res.body.data.postgres).toBe("reachable");
+      expect(res.body.data.status).toBe("ok");
+    });
+
+    it("H6: existing fields preserved and status stays in the ok|degraded domain", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/health")
+        .set("Authorization", adminToken("ADMIN"));
+      const data = res.body.data;
+      expect(["postgres", "memory"]).toContain(data.storage_mode);
+      expect(["reachable", "degraded", "memory"]).toContain(data.redis);
+      expect(["reachable", "degraded", "memory"]).toContain(data.postgres);
+      expect(["ok", "degraded"]).toContain(data.status);
+      expect(typeof data.uptime_seconds).toBe("number");
+      expect(typeof data.latency_ms).toBe("number");
+      expect(typeof data.timestamp).toBe("string");
+    });
+
+    it("H7: auth behavior unchanged (non-admin 403, unauthenticated 401)", async () => {
+      const forbidden = await request(app)
+        .get("/api/v1/admin/health")
+        .set("Authorization", consumerToken());
+      expect(forbidden.status).toBe(403);
+      const unauthenticated = await request(app).get("/api/v1/admin/health");
+      expect(unauthenticated.status).toBe(401);
     });
   });
 
