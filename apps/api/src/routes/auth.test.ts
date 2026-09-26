@@ -5,6 +5,7 @@ import { ApiEnvelopeSchema } from "@snakzap/types";
 import { createApp } from "../app";
 import { getRedis, resetRedisForTests } from "../lib/redis";
 import { sharedIdentityRepo } from "../repositories/shared";
+import { jwtService } from "../services/jwt";
 import { generateTotpCode } from "../services/totp";
 
 const PHONE = "+919876543210";
@@ -548,5 +549,198 @@ describe("Admin email login (email -> mobile OTP)", () => {
     expect(res.body.data.totp_ticket).toBeTruthy();
     expect(res.body.data.phone).toBe(TOTP_PHONE);
     expect(res.body.data.access_token).toBeUndefined();
+  });
+});
+
+// ============================================
+// AUTH-P0: refresh re-reads authoritative account state
+//
+// The refresh token proves the holder was authenticated when it was issued,
+// not what the account is now. These tests lock the P0 fix: a suspension,
+// deletion, demotion, or upgrade that happens after issuance must be applied
+// on the next rotation; the token's stale role must not be trusted.
+// ============================================
+
+describe("Refresh re-reads current account state (AUTH-P0)", () => {
+  const CONSUMER_PHONE = "+919876000070";
+  const ADMIN_EMAIL = "refresh-ops@snakzap.dev";
+  const ADMIN_PHONE = "+919876000071";
+  const ADMIN_ID = "u-refresh-admin-00000000001";
+  const VENDOR_PHONE = "+919876000072";
+  const VENDOR_ID = "u-refresh-vendor-0000000001";
+  const FP = "fp-refresh-000000000001";
+
+  let app: Express;
+
+  beforeEach(() => {
+    resetRedisForTests();
+    sharedIdentityRepo._reset();
+    app = createApp();
+  });
+
+  function readRefreshCookie(setCookie: string[] | undefined): string {
+    const header = (setCookie ?? []).find((c) => c.startsWith("snakzap_refresh="));
+    expect(header).toBeDefined();
+    return header!.split(";")[0]!.replace("snakzap_refresh=", "");
+  }
+
+  function accessRole(accessToken: string): string {
+    return jwtService.verifyAccessToken(accessToken).role;
+  }
+
+  async function loginConsumer(
+    phone: string,
+  ): Promise<{ cookie: string; userId: string }> {
+    const otpRes = await request(app)
+      .post("/api/v1/auth/send-otp")
+      .send({ phone })
+      .expect(200);
+    const otp = otpRes.body.data.demoOtp as string;
+    const res = await request(app)
+      .post("/api/v1/auth/verify-otp")
+      .send({ phone, otp, device_fingerprint: FP })
+      .expect(200);
+    const user = await sharedIdentityRepo.getByPhone(phone);
+    expect(user).not.toBeNull();
+    return {
+      cookie: readRefreshCookie(res.headers["set-cookie"] as string[] | undefined),
+      userId: user!.id,
+    };
+  }
+
+  async function loginOperator(): Promise<string> {
+    sharedIdentityRepo._seed({
+      id: ADMIN_ID,
+      phone: ADMIN_PHONE,
+      email: ADMIN_EMAIL,
+      role: "ADMIN",
+      is_suspended: false,
+      totp_secret: null,
+      totp_enabled: false,
+      created_at: new Date().toISOString(),
+    });
+    await request(app)
+      .post("/api/v1/auth/admin/send-otp")
+      .send({ email: ADMIN_EMAIL })
+      .expect(200);
+    const otp = await getRedis().get(`otp:${ADMIN_PHONE}`);
+    expect(otp).toMatch(/^[0-9]{6}$/);
+    const res = await request(app)
+      .post("/api/v1/auth/admin/verify-otp")
+      .send({ email: ADMIN_EMAIL, otp, device_fingerprint: FP })
+      .expect(200);
+    expect(res.body.data.user.role).toBe("ADMIN");
+    return readRefreshCookie(res.headers["set-cookie"] as string[] | undefined);
+  }
+
+  it("R1: an unchanged account rotates and keeps its current role", async () => {
+    const { cookie } = await loginConsumer(CONSUMER_PHONE);
+    const res = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .send({ device_fingerprint: FP })
+      .expect(200);
+    expect(accessRole(res.body.data.access_token)).toBe("CONSUMER");
+  });
+
+  it("R2: a demoted operator cannot mint an ADMIN token from the old refresh token", async () => {
+    const cookie = await loginOperator();
+    await sharedIdentityRepo.updateRole(ADMIN_ID, "CONSUMER");
+
+    const res = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .send({ device_fingerprint: FP })
+      .expect(200);
+    expect(accessRole(res.body.data.access_token)).toBe("CONSUMER");
+  });
+
+  it("R3: an upgraded vendor gets the current DB role, not the token's old role", async () => {
+    sharedIdentityRepo._seed({
+      id: VENDOR_ID,
+      phone: VENDOR_PHONE,
+      role: "PENDING_VENDOR",
+      is_suspended: false,
+      totp_enabled: false,
+      created_at: new Date().toISOString(),
+    });
+    await request(app)
+      .post("/api/v1/auth/vendor/send-otp")
+      .send({ phone: VENDOR_PHONE })
+      .expect(200);
+    const otp = await getRedis().get(`otp:${VENDOR_PHONE}`);
+    const login = await request(app)
+      .post("/api/v1/auth/vendor/verify-otp")
+      .send({ phone: VENDOR_PHONE, otp, device_fingerprint: FP })
+      .expect(200);
+    expect(login.body.data.user.role).toBe("PENDING_VENDOR");
+    const cookie = readRefreshCookie(
+      login.headers["set-cookie"] as string[] | undefined,
+    );
+
+    await sharedIdentityRepo.updateRole(VENDOR_ID, "VENDOR_OWNER");
+    const res = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .send({ device_fingerprint: FP })
+      .expect(200);
+    expect(accessRole(res.body.data.access_token)).toBe("VENDOR_OWNER");
+  });
+
+  it("R4: a suspended account is denied without consuming the token; reactivation restores it", async () => {
+    const { cookie, userId } = await loginConsumer(CONSUMER_PHONE);
+    const jti = jwtService.verifyRefreshToken(cookie).jti!;
+
+    await sharedIdentityRepo.suspend(userId, "test suspension");
+    const denied = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .send({ device_fingerprint: FP })
+      .expect(403);
+    expect(denied.body.error.code).toBe("ACCOUNT_SUSPENDED");
+
+    // The denial must not blacklist the jti (no irreversible logout).
+    expect(await getRedis().get(`jwt:blacklist:${jti}`)).toBeNull();
+
+    await sharedIdentityRepo.reactivate(userId);
+    const recovered = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .send({ device_fingerprint: FP })
+      .expect(200);
+    expect(accessRole(recovered.body.data.access_token)).toBe("CONSUMER");
+  });
+
+  it("R5: a deleted account is denied without consuming the token", async () => {
+    const { cookie } = await loginConsumer(CONSUMER_PHONE);
+    const jti = jwtService.verifyRefreshToken(cookie).jti!;
+
+    sharedIdentityRepo._reset();
+    const res = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .send({ device_fingerprint: FP })
+      .expect(401);
+    expect(res.body.error.code).toBe("UNAUTHORIZED");
+    expect(await getRedis().get(`jwt:blacklist:${jti}`)).toBeNull();
+  });
+
+  it("R6: a successful rotation still blacklists the old jti (reuse rejected)", async () => {
+    const { cookie } = await loginConsumer(CONSUMER_PHONE);
+    const jti = jwtService.verifyRefreshToken(cookie).jti!;
+
+    await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .send({ device_fingerprint: FP })
+      .expect(200);
+    expect(await getRedis().get(`jwt:blacklist:${jti}`)).not.toBeNull();
+
+    const reused = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .send({ device_fingerprint: FP })
+      .expect(401);
+    expect(reused.body.error.code).toBe("REFRESH_TOKEN_REUSED");
   });
 });

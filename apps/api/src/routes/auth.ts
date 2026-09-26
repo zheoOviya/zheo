@@ -254,6 +254,57 @@ authRouter.post(
   }),
 );
 
+// ============================================
+// AUTH-P0: refresh must re-read the account before minting new tokens.
+//
+// The refresh token only proves the holder was authenticated when it was
+// issued. A suspension, deletion, or role change that happened afterwards
+// must take effect at the next rotation instead of being silently inherited
+// from the token's stale claims. This orchestration (all public JwtService
+// methods) replaces rotateRefreshToken's claim-copying with an authoritative
+// identity read, and runs the deny checks BEFORE the old jti is blacklisted
+// so a rejected rotation is not turned into an irreversible logout.
+// ============================================
+async function rotateRefreshWithCurrentRole(
+  oldRefresh: string,
+  deviceFingerprint: string,
+): Promise<{ accessToken: string; refreshToken: string; refreshJti: string }> {
+  const claims = jwtService.verifyRefreshToken(oldRefresh);
+
+  if (await jwtService.isRefreshTokenBlacklisted(claims.jti!)) {
+    throw new AppError(
+      "REFRESH_TOKEN_REUSED",
+      "Refresh token reuse detected. Re-authentication required.",
+      401,
+    );
+  }
+
+  if (claims.device_fingerprint !== deviceFingerprint) {
+    throw new AppError(
+      "DEVICE_MISMATCH",
+      "New device detected. Step-up authentication (OTP) required.",
+      401,
+    );
+  }
+
+  const user = await sharedIdentityRepo.getById(claims.sub);
+  if (!user) {
+    throw new AppError("UNAUTHORIZED", "User no longer exists", 401);
+  }
+  if (user.is_suspended) {
+    throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended", 403);
+  }
+
+  await jwtService.blacklistRefreshToken(claims.jti!);
+
+  return jwtService.issuePair({
+    sub: user.id,
+    phone: user.phone,
+    role: user.role,
+    device_fingerprint: deviceFingerprint,
+  });
+}
+
 authRouter.post(
   "/refresh",
   asyncHandler(async (req, res) => {
@@ -267,7 +318,7 @@ authRouter.post(
       throw new AppError("REFRESH_TOKEN_MISSING", "No refresh token cookie", 401);
     }
 
-    const pair = await jwtService.rotateRefreshToken(
+    const pair = await rotateRefreshWithCurrentRole(
       oldRefresh,
       body.data.device_fingerprint,
     );
