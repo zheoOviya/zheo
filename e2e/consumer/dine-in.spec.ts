@@ -4,6 +4,7 @@ import {
   DINE_IN_FIXTURE_RESTAURANT_ID,
   DINE_IN_FIXTURE_RESTAURANT_NAME,
   DINE_IN_FIXTURE_TABLES,
+  resolveDineInFixture,
   type DineInFixtureTable,
 } from "./dine-in-fixture.constants";
 
@@ -39,34 +40,35 @@ import {
 //   npx playwright test e2e/consumer/dine-in.spec.ts --project=consumer --grep "skeleton -> loaded"
 // ============================================
 
-// Per-track fixture assignment (UI8-B1..B8.2). Each track owns one table from
-// DINE_IN_FIXTURE_TABLES so a single full-file CI run against one shared API
-// process never contends for the one live-session slot. The mapping is static,
-// deterministic, and visible: Track A keeps Table 01, and the rest map in
-// declaration order. Assertions that pinned "Table 01" are parameterized to
-// the track's own fixture below.
-const TRACK_FIXTURES: Record<string, DineInFixtureTable> = {
-  A: DINE_IN_FIXTURE_TABLES[0],
-  B: DINE_IN_FIXTURE_TABLES[1],
-  C: DINE_IN_FIXTURE_TABLES[2],
-  D: DINE_IN_FIXTURE_TABLES[3],
-  E1: DINE_IN_FIXTURE_TABLES[4],
-  E2: DINE_IN_FIXTURE_TABLES[5],
-  E3: DINE_IN_FIXTURE_TABLES[6],
-  F1: DINE_IN_FIXTURE_TABLES[7],
-  F2: DINE_IN_FIXTURE_TABLES[8],
-  F3: DINE_IN_FIXTURE_TABLES[9],
-  G1: DINE_IN_FIXTURE_TABLES[10],
-  G2: DINE_IN_FIXTURE_TABLES[11],
-  H: DINE_IN_FIXTURE_TABLES[12],
-  H1: DINE_IN_FIXTURE_TABLES[13],
-  H2: DINE_IN_FIXTURE_TABLES[14],
+// Per-track LOGICAL fixture assignment (UI8-B1..B8.2). Each track owns one
+// logical slot from DINE_IN_FIXTURE_TABLES and resolves it to a retry-disjoint
+// physical table via `resolveDineInFixture` (physicalIndex = logical + retry*18).
+// A single full-file CI run against one shared API process therefore never
+// contends for the one-live-session slot, and a failed attempt's leftover live
+// session can never occupy the table its own retry resolves. Assertions that
+// pinned "Table 01" are parameterized to the track's own resolved fixture below.
+const TRACK_BASE_INDEX: Record<string, number> = {
+  A: 0,
+  B: 1,
+  C: 2,
+  D: 3,
+  E1: 4,
+  E2: 5,
+  E3: 6,
+  F1: 7,
+  F2: 8,
+  F3: 9,
+  G1: 10,
+  G2: 11,
+  H: 12,
+  H1: 13,
+  H2: 14,
 } as const;
 
-// The fixture the current test is exercising. Track A reads the entry helper
-// directly; every later track sets it before opening so the shared beforeEach
-// network capture compares against the right table id.
-let activeFixture: DineInFixtureTable = TRACK_FIXTURES.A;
+// The fixture the current test is exercising. Every test/attempt overwrites it
+// with its retry-selected physical fixture before any request assertion runs;
+// the module-load value is only an inert placeholder.
+let activeFixture: DineInFixtureTable = DINE_IN_FIXTURE_TABLES[0];
 
 function entryFor(fixture: DineInFixtureTable): string {
   return `/dine-in?table=${fixture.token}`;
@@ -396,12 +398,20 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
   }
 
   // Shared Track-A entry prerequisite: QR entry -> public resolve -> explicit
-  // authenticated session open -> SESSION_READY. Reused verbatim by every other
-  // track, each on its own assigned fixture table.
-  async function openSessionReady(page: Page, fixture: DineInFixtureTable): Promise<void> {
+  // authenticated session open -> SESSION_READY. Reused by every later track,
+  // each resolving its logical slot to a retry-disjoint physical table.
+  //
+  // The transient "Checking your table..." / "Opening session..." in-flight
+  // copy is intentionally NOT asserted (C3R2/C3R3): a fast resolve/open can
+  // legitimately remove it before Playwright observes it, and the stable
+  // end-states below are the real contract.
+  async function openSessionReady(
+    page: Page,
+    logicalBaseIndex: number,
+  ): Promise<void> {
+    const fixture = resolveDineInFixture(logicalBaseIndex, test.info().retry);
     activeFixture = fixture;
     await page.goto(entryFor(fixture));
-    await expect(page.getByText("Checking your table...")).toBeVisible();
     await expect(page.getByText("Ready to order")).toBeVisible({ timeout: 15_000 });
 
     await page.getByRole("button", { name: /^Continue/ }).click();
@@ -418,7 +428,6 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
     await expect(page.getByText("Ready to order")).toBeVisible({ timeout: 15_000 });
 
     await page.getByRole("button", { name: /^Continue/ }).click();
-    await expect(page.getByText("Opening session...")).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText("Session ready")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("View Menu")).toBeVisible();
   }
@@ -426,8 +435,8 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
   test("Track A: QR entry -> resolve -> authenticated session open -> token-free handoff", async ({
     page,
   }) => {
-    activeFixture = TRACK_FIXTURES.A;
-    const fxA = TRACK_FIXTURES.A;
+    const fxA = resolveDineInFixture(TRACK_BASE_INDEX.A, test.info().retry);
+    activeFixture = fxA;
     // ---------- INTERACTION + NETWORK: QR entry, no auth yet ----------
     await page.goto(entryFor(fxA));
 
@@ -593,7 +602,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
 
   test("Track B: View Menu -> skeleton -> loaded menu (UI8-B2)", async ({ page }) => {
     // ---------- PREREQUISITE: accepted Track-A entry to SESSION_READY ----------
-    await openSessionReady(page, TRACK_FIXTURES.B);
+    await openSessionReady(page, TRACK_BASE_INDEX.B);
 
     // No catalog request yet — Track B interaction not started.
     expect(menuCalls.length).toBe(0);
@@ -721,7 +730,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
     page,
   }) => {
     // ---------- PREREQUISITE: accepted Track A+B setup -> real loaded menu ----------
-    await openSessionReady(page, TRACK_FIXTURES.C);
+    await openSessionReady(page, TRACK_BASE_INDEX.C);
     await page.getByRole("button", { name: /View Menu/ }).click();
     await page.waitForURL((url) => url.pathname === "/dine-in/menu");
     await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -899,7 +908,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
         page,
       }) => {
       // ---------- PREREQUISITE: accepted A/B/C setup -> real loaded menu ----------
-      await openSessionReady(page, TRACK_FIXTURES.D);
+      await openSessionReady(page, TRACK_BASE_INDEX.D);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1081,7 +1090,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- PREREQUISITE: accepted A/B/C setup -> real loaded menu ----------
-      await openSessionReady(page, TRACK_FIXTURES.E1);
+      await openSessionReady(page, TRACK_BASE_INDEX.E1);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1180,7 +1189,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- PREREQUISITE: accepted A/B/C setup + E-1 panel surface ----------
-      await openSessionReady(page, TRACK_FIXTURES.E2);
+      await openSessionReady(page, TRACK_BASE_INDEX.E2);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1319,7 +1328,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- PREREQUISITE: accepted B5.2 flow start ----------
-      await openSessionReady(page, TRACK_FIXTURES.E3);
+      await openSessionReady(page, TRACK_BASE_INDEX.E3);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1428,7 +1437,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- PREREQUISITE: accepted A/B/C setup -> real loaded menu ----------
-      await openSessionReady(page, TRACK_FIXTURES.F1);
+      await openSessionReady(page, TRACK_BASE_INDEX.F1);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1534,7 +1543,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       // snapshots (requestBill: OPEN -> 400 SESSION_NOT_BILLABLE). Placing a
       // Track-D order (Chicken qty2) performs the first-order OPEN -> ACTIVE
       // activation, so the confirm emits a REAL 200 bill POST.
-      await openSessionReady(page, TRACK_FIXTURES.F2);
+      await openSessionReady(page, TRACK_BASE_INDEX.F2);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1658,7 +1667,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
         }).format(n);
 
       // ---------- PREREQUISITE: accepted F2 flow (order -> ACTIVE, billable) ----------
-      await openSessionReady(page, TRACK_FIXTURES.F3);
+      await openSessionReady(page, TRACK_BASE_INDEX.F3);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1806,7 +1815,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- SETUP: accepted authenticated loaded menu on narrow mobile ----------
-      await openSessionReady(page, TRACK_FIXTURES.G1);
+      await openSessionReady(page, TRACK_BASE_INDEX.G1);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -1904,7 +1913,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- SETUP: accepted authenticated loaded menu ----------
-      await openSessionReady(page, TRACK_FIXTURES.G2);
+      await openSessionReady(page, TRACK_BASE_INDEX.G2);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -2032,7 +2041,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- SETUP: accepted authenticated loaded menu ----------
-      await openSessionReady(page, TRACK_FIXTURES.H);
+      await openSessionReady(page, TRACK_BASE_INDEX.H);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });
@@ -2177,7 +2186,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- PRE-RELOAD STATE: accepted authenticated loaded menu ----------
-      await openSessionReady(page, TRACK_FIXTURES.H1);
+      await openSessionReady(page, TRACK_BASE_INDEX.H1);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Dine-In Menu")).toBeVisible();
@@ -2297,7 +2306,7 @@ test.describe("Dine-In Track A (UI8-B1)", () => {
       page,
     }) => {
       // ---------- SETUP: reach the accepted H1 safe-fail state ----------
-      await openSessionReady(page, TRACK_FIXTURES.H2);
+      await openSessionReady(page, TRACK_BASE_INDEX.H2);
       await page.getByRole("button", { name: /View Menu/ }).click();
       await page.waitForURL((url) => url.pathname === "/dine-in/menu");
       await expect(page.getByText("Chicken Biryani")).toBeVisible({ timeout: 15_000 });

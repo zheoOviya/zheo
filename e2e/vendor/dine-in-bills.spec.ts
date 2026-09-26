@@ -3,7 +3,7 @@ import { CONSUMER_URL, uniquePhone } from "../helpers/constants";
 import { vendorLogin } from "../helpers/vendor";
 import {
   DINE_IN_FIXTURE_RESTAURANT_NAME,
-  DINE_IN_FIXTURE_TABLES,
+  resolveDineInFixture,
   type DineInFixtureTable,
 } from "../consumer/dine-in-fixture.constants";
 
@@ -38,12 +38,14 @@ import {
 //                               bill detail still renders from a direct URL
 //                               after a reload shows the queue row is gone
 //
-// RUN MODEL — each test consumes its own reserved fixture table ([15..17])
-// from DINE_IN_FIXTURE_TABLES, statically disjoint from the consumer dine-in
-// suite's [0..14]. openSession rejects a second, different-owner open on a
-// live table, so the reserved partition keeps this suite green both in a full
-// shared single-API-process run (consumer project first, live sessions left on
-// [0..14]) and standalone against a freshly seeded API process, e.g.:
+// RUN MODEL — each test consumes its own LOGICAL fixture slot ([15..17]) from
+// the shared 54-table collection (18 logical slots x 3 retry waves), statically
+// disjoint from the consumer dine-in suite's logical [0..14]. Each attempt
+// resolves a retry-disjoint physical table, so openSession's rejection of a
+// second, different-owner open on a live table can no longer poison this
+// suite's own retries. This holds both in a full shared single-API-process run
+// (consumer project first, live sessions left on wave-0 tables) and standalone
+// against a freshly seeded API process, e.g.:
 //   npx playwright test e2e/vendor/dine-in-bills.spec.ts --project=vendor
 //
 // Sanitization: the opaque table token and the Authorization header value are
@@ -57,17 +59,16 @@ import {
 const CONSUMER_VIEWPORT = { width: 375, height: 844 };
 const VENDOR_VIEWPORT = { width: 1440, height: 900 };
 
-// Three reserved fixture tables ([15..17] -> Table 16-18), one per test,
-// statically disjoint from the consumer dine-in suite's [0..14]. In a full
-// shared single-API-process run the consumer project runs first and leaves
-// live sessions on [0..14], so only this reserved partition keeps the vendor
-// bill suite collision-free. The 375px consumer viewport mirrors the consumer
-// dine-in spec; the vendor console runs desktop.
-const BILLS_FIXTURES: readonly DineInFixtureTable[] = [
-  DINE_IN_FIXTURE_TABLES[15],
-  DINE_IN_FIXTURE_TABLES[16],
-  DINE_IN_FIXTURE_TABLES[17],
-];
+// Three LOGICAL fixture slots ([15..17] -> Table 16-18), one per test. Each
+// attempt resolves its physical table via `resolveDineInFixture`
+// (physicalIndex = logical + retry*18), so a failed attempt on one retry wave
+// can never occupy the table its own retry resolves:
+//   test #1: retry0 Table16, retry1 Table34, retry2 Table52
+//   test #2: retry0 Table17, retry1 Table35, retry2 Table53
+//   test #3: retry0 Table18, retry1 Table36, retry2 Table54
+// The 375px consumer viewport mirrors the consumer dine-in spec; the vendor
+// console runs desktop.
+const BILLS_BASE_INDEX: readonly number[] = [15, 16, 17];
 
 // The seeded Biryani House restaurant (the vendor bound to the seeded vendor
 // phone) owns every dine-in fixture table, so a consumer request here lands in
@@ -246,7 +247,7 @@ test.describe("Vendor dine-in bills (DINE-OPS4)", () => {
     browser,
     page,
   }) => {
-    const fixture = BILLS_FIXTURES[0];
+    const fixture = resolveDineInFixture(BILLS_BASE_INDEX[0], test.info().retry);
     const consumer = await openConsumerSessionReady(browser, fixture);
     await placeOrderAndRequestBill(consumer, fixture);
     await consumer.close();
@@ -312,7 +313,7 @@ test.describe("Vendor dine-in bills (DINE-OPS4)", () => {
     browser,
     page,
   }) => {
-    const fixture = BILLS_FIXTURES[1];
+    const fixture = resolveDineInFixture(BILLS_BASE_INDEX[1], test.info().retry);
     const consumer = await openConsumerSessionReady(browser, fixture);
     await placeOrderAndRequestBill(consumer, fixture);
     await consumer.close();
@@ -397,7 +398,7 @@ test.describe("Vendor dine-in bills (DINE-OPS4)", () => {
     browser,
     page,
   }) => {
-    const fixture = BILLS_FIXTURES[2];
+    const fixture = resolveDineInFixture(BILLS_BASE_INDEX[2], test.info().retry);
     const consumer = await openConsumerSessionReady(browser, fixture);
     await placeOrderAndRequestBill(consumer, fixture);
     await consumer.close();
