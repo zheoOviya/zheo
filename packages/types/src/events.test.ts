@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createEvent, EventEnvelopeSchema, EventNameSchema, OrderPickedUpEventSchema, TypedEventEnvelope } from "./events";
+import { createEvent, EventEnvelopeSchema, EventNameSchema, OrderPickedUpEventSchema, TypedEventEnvelope, UserLocationObservedAtRestaurantEventSchema } from "./events";
 
 describe("Event Envelope (EOS Layer 1.2)", () => {
   it("has the exact envelope contract", () => {
@@ -15,7 +15,7 @@ describe("Event Envelope (EOS Layer 1.2)", () => {
     ).toBe(true);
   });
 
-  it("EventNameSchema contains all 32 core events plus the 6 Dine-In events", () => {
+  it("EventNameSchema contains all 33 core events plus the 6 Dine-In events", () => {
     expect(EventNameSchema.options).toEqual([
       "OrderCreated",
       "PaymentSucceeded",
@@ -40,6 +40,7 @@ describe("Event Envelope (EOS Layer 1.2)", () => {
       "GiftExpired",
       "GiftRefunded",
       "UserArrivedAtRestaurant",
+      "UserLocationObservedAtRestaurant",
       "WalletCashbackCredited",
       "StreakBadgeUnlocked",
       "SpiceProfileUpdated",
@@ -104,6 +105,61 @@ describe("Event Envelope (EOS Layer 1.2)", () => {
       "order_id",
       "restaurant_id",
     ]);
+  });
+
+  it("registers the J8 successor event alongside the legacy event", () => {
+    expect(EventNameSchema.options).toContain("UserLocationObservedAtRestaurant");
+    expect(EventNameSchema.options).toContain("UserArrivedAtRestaurant");
+  });
+
+  it("UserLocationObservedAtRestaurantEventSchema accepts the exact truthful payload", () => {
+    const orderId = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
+    const parsed = UserLocationObservedAtRestaurantEventSchema.safeParse({
+      order_id: orderId,
+      user_id: orderId,
+      restaurant_id: orderId,
+      distance_m: 42,
+      within_fence: false,
+      auto_checked_in: false,
+    });
+    expect(parsed.success).toBe(true);
+    expect(Object.keys(UserLocationObservedAtRestaurantEventSchema.shape)).toEqual([
+      "order_id",
+      "user_id",
+      "restaurant_id",
+      "distance_m",
+      "within_fence",
+      "auto_checked_in",
+    ]);
+  });
+
+  it("UserLocationObservedAtRestaurantEventSchema requires within_fence", () => {
+    const orderId = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
+    const parsed = UserLocationObservedAtRestaurantEventSchema.safeParse({
+      order_id: orderId,
+      user_id: orderId,
+      restaurant_id: orderId,
+      distance_m: 42,
+      auto_checked_in: false,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("UserLocationObservedAtRestaurantEventSchema rejects non-integer or negative distance_m", () => {
+    const orderId = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
+    const base = {
+      order_id: orderId,
+      user_id: orderId,
+      restaurant_id: orderId,
+      within_fence: true,
+      auto_checked_in: false,
+    };
+    expect(
+      UserLocationObservedAtRestaurantEventSchema.safeParse({ ...base, distance_m: 42.5 }).success,
+    ).toBe(false);
+    expect(
+      UserLocationObservedAtRestaurantEventSchema.safeParse({ ...base, distance_m: -1 }).success,
+    ).toBe(false);
   });
 
   it("rejects an unknown event name", () => {

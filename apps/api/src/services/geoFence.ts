@@ -10,10 +10,10 @@ import { haversineKm } from "./discovery";
 // P02 Geo-fence Detection:
 // The consumer reports a live location (lat/lng) while an order is in
 // transit. When the reported point is within GEO_FENCE_RADIUS_M of the
-// restaurant AND the order is READY_FOR_PICKUP, the service treats this
-// as arrival: it auto-check-ins (the P03 handoff hook) and emits
-// `UserArrivedAtRestaurant` so the notification layer can alert the
-// kitchen/staff.
+// restaurant AND the order is READY_FOR_PICKUP, the service auto-checks-in
+// (the P03 handoff hook). Regardless of fence result or order status it
+// emits a location observation: the legacy `UserArrivedAtRestaurant`
+// (wire compatibility) followed by `UserLocationObservedAtRestaurant`.
 // ============================================
 
 export const GEO_FENCE_RADIUS_M = 100;
@@ -74,10 +74,23 @@ export class GeoFenceService {
       }
     }
 
-    // Emit the arrival report regardless of fence result; consumers of the
-    // event (notifications, kitchen display) branch on `within_fence`.
+    // Emit the legacy arrival-named event for wire compatibility, then emit
+    // the truthful location-observation successor. Both carry the same
+    // observation values and are emitted unconditionally: neither is gated on
+    // fence result, order status, or auto check-in.
     await emit(
       createEventEnvelope("UserArrivedAtRestaurant", order.id, {
+        order_id: order.id,
+        user_id: order.user_id,
+        restaurant_id: order.restaurant_id,
+        distance_m: distanceM,
+        within_fence: withinFence,
+        auto_checked_in: autoCheckedIn,
+      }),
+    );
+
+    await emit(
+      createEventEnvelope("UserLocationObservedAtRestaurant", order.id, {
         order_id: order.id,
         user_id: order.user_id,
         restaurant_id: order.restaurant_id,

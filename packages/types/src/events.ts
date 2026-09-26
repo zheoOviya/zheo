@@ -45,6 +45,7 @@ export const EventNameSchema = z.enum([
   "GiftExpired",
   "GiftRefunded",
   "UserArrivedAtRestaurant",
+  "UserLocationObservedAtRestaurant",
   "WalletCashbackCredited",
   "StreakBadgeUnlocked",
   "SpiceProfileUpdated",
@@ -269,8 +270,10 @@ export type GiftRefundedEvent = z.infer<typeof GiftRefundedEventSchema>;
 
 // ============================================
 // P02 User Arrived At Restaurant (fulfillment context)
-// Emitted when the user's location crosses the 100 m geo-fence while the
-// order is READY_FOR_PICKUP - auto check-in (P03) has just happened.
+// Legacy arrival-named event. The producer emits it unconditionally on every
+// location observation, including within_fence=false and status !=
+// READY_FOR_PICKUP. Retained unchanged for wire compatibility; new consumers
+// should use UserLocationObservedAtRestaurant.
 // ============================================
 
 export const UserArrivedAtRestaurantEventSchema = z.object({
@@ -281,6 +284,25 @@ export const UserArrivedAtRestaurantEventSchema = z.object({
   auto_checked_in: z.boolean(),
 });
 export type UserArrivedAtRestaurantEvent = z.infer<typeof UserArrivedAtRestaurantEventSchema>;
+
+// ============================================
+// J8 User Location Observed At Restaurant (fulfillment context)
+// Truthful successor to UserArrivedAtRestaurant: an unconditional observation
+// of the user's reported location relative to the restaurant, emitted on every
+// location update regardless of fence result or order status.
+// ============================================
+
+export const UserLocationObservedAtRestaurantEventSchema = z.object({
+  order_id: z.string().uuid(),
+  user_id: z.string().uuid(),
+  restaurant_id: z.string().uuid(),
+  distance_m: z.number().int().nonnegative(),
+  within_fence: z.boolean(),
+  auto_checked_in: z.boolean(),
+});
+export type UserLocationObservedAtRestaurantEvent = z.infer<
+  typeof UserLocationObservedAtRestaurantEventSchema
+>;
 
 // ============================================
 // O12 Wallet Cashback Credited (loyalty context)
@@ -497,6 +519,7 @@ export type EventPayloadMap = {
   GiftExpired: GiftExpiredEvent;
   GiftRefunded: GiftRefundedEvent;
   UserArrivedAtRestaurant: UserArrivedAtRestaurantEvent;
+  UserLocationObservedAtRestaurant: UserLocationObservedAtRestaurantEvent;
   WalletCashbackCredited: WalletCashbackCreditedEvent;
   StreakBadgeUnlocked: StreakBadgeUnlockedEvent;
   SpiceProfileUpdated: SpiceProfileUpdatedEvent;
