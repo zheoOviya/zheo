@@ -30,7 +30,11 @@ import { registerLoyaltyEventHandlers } from "./services/loyalty";
 import { registerRetentionEventHandlers } from "./services/retention";
 import { registerVendorNotificationHandlers } from "./services/notifications";
 import { initEventSubscriber } from "./lib/eventBus";
-import { metrics, metricsRouter } from "./routes/metrics";
+import {
+  metrics,
+  metricsRouter,
+  recordCompletedRequest,
+} from "./routes/metrics";
 import { adminRouter } from "./routes/admin";
 import { adminDineInRouter } from "./routes/adminDineIn";
 import { vendorApplicationRouter } from "./routes/vendorApplications";
@@ -111,15 +115,18 @@ export function createApp(): Express {
   app.use((req, res, next) => {
     const started = Date.now();
     res.on("finish", () => {
+      const finishedAt = Date.now();
+      const durationMs = finishedAt - started;
       metrics.requests += 1;
-      metrics.totalDurationMs += Date.now() - started;
+      metrics.totalDurationMs += durationMs;
       if (res.statusCode >= 400) metrics.errors += 1;
+      recordCompletedRequest(finishedAt);
       logger.info({
         message: "http_request",
         method: req.method,
         path: req.path,
         status: res.statusCode,
-        duration_ms: Date.now() - started,
+        duration_ms: durationMs,
         correlation_id: res.locals.correlationId,
       });
     });
