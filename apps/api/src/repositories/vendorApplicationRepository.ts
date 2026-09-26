@@ -103,6 +103,40 @@ export interface VendorApplicationRepository {
   _reset(): void;
 }
 
+// ============================================
+// IST day bucketing (fixed +05:30, no DST).
+//
+// Mirrors the proven convention used by the admin metrics service
+// (adminMetricsReadService.istDayKey / istDateKeys) and the vendor insights
+// window, so the vendor-application trend is attributed to the same India
+// business day as every other revenue/insights surface. The previous
+// implementation sliced the UTC date out of the ISO timestamp, which shifted
+// day membership by up to one day for applications created/reviewed between
+// 00:00 and 05:29 IST.
+// ============================================
+
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+
+/** Deterministic IST calendar day (YYYY-MM-DD) for an ISO timestamp. */
+function istDayKey(isoTimestamp: string): string {
+  return new Date(new Date(isoTimestamp).getTime() + IST_OFFSET_MS)
+    .toISOString()
+    .slice(0, 10);
+}
+
+/** Last `days` IST day keys ascending, ending with the current (partial) day. */
+function istDateKeys(days: number, now: Date = new Date()): string[] {
+  const shiftedNow = new Date(now.getTime() + IST_OFFSET_MS);
+  const keys: string[] = [];
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const d = new Date(
+      Date.UTC(shiftedNow.getUTCFullYear(), shiftedNow.getUTCMonth(), shiftedNow.getUTCDate() - i),
+    );
+    keys.push(d.toISOString().slice(0, 10));
+  }
+  return keys;
+}
+
 function computeMetrics(apps: VendorApplicationDTO[], days: number): VendorApplicationMetrics {
   const total = apps.length;
   let pending = 0;
@@ -115,18 +149,15 @@ function computeMetrics(apps: VendorApplicationDTO[], days: number): VendorAppli
   }
 
   const buckets = new Map<string, VendorApplicationTrendPoint>();
-  const today = new Date();
-  for (let i = days - 1; i >= 0; i -= 1) {
-    const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - i));
-    const key = d.toISOString().slice(0, 10);
+  for (const key of istDateKeys(days)) {
     buckets.set(key, { date: key, submitted: 0, approved: 0, rejected: 0 });
   }
   for (const a of apps) {
-    const submittedDay = a.created_at.slice(0, 10);
+    const submittedDay = istDayKey(a.created_at);
     const sb = buckets.get(submittedDay);
     if (sb) sb.submitted += 1;
     if (a.status === "APPROVED" || a.status === "REJECTED") {
-      const reviewedDay = (a.reviewed_at ?? a.created_at).slice(0, 10);
+      const reviewedDay = istDayKey(a.reviewed_at ?? a.created_at);
       const rb = buckets.get(reviewedDay);
       if (rb) {
         if (a.status === "APPROVED") rb.approved += 1;
