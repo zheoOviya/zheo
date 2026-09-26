@@ -108,7 +108,6 @@ export type OrderReadyForPickupEvent = z.infer<typeof OrderReadyForPickupEventSc
 export const OrderPickedUpEventSchema = z.object({
   order_id: z.string().uuid(),
   restaurant_id: z.string().uuid(),
-  pickup_otp: z.string().length(6),
 });
 export type OrderPickedUpEvent = z.infer<typeof OrderPickedUpEventSchema>;
 

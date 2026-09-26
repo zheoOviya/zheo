@@ -11,7 +11,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // locking or real concurrency.
 // ============================================
 
-const state = vi.hoisted(() => ({ log: [] as string[] }));
+const state = vi.hoisted(() => ({
+  log: [] as string[],
+  events: [] as Array<{ event_name: string; aggregate_id: string; payload: unknown }>,
+}));
 
 vi.mock("../lib/eventBus", () => ({
   createEventEnvelope: (
@@ -19,8 +22,9 @@ vi.mock("../lib/eventBus", () => ({
     aggregate_id: string,
     payload: unknown,
   ) => ({ event_name, aggregate_id, payload }),
-  emit: vi.fn(async (envelope: { event_name: string }) => {
+  emit: vi.fn(async (envelope: { event_name: string; aggregate_id: string; payload: unknown }) => {
     state.log.push(`emit:${envelope.event_name}`);
+    state.events.push(envelope);
   }),
 }));
 
@@ -228,6 +232,7 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
 
   beforeEach(() => {
     state.log.length = 0;
+    state.events.length = 0;
     vi.clearAllMocks();
     h = new Harness();
   });
@@ -561,6 +566,19 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
       ).rejects.toBeTruthy();
       expect(published()).toBe(false);
       expect(state.log.some((e) => e.startsWith("emit:"))).toBe(false);
+    });
+
+    it("E4 OrderPickedUp payload carries order_id/restaurant_id and no pickup_otp", async () => {
+      h.seed(OID, "READY_FOR_PICKUP", { otp: "1234" });
+      await h.service.confirmPickup(OID, "1234");
+
+      const pickedUp = state.events.find((e) => e.event_name === "OrderPickedUp");
+      expect(pickedUp).toBeDefined();
+      const payload = pickedUp?.payload as Record<string, unknown>;
+      expect(payload.order_id).toBe(OID);
+      expect(payload.restaurant_id).toBe(REST_ID);
+      expect(Object.keys(payload).sort()).toEqual(["order_id", "restaurant_id"]);
+      expect("pickup_otp" in payload).toBe(false);
     });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createEvent, EventEnvelopeSchema, EventNameSchema, TypedEventEnvelope } from "./events";
+import { createEvent, EventEnvelopeSchema, EventNameSchema, OrderPickedUpEventSchema, TypedEventEnvelope } from "./events";
 
 describe("Event Envelope (EOS Layer 1.2)", () => {
   it("has the exact envelope contract", () => {
@@ -87,6 +87,23 @@ describe("Event Envelope (EOS Layer 1.2)", () => {
 
     const typed: TypedEventEnvelope<"OrderCreated"> = evt;
     expect(typed.event_name).toBe("OrderCreated");
+  });
+
+  it("OrderPickedUpEventSchema requires only order_id and restaurant_id (no pickup_otp)", () => {
+    const orderId = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
+    const parsed = OrderPickedUpEventSchema.safeParse({
+      order_id: orderId,
+      restaurant_id: orderId,
+    });
+    expect(parsed.success).toBe(true);
+    expect(Object.keys(OrderPickedUpEventSchema.shape)).toEqual([
+      "order_id",
+      "restaurant_id",
+    ]);
+    expect(parsed.success ? Object.keys(parsed.data) : []).toEqual([
+      "order_id",
+      "restaurant_id",
+    ]);
   });
 
   it("rejects an unknown event name", () => {

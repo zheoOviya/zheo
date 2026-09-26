@@ -294,7 +294,7 @@ export class FulfillmentService {
       if (!result) {
         throw await this.pickupConflict(orderId);
       }
-      await this.afterPickup(result.picked, result.fulfilled, order);
+      await this.afterPickup(result.picked, result.fulfilled);
       return result.picked;
     }
 
@@ -339,7 +339,6 @@ export class FulfillmentService {
   private async afterPickup(
     order: OrderDTO,
     fulfilled: GiftDTO[],
-    verificationOrder: OrderDTO,
   ): Promise<void> {
     await publishStatusUpdate({
       order_id: order.id,
@@ -351,7 +350,6 @@ export class FulfillmentService {
       createEventEnvelope("OrderPickedUp", order.id, {
         order_id: order.id,
         restaurant_id: order.restaurant_id,
-        pickup_otp: verificationOrder.pickup_otp ?? "000000",
       }),
     );
 
