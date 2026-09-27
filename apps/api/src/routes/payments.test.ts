@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
+import { onEvent } from "../lib/eventBus";
 import { jwtService } from "../services/jwt";
 import { razorpayService } from "../services/razorpay";
 import { sharedOrderRepo } from "../repositories/shared";
@@ -138,6 +139,102 @@ describe("Payments routes", () => {
         .expect(400);
 
       expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    });
+  });
+
+  describe("POST /api/v1/payments/create-order (ownership / RISK-PAY-5)", () => {
+    const FOREIGN_USER = "u00000000-0000-4000-8000-000000000002";
+
+    it("P1: owner can create an online payment", async () => {
+      const { orderId } = await createDraftOrder(app);
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders())
+        .send({ order_id: orderId })
+        .expect(200);
+
+      expect(res.body.data.razorpay_order_id).toMatch(/^order_mock_/);
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("PAYMENT_PENDING");
+    });
+
+    it("P2: foreign consumer cannot create an online payment for the owner's order", async () => {
+      const { orderId } = await createDraftOrder(app);
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders(FOREIGN_USER))
+        .send({ order_id: orderId })
+        .expect(404);
+
+      expect(res.body.error.code).toBe("ORDER_NOT_FOUND");
+    });
+
+    it("P3: foreign consumer cannot select COD for the owner's order", async () => {
+      const { orderId } = await createDraftOrder(app);
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders(FOREIGN_USER))
+        .send({ order_id: orderId, method: "cod" })
+        .expect(404);
+
+      expect(res.body.error.code).toBe("ORDER_NOT_FOUND");
+    });
+
+    it("P4: denied online attempt leaves order DRAFT and creates no payment record", async () => {
+      const { orderId } = await createDraftOrder(app);
+
+      await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders(FOREIGN_USER))
+        .send({ order_id: orderId })
+        .expect(404);
+
+      expect(await sharedPaymentRepo.getByOrderId(orderId)).toBeNull();
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("DRAFT");
+    });
+
+    it("P5: denied COD attempt leaves order DRAFT, no payment, no CashOnPickupSelected event", async () => {
+      const { orderId } = await createDraftOrder(app);
+      const captured: string[] = [];
+      onEvent("CashOnPickupSelected", async () => {
+        captured.push("CashOnPickupSelected");
+      });
+
+      await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders(FOREIGN_USER))
+        .send({ order_id: orderId, method: "cod" })
+        .expect(404);
+
+      expect(await sharedPaymentRepo.getByOrderId(orderId)).toBeNull();
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("DRAFT");
+      expect(captured).toEqual([]);
+    });
+
+    it("P6: unauthenticated request remains 401", async () => {
+      const { orderId } = await createDraftOrder(app);
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .send({ order_id: orderId })
+        .expect(401);
+
+      expect(res.body.error.code).toBe("UNAUTHORIZED");
+    });
+
+    it("P7: foreign denial precedes the DRAFT check (foreign CONFIRMED order is 404, not 400)", async () => {
+      const { orderId } = await createDraftOrder(app);
+      await sharedOrderRepo.updateStatus(orderId, "CONFIRMED");
+
+      const res = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders(FOREIGN_USER))
+        .send({ order_id: orderId })
+        .expect(404);
+
+      expect(res.body.error.code).toBe("ORDER_NOT_FOUND");
     });
   });
 

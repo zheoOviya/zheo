@@ -41,7 +41,8 @@ export class PaymentService {
 
   async createPaymentOrder(
     orderId: string,
-    method: PaymentMethod = "upi",
+    method: PaymentMethod,
+    actorUserId: string,
   ): Promise<{
     payment_method: PaymentMethod;
     razorpay_order_id?: string;
@@ -50,6 +51,14 @@ export class PaymentService {
   }> {
     const order = await this.orderRepo.getById(orderId);
     if (!order) {
+      throw new AppError("ORDER_NOT_FOUND", "Order not found", 404);
+    }
+
+    // Ownership guard (RISK-PAY-5): a caller may only create payment for an
+    // order they own. A foreign order is reported with the same 404 as a
+    // missing order so callers cannot probe for other users' orders. This
+    // runs before any gateway / payment / status side effect.
+    if (order.user_id !== actorUserId) {
       throw new AppError("ORDER_NOT_FOUND", "Order not found", 404);
     }
 
