@@ -1,4 +1,5 @@
 import {
+  boolean,
   check,
   decimal,
   index,
@@ -34,7 +35,23 @@ export const payments = pgTable(
     amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
     status: paymentStatusEnum("status").notNull().default("CREATED"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    // Durable reconciliation truth (PAYMENT_RECONCILIATION-A3). These are
+    // explicit columns rather than metadata keys so reconciliation state
+    // survives the additive webhook metadata updates that historically
+    // replaced the whole jsonb blob.
+    // Last status reported by the gateway itself, distinct from local status.
+    gateway_status: text("gateway_status"),
+    // NONE | CONVERGED | RETRY | MANUAL_REVIEW | ERROR (validated in app layer).
+    reconciliation_status: text("reconciliation_status")
+      .notNull()
+      .default("NONE"),
+    reconciliation_reason: text("reconciliation_reason"),
+    manual_review: boolean("manual_review").notNull().default(false),
+    last_reconciled_at: timestamp("last_reconciled_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },

@@ -1,18 +1,32 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, asc, eq, inArray, lte, or, type SQL } from "drizzle-orm";
 import { payments } from "@snakzap/db";
 import type { DrizzleDb } from "../../lib/dbType";
 import type {
   PaymentRepository,
   PaymentDTO,
+  PaymentReconciliationStatus,
   CreatePaymentInput,
   WebhookUpdate,
   PaymentStatus,
+  ReconciliationCandidateQuery,
+  ReconciliationResultUpdate,
+  CompareAndSetStatusResult,
 } from "../paymentRepository";
+import { normalizeCandidateLimit } from "../paymentRepository";
 
 // ============================================
 // Payments context repository (Drizzle/Postgres)
 // ============================================
+
+/**
+ * Drizzle update chain result exposing `.returning()`. The shared `DrizzleDb`
+ * type only models the awaited form, so CAS paths cast the chain (same pattern
+ * as drizzleOrderRepository).
+ */
+type ReturningUpdate = {
+  returning: () => Promise<unknown[]>;
+};
 
 function mapPaymentRow(row: Record<string, unknown>): PaymentDTO {
   const meta = (row.metadata as Record<string, unknown>) ?? {};
@@ -28,8 +42,20 @@ function mapPaymentRow(row: Record<string, unknown>): PaymentDTO {
     method: (meta.method as string) ?? null,
     webhook_event: (meta.webhook_event as string) ?? null,
     webhook_raw: (meta.webhook_raw as unknown) ?? null,
+    gateway_status: (row.gateway_status as string | null) ?? null,
+    reconciliation_status:
+      (row.reconciliation_status as PaymentReconciliationStatus | null) ?? "NONE",
+    reconciliation_reason: (row.reconciliation_reason as string | null) ?? null,
+    manual_review: (row.manual_review as boolean | null) ?? false,
+    last_reconciled_at: row.last_reconciled_at
+      ? (row.last_reconciled_at as Date).toISOString()
+      : null,
     created_at: (row.created_at as Date).toISOString(),
-    updated_at: (row.created_at as Date).toISOString(),
+    // Real update timestamp; legacy rows with no updated_at fall back to
+    // created_at so the DTO never lies about ordering.
+    updated_at: row.updated_at
+      ? (row.updated_at as Date).toISOString()
+      : (row.created_at as Date).toISOString(),
   };
 }
 
@@ -47,6 +73,10 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       provider_transaction_id: input.razorpay_order_id,
       amount: String(input.amount),
       status: "CREATED",
+      reconciliation_status: "NONE",
+      manual_review: false,
+      created_at: now,
+      updated_at: now,
       metadata: {
         currency: input.currency ?? "INR",
       },
@@ -63,6 +93,11 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       method: null,
       webhook_event: null,
       webhook_raw: null,
+      gateway_status: null,
+      reconciliation_status: "NONE",
+      reconciliation_reason: null,
+      manual_review: false,
+      last_reconciled_at: null,
       created_at: now.toISOString(),
       updated_at: now.toISOString(),
     };
@@ -131,19 +166,126 @@ export class DrizzlePaymentRepository implements PaymentRepository {
   }
 
   async updateWebhookResult(id: string, data: WebhookUpdate): Promise<PaymentDTO | null> {
+    const rows = (await this.db
+      .select()
+      .from(payments)
+      .where(eq(payments.id, id))) as Record<string, unknown>[];
+    const row = rows[0];
+    if (!row) return null;
+
+    // Additive metadata merge: preserve every existing key (e.g. currency and
+    // the reconciliation-relevant webhook_raw from a prior pass) and only
+    // overlay the webhook-owned fields. Reconciliation state lives in explicit
+    // columns and is not touched here.
+    const existingMetadata = (row.metadata as Record<string, unknown> | null) ?? {};
     await this.db
       .update(payments)
       .set({
         status: data.status,
         metadata: {
+          ...existingMetadata,
           razorpay_payment_id: data.razorpay_payment_id,
           method: data.method,
           webhook_event: data.webhook_event,
           webhook_raw: data.webhook_raw,
         },
+        updated_at: new Date(),
       })
       .where(eq(payments.id, id));
     return this.findByPaymentId(id);
+  }
+
+  /**
+   * DB-side candidate predicate. Mirrors `selectReconciliationCandidates` but
+   * runs in Postgres so the sweep never materializes the whole payments table:
+   *   manual_review = true
+   *   OR reconciliation_status = 'MANUAL_REVIEW'
+   *   OR (status IN ('CREATED','FAILED','REFUNDED') AND created_at <= staleBefore)
+   *   OR (includeCaptured AND status = 'CAPTURED')
+   */
+  private candidateCondition(query: ReconciliationCandidateQuery): SQL<unknown> {
+    const reconcilableStatuses: PaymentStatus[] = ["CREATED", "FAILED", "REFUNDED"];
+    const clauses: SQL<unknown>[] = [
+      eq(payments.manual_review, true),
+      eq(payments.reconciliation_status, "MANUAL_REVIEW"),
+      and(
+        inArray(payments.status, reconcilableStatuses),
+        lte(payments.created_at, new Date(query.staleBefore)),
+      )!,
+    ];
+    if (query.includeCaptured) {
+      clauses.push(eq(payments.status, "CAPTURED"));
+    }
+    return or(...clauses)!;
+  }
+
+  async listReconciliationCandidates(
+    query: ReconciliationCandidateQuery,
+  ): Promise<PaymentDTO[]> {
+    // Filtering, ordering and limiting all happen in Postgres. Only the
+    // requested page of candidates is returned to the process; there is no
+    // select-all-then-filter path.
+    const limit = normalizeCandidateLimit(query.limit);
+    const rows = (await (this.db
+      .select()
+      .from(payments)
+      .where(this.candidateCondition(query)) as unknown as {
+      orderBy: (column: unknown) => { limit: (n: number) => Promise<unknown[]> };
+    })
+      .orderBy(asc(payments.created_at))
+      .limit(limit)) as Record<string, unknown>[];
+    return rows.map(mapPaymentRow);
+  }
+
+  async markReconciliationResult(
+    id: string,
+    update: ReconciliationResultUpdate,
+  ): Promise<PaymentDTO | null> {
+    const current = await this.findByPaymentId(id);
+    if (!current) return null;
+
+    const values: Record<string, unknown> = {
+      reconciliation_status: update.reconciliation_status,
+      last_reconciled_at: new Date(update.last_reconciled_at),
+      updated_at: new Date(),
+    };
+    if (update.gateway_status !== undefined) values.gateway_status = update.gateway_status;
+    if (update.reconciliation_reason !== undefined) {
+      values.reconciliation_reason = update.reconciliation_reason;
+    }
+    if (update.manual_review !== undefined) values.manual_review = update.manual_review;
+
+    await this.db.update(payments).set(values).where(eq(payments.id, id));
+    return this.findByPaymentId(id);
+  }
+
+  async compareAndSetStatus(
+    id: string,
+    expected: PaymentStatus,
+    target: PaymentStatus,
+  ): Promise<CompareAndSetStatusResult> {
+    const current = await this.findByPaymentId(id);
+    if (!current) return { outcome: "NOT_FOUND" };
+    if (current.status !== expected) {
+      return { outcome: "NOOP_STATE_CHANGED", payment: current };
+    }
+
+    // Atomic guard: the DB predicate (id AND status = expected) is the source
+    // of truth, so a concurrent writer that moved the status first loses.
+    const updated = (await (this.db
+      .update(payments)
+      .set({ status: target, updated_at: new Date() })
+      .where(
+        and(eq(payments.id, id), eq(payments.status, expected)),
+      ) as unknown as ReturningUpdate).returning()) as Record<string, unknown>[];
+    if (!updated[0]) {
+      const after = await this.findByPaymentId(id);
+      return after
+        ? { outcome: "NOOP_STATE_CHANGED", payment: after }
+        : { outcome: "NOT_FOUND" };
+    }
+    const after = await this.findByPaymentId(id);
+    return { outcome: "UPDATED", payment: after ?? current };
   }
 
   private async findByPaymentId(paymentId: string): Promise<PaymentDTO | null> {

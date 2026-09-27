@@ -169,6 +169,13 @@
       "when": 1792560009171,
       "tag": "0023_abandoned_grey_gargoyle",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792560009172,
+      "tag": "0024_fixed_wither",
+      "breakpoints": true
     }
   ]
 }
