@@ -27,6 +27,7 @@ export interface RazorpayWebhookPayload {
         id: string;
         order_id: string;
         amount: number;
+        currency: string;
         status: string;
         captured: boolean;
         method: string;
@@ -171,6 +172,7 @@ export class RazorpayService {
             id: paymentId,
             order_id: razorpayOrderId,
             amount,
+            currency: "INR",
             status: event === "payment.captured" ? "captured" : "failed",
             captured: event === "payment.captured",
             method: "upi",

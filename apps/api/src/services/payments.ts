@@ -2,7 +2,7 @@ import { createEventEnvelope, emit } from "../lib/eventBus";
 import { AppError } from "../middleware/envelope";
 import type { GiftRepository } from "../repositories/giftRepository";
 import type { OrderRepository } from "../repositories/orderRepository";
-import type { PaymentRepository } from "../repositories/paymentRepository";
+import type { PaymentDTO, PaymentRepository } from "../repositories/paymentRepository";
 import { razorpayService, type RazorpayWebhookPayload } from "./razorpay";
 
 // ============================================
@@ -192,6 +192,30 @@ export class PaymentService {
     };
   }
 
+  /**
+   * True when a captured gateway payment must be quarantined instead of
+   * fulfilled: wrong currency, amount not equal to the amount requested at
+   * create-order, or disagreement with the order/gift total (RISK-PAY-4).
+   */
+  private async isCaptureQuarantined(
+    payment: PaymentDTO,
+    entity: RazorpayWebhookPayload["payload"]["payment"]["entity"],
+  ): Promise<boolean> {
+    const expectedPaise = Math.round(payment.amount * 100);
+    if (entity.currency !== "INR") return true;
+    if (typeof entity.amount !== "number" || entity.amount !== expectedPaise) return true;
+
+    if (payment.gift_id) {
+      const gift = this.giftRepo ? await this.giftRepo.getById(payment.gift_id) : null;
+      return !gift || Math.round(gift.price_paid * 100) !== expectedPaise;
+    }
+    if (payment.order_id) {
+      const order = await this.orderRepo.getById(payment.order_id);
+      return !order || Math.round(order.total_amount * 100) !== expectedPaise;
+    }
+    return true;
+  }
+
   async processWebhook(
     rawBody: string,
     signatureHeader: string,
@@ -235,6 +259,23 @@ export class PaymentService {
     }
 
     const isCaptured = entity.captured || entity.status === "captured";
+
+    // Amount/currency integrity (RISK-PAY-4): a captured gateway payment must
+    // match the amount we requested, be in INR, and agree with the order/gift
+    // total. A mismatch is a signed-but-quarantined anomaly: we persist the raw
+    // webhook and mark the payment FAILED, but never fulfil or confirm. The
+    // order stays PAYMENT_PENDING and a later valid capture with a different
+    // razorpay_payment_id can still succeed.
+    if (isCaptured && (await this.isCaptureQuarantined(payment, entity))) {
+      await this.paymentRepo.updateWebhookResult(payment.id, {
+        razorpay_payment_id: entity.id,
+        status: "FAILED",
+        method: entity.method ?? "unknown",
+        webhook_event: payload.event,
+        webhook_raw: payload,
+      });
+      return { processed: false, idempotent: false };
+    }
 
     if (payment.gift_id) {
       const updated = await this.paymentRepo.updateWebhookResult(payment.id, {
@@ -329,6 +370,19 @@ export class PaymentService {
     }
     if (payment.status === "REFUNDED") {
       return { processed: false, idempotent: true };
+    }
+
+    // Refund integrity (RISK-PAY-4, full-refund-only policy): a refund is only
+    // honoured when the payment is CAPTURED and the refunded amount equals the
+    // captured amount exactly. Partial / over / pre-capture refunds are
+    // rejected with no state mutation (they are not a supported feature).
+    const expectedRefundPaise = Math.round(payment.amount * 100);
+    if (
+      payment.status !== "CAPTURED" ||
+      typeof refundEntity.amount !== "number" ||
+      refundEntity.amount !== expectedRefundPaise
+    ) {
+      return { processed: false, idempotent: false };
     }
 
     await this.paymentRepo.updateWebhookResult(payment.id, {

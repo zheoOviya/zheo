@@ -6,8 +6,10 @@ import { resetRedisForTests } from "../lib/redis";
 import { onEvent } from "../lib/eventBus";
 import { jwtService } from "../services/jwt";
 import { razorpayService } from "../services/razorpay";
+import { PaymentService } from "../services/payments";
 import { sharedOrderRepo } from "../repositories/shared";
 import { sharedPaymentRepo } from "../repositories/shared";
+import { sharedGiftRepo } from "../repositories/shared";
 
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001";
@@ -43,6 +45,7 @@ describe("Payments routes", () => {
     resetRedisForTests();
     sharedOrderRepo._reset();
     sharedPaymentRepo._reset();
+    sharedGiftRepo._reset();
     app = createApp();
   });
 
@@ -235,6 +238,269 @@ describe("Payments routes", () => {
         .expect(404);
 
       expect(res.body.error.code).toBe("ORDER_NOT_FOUND");
+    });
+  });
+
+  describe("Amount integrity (RISK-PAY-4)", () => {
+    const giftService = new PaymentService(sharedPaymentRepo, sharedOrderRepo, sharedGiftRepo);
+
+    function postWebhook(payload: unknown, signature: string) {
+      return request(app)
+        .post("/api/v1/payments/webhook")
+        .set("X-Razorpay-Signature", signature)
+        .set("Content-Type", "application/json")
+        .send(payload as object);
+    }
+
+    async function createOnlineOrderPayment(orderId: string, amountPaise: number) {
+      const createRes = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders())
+        .send({ order_id: orderId })
+        .expect(200);
+      const rpOrderId = createRes.body.data.razorpay_order_id as string;
+      const mock = razorpayService.buildMockWebhook(rpOrderId, amountPaise, "payment.captured");
+      return { rpOrderId, mock };
+    }
+
+    async function createPendingGift(pricePaid: number) {
+      return sharedGiftRepo.create({
+        sender_id: "u00000000-0000-4000-8000-000000000001",
+        restaurant_id: REST_ID,
+        menu_item_id: MENU_ITEM_1,
+        item_snapshot: {
+          name: "Gift Item",
+          price: pricePaid,
+          image_url: null,
+          dietary_tags: {},
+          spice_level: 1,
+          customizations: [],
+        },
+        price_paid: pricePaid,
+        message: null,
+        recipient_name: null,
+        claim_token: `tok-${Math.random().toString(36).slice(2)}`,
+        claim_code: "GIFT1234",
+        expires_at: new Date(Date.now() + 90 * 24 * 3600_000).toISOString(),
+      });
+    }
+
+    async function makeCapturedGift(pricePaid: number) {
+      const gift = await createPendingGift(pricePaid);
+      const pay = await giftService.createGiftPayment(gift.id);
+      const captured = razorpayService.buildMockWebhook(
+        pay.razorpay_order_id,
+        pricePaid * 100,
+        "payment.captured",
+      );
+      await giftService.processWebhook(captured.rawBody, captured.signature);
+      return {
+        gift,
+        paymentId: captured.payload.payload.payment.entity.id,
+        paidPaise: pricePaid * 100,
+      };
+    }
+
+    it("C1: valid order capture amount + INR -> CAPTURED / CONFIRMED", async () => {
+      const { orderId, totalAmount } = await createDraftOrder(app);
+      const amountPaise = Math.round(totalAmount * 100);
+      const { rpOrderId, mock } = await createOnlineOrderPayment(orderId, amountPaise);
+
+      await postWebhook(mock.payload, mock.signature).expect(200);
+
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("CONFIRMED");
+      expect((await sharedPaymentRepo.findByRazorpayOrderId(rpOrderId))?.status).toBe("CAPTURED");
+    });
+
+    it("C2: order under-capture -> FAILED / order PAYMENT_PENDING / no success event", async () => {
+      const { orderId, totalAmount } = await createDraftOrder(app);
+      const amountPaise = Math.round(totalAmount * 100);
+      const events: string[] = [];
+      onEvent("PaymentSucceeded", async () => {
+        events.push("PaymentSucceeded");
+      });
+      const { rpOrderId, mock } = await createOnlineOrderPayment(orderId, amountPaise - 100);
+
+      const res = await postWebhook(mock.payload, mock.signature).expect(200);
+      expect(res.body.data.processed).toBe(false);
+
+      const payment = await sharedPaymentRepo.findByRazorpayOrderId(rpOrderId);
+      expect(payment?.status).toBe("FAILED");
+      expect(payment?.razorpay_payment_id).not.toBeNull();
+      expect(payment?.webhook_raw).not.toBeNull();
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("PAYMENT_PENDING");
+      expect(events).toEqual([]);
+    });
+
+    it("C3: order over-capture -> FAILED / order PAYMENT_PENDING / no success event", async () => {
+      const { orderId, totalAmount } = await createDraftOrder(app);
+      const amountPaise = Math.round(totalAmount * 100);
+      const events: string[] = [];
+      onEvent("PaymentSucceeded", async () => {
+        events.push("PaymentSucceeded");
+      });
+      const { rpOrderId, mock } = await createOnlineOrderPayment(orderId, amountPaise + 100);
+
+      await postWebhook(mock.payload, mock.signature).expect(200);
+
+      expect((await sharedPaymentRepo.findByRazorpayOrderId(rpOrderId))?.status).toBe("FAILED");
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("PAYMENT_PENDING");
+      expect(events).toEqual([]);
+    });
+
+    it("C4: wrong currency -> FAILED / order PAYMENT_PENDING / no success event", async () => {
+      const { orderId, totalAmount } = await createDraftOrder(app);
+      const amountPaise = Math.round(totalAmount * 100);
+      const events: string[] = [];
+      onEvent("PaymentSucceeded", async () => {
+        events.push("PaymentSucceeded");
+      });
+      const { rpOrderId, mock } = await createOnlineOrderPayment(orderId, amountPaise);
+      mock.payload.payload.payment.entity.currency = "USD";
+
+      await postWebhook(mock.payload, mock.signature).expect(200);
+
+      expect((await sharedPaymentRepo.findByRazorpayOrderId(rpOrderId))?.status).toBe("FAILED");
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("PAYMENT_PENDING");
+      expect(events).toEqual([]);
+    });
+
+    it("C5: persisted payment amount disagreeing with order total -> quarantined", async () => {
+      const { orderId } = await createDraftOrder(app);
+      await sharedPaymentRepo.create({
+        order_id: orderId,
+        razorpay_order_id: "order_manual_c5",
+        amount: 100,
+      });
+      const mock = razorpayService.buildMockWebhook("order_manual_c5", 10000, "payment.captured");
+
+      const res = await postWebhook(mock.payload, mock.signature).expect(200);
+
+      expect(res.body.data.processed).toBe(false);
+      expect((await sharedPaymentRepo.findByRazorpayOrderId("order_manual_c5"))?.status).toBe("FAILED");
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("DRAFT");
+    });
+
+    it("C6: later valid different payment_id after mismatched capture succeeds", async () => {
+      const { orderId, totalAmount } = await createDraftOrder(app);
+      const amountPaise = Math.round(totalAmount * 100);
+      const { rpOrderId, mock: bad } = await createOnlineOrderPayment(orderId, amountPaise - 100);
+
+      await postWebhook(bad.payload, bad.signature).expect(200);
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("PAYMENT_PENDING");
+
+      const good = razorpayService.buildMockWebhook(rpOrderId, amountPaise, "payment.captured");
+      expect(good.payload.payload.payment.entity.id).not.toBe(
+        bad.payload.payload.payment.entity.id,
+      );
+
+      await postWebhook(good.payload, good.signature).expect(200);
+
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("CONFIRMED");
+      const payment = await sharedPaymentRepo.findByRazorpayOrderId(rpOrderId);
+      expect(payment?.status).toBe("CAPTURED");
+      expect(payment?.razorpay_payment_id).toBe(good.payload.payload.payment.entity.id);
+    });
+
+    it("C7: gift under/over capture -> payment FAILED / gift unchanged / no GiftPaid", async () => {
+      const gift = await createPendingGift(30);
+      const pay = await giftService.createGiftPayment(gift.id);
+      const events: string[] = [];
+      onEvent("GiftPaid", async () => {
+        events.push("GiftPaid");
+      });
+
+      const under = razorpayService.buildMockWebhook(pay.razorpay_order_id, 2900, "payment.captured");
+      await postWebhook(under.payload, under.signature).expect(200);
+      expect((await sharedGiftRepo.getById(gift.id))?.status).toBe("PENDING");
+      expect((await sharedPaymentRepo.findByRazorpayOrderId(pay.razorpay_order_id))?.status).toBe(
+        "FAILED",
+      );
+
+      const over = razorpayService.buildMockWebhook(pay.razorpay_order_id, 3100, "payment.captured");
+      await postWebhook(over.payload, over.signature).expect(200);
+      expect((await sharedGiftRepo.getById(gift.id))?.status).toBe("PENDING");
+      expect((await sharedPaymentRepo.findByRazorpayOrderId(pay.razorpay_order_id))?.status).toBe(
+        "FAILED",
+      );
+      expect(events).toEqual([]);
+    });
+
+    it("R1: full refund of CAPTURED payment with exact amount -> REFUNDED", async () => {
+      const { orderId, totalAmount } = await createDraftOrder(app);
+      const amountPaise = Math.round(totalAmount * 100);
+      const { rpOrderId, mock } = await createOnlineOrderPayment(orderId, amountPaise);
+      await postWebhook(mock.payload, mock.signature).expect(200);
+      const paymentId = mock.payload.payload.payment.entity.id;
+
+      const refund = razorpayService.buildMockRefundWebhook(paymentId, amountPaise);
+      const res = await postWebhook(refund.payload, refund.signature).expect(200);
+
+      expect(res.body.data.processed).toBe(true);
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("REFUNDED");
+      expect((await sharedPaymentRepo.findByRazorpayOrderId(rpOrderId))?.status).toBe("REFUNDED");
+    });
+
+    it("R2: partial refund rejected (payment stays CAPTURED, gift unchanged)", async () => {
+      const { gift, paymentId, paidPaise } = await makeCapturedGift(30);
+      const events: string[] = [];
+      onEvent("GiftRefunded", async () => {
+        events.push("GiftRefunded");
+      });
+
+      const refund = razorpayService.buildMockRefundWebhook(paymentId, paidPaise - 100);
+      const res = await postWebhook(refund.payload, refund.signature).expect(200);
+
+      expect(res.body.data.processed).toBe(false);
+      expect((await sharedPaymentRepo.findByRazorpayPaymentId(paymentId))?.status).toBe("CAPTURED");
+      expect((await sharedGiftRepo.getById(gift.id))?.status).toBe("ACTIVE");
+      expect(events).toEqual([]);
+    });
+
+    it("R3: over-refund rejected (payment stays CAPTURED, gift unchanged)", async () => {
+      const { gift, paymentId, paidPaise } = await makeCapturedGift(30);
+
+      const refund = razorpayService.buildMockRefundWebhook(paymentId, paidPaise + 100);
+      const res = await postWebhook(refund.payload, refund.signature).expect(200);
+
+      expect(res.body.data.processed).toBe(false);
+      expect((await sharedPaymentRepo.findByRazorpayPaymentId(paymentId))?.status).toBe("CAPTURED");
+      expect((await sharedGiftRepo.getById(gift.id))?.status).toBe("ACTIVE");
+    });
+
+    it("R4: refund for non-CAPTURED payment rejected", async () => {
+      const { orderId, totalAmount } = await createDraftOrder(app);
+      const amountPaise = Math.round(totalAmount * 100);
+      const { rpOrderId } = await createOnlineOrderPayment(orderId, amountPaise);
+      const failed = razorpayService.buildMockWebhook(rpOrderId, amountPaise, "payment.failed");
+      await postWebhook(failed.payload, failed.signature).expect(200);
+      const paymentId = failed.payload.payload.payment.entity.id;
+      expect((await sharedPaymentRepo.findByRazorpayOrderId(rpOrderId))?.status).toBe("FAILED");
+
+      const refund = razorpayService.buildMockRefundWebhook(paymentId, amountPaise);
+      const res = await postWebhook(refund.payload, refund.signature).expect(200);
+
+      expect(res.body.data.processed).toBe(false);
+      expect((await sharedPaymentRepo.findByRazorpayOrderId(rpOrderId))?.status).toBe("FAILED");
+    });
+
+    it("R5: duplicate valid refund after REFUNDED -> idempotent", async () => {
+      const { orderId, totalAmount } = await createDraftOrder(app);
+      const amountPaise = Math.round(totalAmount * 100);
+      const { rpOrderId, mock } = await createOnlineOrderPayment(orderId, amountPaise);
+      await postWebhook(mock.payload, mock.signature).expect(200);
+      const paymentId = mock.payload.payload.payment.entity.id;
+
+      const first = razorpayService.buildMockRefundWebhook(paymentId, amountPaise);
+      const r1 = await postWebhook(first.payload, first.signature).expect(200);
+      expect(r1.body.data.processed).toBe(true);
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("REFUNDED");
+
+      const second = razorpayService.buildMockRefundWebhook(paymentId, amountPaise);
+      const r2 = await postWebhook(second.payload, second.signature).expect(200);
+      expect(r2.body.data.processed).toBe(false);
+      expect(r2.body.data.idempotent).toBe(true);
+      expect((await sharedPaymentRepo.findByRazorpayOrderId(rpOrderId))?.status).toBe("REFUNDED");
     });
   });
 
