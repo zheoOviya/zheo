@@ -48,6 +48,7 @@ describe("AccountEntry", () => {
       accessToken: null,
       user: null,
       isAuthenticated: false,
+      isSuspended: false,
       refreshAccessToken: vi.fn().mockResolvedValue(false),
       logout: vi.fn().mockResolvedValue(undefined),
     });
@@ -118,6 +119,38 @@ describe("AccountEntry", () => {
 
     render(<AccountEntry />);
 
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("R4 renders the suspension banner without an access token", async () => {
+    useAuthStore.setState({
+      accessToken: null,
+      isAuthenticated: false,
+      user: null,
+      isSuspended: true,
+    });
+
+    render(<AccountEntry />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeDefined();
+    });
+    expect(screen.getByText(/Your account has been suspended/)).toBeDefined();
+  });
+
+  it("R5 does not render the suspension banner on a generic signed-out state", async () => {
+    useAuthStore.setState({
+      accessToken: null,
+      isAuthenticated: false,
+      user: null,
+      isSuspended: false,
+    });
+
+    render(<AccountEntry />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "Sign in" })).toBeDefined();
+    });
     expect(screen.queryByRole("alert")).toBeNull();
   });
 

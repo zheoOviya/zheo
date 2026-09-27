@@ -46,12 +46,18 @@ export function AccountEntry() {
   const router = useRouter();
   const accessToken = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
+  const isSuspended = useAuthStore((s) => s.isSuspended);
   const refreshAccessToken = useAuthStore((s) => s.refreshAccessToken);
   const logout = useAuthStore((s) => s.logout);
   const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const isDesktop = useMediaQuery(DESKTOP_QUERY);
+
+  // A suspended account is shown the warning even when no access token could be
+  // minted (refresh rejected with 403 ACCOUNT_SUSPENDED). The explicit store
+  // flag covers the hard-reload case where `user` is not available yet.
+  const suspended = Boolean(user?.is_suspended) || isSuspended;
 
   useEffect(() => {
     setMounted(true);
@@ -103,7 +109,7 @@ export function AccountEntry() {
     if (isDesktop) {
       return (
         <>
-          {user?.is_suspended && <SuspensionBanner />}
+          {suspended && <SuspensionBanner />}
           <div ref={menuRef} className="relative">
             {avatarButton}
             {open && (
@@ -141,7 +147,7 @@ export function AccountEntry() {
 
     return (
       <>
-        {user?.is_suspended && <SuspensionBanner />}
+        {suspended && <SuspensionBanner />}
         {avatarButton}
         <Sheet open={open} onClose={() => setOpen(false)} title="Account">
           <nav aria-label="Account" className="divide-y divide-neutral-100 dark:divide-neutral-800">
@@ -169,19 +175,22 @@ export function AccountEntry() {
   }
 
   return (
-    <div className="flex items-center gap-2">
-      <Link
-        href="/login"
-        className="min-h-touch rounded-full px-4 py-2 text-sm font-semibold text-primary-700 ring-1 ring-primary-500/30 hover:bg-primary-500/5 dark:text-primary-300"
-      >
-        Sign in
-      </Link>
-      <Link
-        href="/signup"
-        className="min-h-touch rounded-full bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover"
-      >
-        Sign up
-      </Link>
-    </div>
+    <>
+      {suspended && <SuspensionBanner />}
+      <div className="flex items-center gap-2">
+        <Link
+          href="/login"
+          className="min-h-touch rounded-full px-4 py-2 text-sm font-semibold text-primary-700 ring-1 ring-primary-500/30 hover:bg-primary-500/5 dark:text-primary-300"
+        >
+          Sign in
+        </Link>
+        <Link
+          href="/signup"
+          className="min-h-touch rounded-full bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover"
+        >
+          Sign up
+        </Link>
+      </div>
+    </>
   );
 }

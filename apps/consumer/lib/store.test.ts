@@ -298,7 +298,95 @@ describe("Auth store", () => {
       accessToken: null,
       user: null,
       isAuthenticated: false,
+      isSuspended: false,
     });
+  });
+
+  function stubRefresh(status: number, body: unknown) {
+    const fetchMock = vi.fn(async () => ({
+      status,
+      json: async () => body,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("R1 marks the account suspended on 403 ACCOUNT_SUSPENDED", async () => {
+    stubRefresh(403, {
+      success: false,
+      data: null,
+      error: { code: "ACCOUNT_SUSPENDED", message: "This account is suspended" },
+    });
+
+    const ok = await useAuthStore.getState().refreshAccessToken();
+
+    expect(ok).toBe(false);
+    expect(useAuthStore.getState().isSuspended).toBe(true);
+  });
+
+  it("R2 does not set an access token on a suspended refresh", async () => {
+    stubRefresh(403, {
+      success: false,
+      data: null,
+      error: { code: "ACCOUNT_SUSPENDED", message: "This account is suspended" },
+    });
+
+    await useAuthStore.getState().refreshAccessToken();
+
+    expect(useAuthStore.getState().accessToken).toBeNull();
+  });
+
+  it("R3 does not set isAuthenticated on a suspended refresh", async () => {
+    stubRefresh(403, {
+      success: false,
+      data: null,
+      error: { code: "ACCOUNT_SUSPENDED", message: "This account is suspended" },
+    });
+
+    await useAuthStore.getState().refreshAccessToken();
+
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+  });
+
+  it("R5 does not mark suspension on a generic refresh failure", async () => {
+    stubRefresh(401, {
+      success: false,
+      data: null,
+      error: { code: "REFRESH_TOKEN_REUSED", message: "Refresh token reuse detected." },
+    });
+
+    const ok = await useAuthStore.getState().refreshAccessToken();
+
+    expect(ok).toBe(false);
+    expect(useAuthStore.getState().isSuspended).toBe(false);
+  });
+
+  it("R5b does not mark suspension on a non-suspension 403", async () => {
+    stubRefresh(403, {
+      success: false,
+      data: null,
+      error: { code: "FORBIDDEN", message: "Forbidden" },
+    });
+
+    await useAuthStore.getState().refreshAccessToken();
+
+    expect(useAuthStore.getState().isSuspended).toBe(false);
+  });
+
+  it("R6 successful refresh is unchanged and clears suspension", async () => {
+    useAuthStore.setState({ isSuspended: true });
+    stubRefresh(200, {
+      success: true,
+      data: { access_token: "tok-1" },
+      error: null,
+    });
+
+    const ok = await useAuthStore.getState().refreshAccessToken();
+
+    expect(ok).toBe(true);
+    expect(useAuthStore.getState().accessToken).toBe("tok-1");
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(useAuthStore.getState().isSuspended).toBe(false);
   });
 
   it("dedupes concurrent refresh calls into a single request", async () => {

@@ -24,6 +24,13 @@ interface AuthState {
   accessToken: string | null;
   user: AuthUser | null;
   isAuthenticated: boolean;
+  /**
+   * True only when the backend denied a refresh because the account is
+   * suspended (403 ACCOUNT_SUSPENDED). This is kept separate from ordinary
+   * signed-out failures so the header can explain the suspension without a
+   * fresh access token ever being issued.
+   */
+  isSuspended: boolean;
   login: (phone: string, otp: string) => Promise<void>;
   sendOtp: (phone: string) => Promise<{ sent: boolean; expiresIn: number; demoOtp?: string }>;
   refreshAccessToken: () => Promise<boolean>;
@@ -46,6 +53,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   accessToken: null,
   user: null,
   isAuthenticated: false,
+  isSuspended: false,
 
   sendOtp: async (phone: string) => {
     // Sign-up is implicit: a new phone is auto-created as a CONSUMER by the
@@ -87,6 +95,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       accessToken: body.data.access_token,
       user: body.data.user,
       isAuthenticated: true,
+      isSuspended: false,
     });
   },
 
@@ -106,10 +115,26 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           });
           const body = await res.json();
           if (!body.success) {
-            set({ accessToken: null, user: null, isAuthenticated: false });
+            // Distinguish a deliberate suspension from ordinary signed-out
+            // failures (missing/reused/expired refresh token, device mismatch)
+            // so the header can still explain the suspension without ever
+            // minting a fresh access token. Do not broaden every 403 into a
+            // suspension; require the exact ACCOUNT_SUSPENDED code.
+            const suspended =
+              res.status === 403 && body.error?.code === "ACCOUNT_SUSPENDED";
+            set({
+              accessToken: null,
+              user: null,
+              isAuthenticated: false,
+              isSuspended: suspended,
+            });
             return false;
           }
-          set({ accessToken: body.data.access_token, isAuthenticated: true });
+          set({
+            accessToken: body.data.access_token,
+            isAuthenticated: true,
+            isSuspended: false,
+          });
           return true;
         } finally {
           refreshInFlight = null;
@@ -129,7 +154,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (!body.success) {
         return;
       }
-      set({ user: body.data.user });
+      set({ user: body.data.user, isSuspended: Boolean(body.data.user?.is_suspended) });
     } catch {
       // Non-fatal: keep the existing session state on network errors.
     }
@@ -140,7 +165,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       method: "POST",
       credentials: "include",
     });
-    set({ accessToken: null, user: null, isAuthenticated: false });
+    set({ accessToken: null, user: null, isAuthenticated: false, isSuspended: false });
   },
 
   getAuthHeaders: (): Record<string, string> => {
