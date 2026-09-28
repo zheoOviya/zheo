@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, inArray, lte, or, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, or, type SQL } from "drizzle-orm";
 import { payments } from "@snakzap/db";
 import type { DrizzleDb } from "../../lib/dbType";
 import type {
@@ -13,8 +13,10 @@ import type {
   ReconciliationResultUpdate,
   CompareAndSetStatusResult,
   StatusConvergencePatch,
+  ReserveRefundSubmissionResult,
+  RefundSubmissionResultUpdate,
 } from "../paymentRepository";
-import { normalizeCandidateLimit } from "../paymentRepository";
+import { normalizeCandidateLimit, normalizeRefundInitiationStatus } from "../paymentRepository";
 
 // ============================================
 // Payments context repository (Drizzle/Postgres)
@@ -51,6 +53,14 @@ function mapPaymentRow(row: Record<string, unknown>): PaymentDTO {
     last_reconciled_at: row.last_reconciled_at
       ? (row.last_reconciled_at as Date).toISOString()
       : null,
+    refund_requested_at: row.refund_requested_at
+      ? (row.refund_requested_at as Date).toISOString()
+      : null,
+    refund_provider_id: (row.refund_provider_id as string | null) ?? null,
+    refund_initiation_status: normalizeRefundInitiationStatus(
+      row.refund_initiation_status,
+    ),
+    refund_initiation_reason: (row.refund_initiation_reason as string | null) ?? null,
     created_at: (row.created_at as Date).toISOString(),
     // Real update timestamp; legacy rows with no updated_at fall back to
     // created_at so the DTO never lies about ordering.
@@ -75,6 +85,7 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       amount: String(input.amount),
       status: "CREATED",
       reconciliation_status: "NONE",
+      refund_initiation_status: "NONE",
       manual_review: false,
       created_at: now,
       updated_at: now,
@@ -99,6 +110,10 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       reconciliation_reason: null,
       manual_review: false,
       last_reconciled_at: null,
+      refund_requested_at: null,
+      refund_provider_id: null,
+      refund_initiation_status: "NONE",
+      refund_initiation_reason: null,
       created_at: now.toISOString(),
       updated_at: now.toISOString(),
     };
@@ -307,6 +322,68 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     }
     const after = await this.findByPaymentId(id);
     return { outcome: "UPDATED", payment: after ?? current };
+  }
+
+  /**
+   * Exactly-once refund reservation. The DB predicate
+   * (id AND status = expected AND refund_requested_at IS NULL) is the source of
+   * truth; a concurrent writer that reserved first makes this UPDATE match zero
+   * rows, so exactly one caller can win even without a pre-read.
+   */
+  async reserveRefundSubmission(
+    paymentId: string,
+    expectedStatus: PaymentStatus = "CAPTURED",
+  ): Promise<ReserveRefundSubmissionResult> {
+    const now = new Date();
+    const updated = (await (this.db
+      .update(payments)
+      .set({
+        refund_requested_at: now,
+        refund_initiation_status: "RESERVED",
+        updated_at: now,
+      })
+      .where(
+        and(
+          eq(payments.id, paymentId),
+          eq(payments.status, expectedStatus),
+          isNull(payments.refund_requested_at),
+        ),
+      ) as unknown as ReturningUpdate).returning()) as Record<string, unknown>[];
+    if (updated[0]) {
+      return { outcome: "RESERVED", payment: mapPaymentRow(updated[0]) };
+    }
+
+    // Predicate did not match: classify from the current row.
+    const currentRow = await this.findRawRow(paymentId);
+    if (!currentRow) return { outcome: "NOT_FOUND" };
+    const current = mapPaymentRow(currentRow);
+    if (current.refund_requested_at !== null) {
+      return { outcome: "ALREADY_RESERVED", payment: current };
+    }
+    return { outcome: "NOOP_STATE_CHANGED", payment: current };
+  }
+
+  async markRefundSubmissionResult(
+    id: string,
+    update: RefundSubmissionResultUpdate,
+  ): Promise<PaymentDTO | null> {
+    const current = await this.findByPaymentId(id);
+    if (!current) return null;
+
+    // `refund_requested_at` is deliberately absent from this update set.
+    const values: Record<string, unknown> = {
+      refund_initiation_status: update.refund_initiation_status,
+      updated_at: new Date(),
+    };
+    if (update.refund_provider_id !== undefined) {
+      values.refund_provider_id = update.refund_provider_id;
+    }
+    if (update.refund_initiation_reason !== undefined) {
+      values.refund_initiation_reason = update.refund_initiation_reason;
+    }
+
+    await this.db.update(payments).set(values).where(eq(payments.id, id));
+    return this.findByPaymentId(id);
   }
 
   private async findRawRow(paymentId: string): Promise<Record<string, unknown> | null> {

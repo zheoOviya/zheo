@@ -48,6 +48,20 @@ export const payments = pgTable(
     reconciliation_reason: text("reconciliation_reason"),
     manual_review: boolean("manual_review").notNull().default(false),
     last_reconciled_at: timestamp("last_reconciled_at", { withTimezone: true }),
+    // Durable refund-initiation truth (PAYMENT_CANCEL_REFUND-A1). Explicit
+    // columns rather than metadata keys so the exactly-once reservation
+    // survives the additive webhook metadata merges that only own the
+    // razorpay_* identity keys. `refund_requested_at` is the reservation gate:
+    // once set it is NEVER cleared, so an ambiguous gateway timeout can never
+    // reopen a refund for a second blind submission.
+    refund_requested_at: timestamp("refund_requested_at", { withTimezone: true }),
+    // Provider refund id returned by a successful gateway submission.
+    refund_provider_id: text("refund_provider_id"),
+    // NONE | RESERVED | SUBMITTED | MANUAL_REVIEW (validated in app layer).
+    refund_initiation_status: text("refund_initiation_status")
+      .notNull()
+      .default("NONE"),
+    refund_initiation_reason: text("refund_initiation_reason"),
     created_at: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

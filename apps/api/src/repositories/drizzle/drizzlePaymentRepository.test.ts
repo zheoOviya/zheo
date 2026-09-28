@@ -71,6 +71,19 @@ function evalCond(node: unknown, row: Record<string, unknown>): boolean {
   if (stringParts.includes("or")) return operands.some((op) => evalCond(op, row));
   if (stringParts.includes("and")) return operands.every((op) => evalCond(op, row));
 
+  if (stringParts.includes("is not null")) {
+    const column = operands.find(isColumn) as { name: string } | undefined;
+    if (!column) return true;
+    const value = row[column.name];
+    return value !== null && value !== undefined;
+  }
+  if (stringParts.includes("is null")) {
+    const column = operands.find(isColumn) as { name: string } | undefined;
+    if (!column) return true;
+    const value = row[column.name];
+    return value === null || value === undefined;
+  }
+
   const op = stringParts.find((part) => COMPARISON_OPS.has(part));
   if (!op) {
     const nested = operands.filter(
@@ -167,38 +180,12 @@ function createFakeDb(): FakeDb {
   };
   const spy: QuerySpy = { whereCalls: [], orderByCalls: [], limitCalls: [] };
 
-  function collectPairs(cond: unknown, out: Array<{ col: string; val: unknown }>): void {
-    if (!cond || typeof cond !== "object") return;
-    const chunks = (cond as { queryChunks?: unknown[] }).queryChunks;
-    if (!Array.isArray(chunks)) return;
-
-    for (const chunk of chunks) {
-      const c = chunk as { queryChunks?: unknown[] } | null;
-      if (c && typeof c === "object" && Array.isArray(c.queryChunks)) {
-        collectPairs(c, out);
-      }
-    }
-
-    let col: string | undefined;
-    let val: unknown;
-    let hasParam = false;
-    for (const chunk of chunks) {
-      const c = chunk as { name?: unknown; value?: unknown; encoder?: unknown } | null;
-      if (!c || typeof c !== "object") continue;
-      if (typeof c.name === "string" && col === undefined) col = c.name;
-      if ("encoder" in c) {
-        val = c.value;
-        hasParam = true;
-      }
-    }
-    if (col !== undefined && hasParam) out.push({ col, val });
-  }
-
   const predicateFrom = (cond: unknown): ((row: Record<string, unknown>) => boolean) => {
     if (cond == null) return () => true;
-    const pairs: Array<{ col: string; val: unknown }> = [];
-    collectPairs(cond, pairs);
-    return (row) => pairs.every(({ col, val }) => row[col] === val);
+    // Reuse the full AST evaluator so update/delete WHERE clauses (including
+    // `IS NULL` guards used by the refund reservation CAS) are enforced the
+    // same way a real database would — no pre-read shortcut.
+    return (row) => evalCond(cond, row);
   };
 
   const db = {
@@ -327,6 +314,10 @@ function paymentRow(overrides: Record<string, unknown> = {}): Record<string, unk
     reconciliation_reason: null,
     manual_review: false,
     last_reconciled_at: null,
+    refund_requested_at: null,
+    refund_provider_id: null,
+    refund_initiation_status: "NONE",
+    refund_initiation_reason: null,
     created_at: now,
     updated_at: now,
     ...overrides,
@@ -545,5 +536,156 @@ describe("PAYMENT_RECONCILIATION-A3/A3R (drizzle)", () => {
     const memCandidates = (await memoryRepo.listReconciliationCandidates(q)).map(snapshot);
     const dzCandidates = (await repo.listReconciliationCandidates(q)).map(snapshot);
     expect(dzCandidates).toEqual(memCandidates);
+  });
+});
+
+// ============================================
+// PAYMENT_CANCEL_REFUND-A1 refund-initiation foundation (Drizzle + parity).
+//
+// The reservation CAS must be enforced by the DB predicate (id AND status AND
+// refund_requested_at IS NULL), not by a pre-read alone. The FakeDb evaluates
+// the real drizzle-orm SQL AST, so the IS NULL guard is exercised end to end.
+// ============================================
+
+describe("PAYMENT_CANCEL_REFUND-A1 refund reservation foundation (drizzle)", () => {
+  let fake: FakeDb;
+  let repo: DrizzlePaymentRepository;
+
+  beforeEach(() => {
+    fake = createFakeDb();
+    repo = new DrizzlePaymentRepository(fake.db);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function capturedRow(): Record<string, unknown> {
+    const row = paymentRow({ status: "CAPTURED" });
+    fake.rowsFor(payments).push(row);
+    return row;
+  }
+
+  it("D-RF3 a CAPTURED unreserved row can be reserved and persists RESERVED", async () => {
+    const row = capturedRow();
+    const result = await repo.reserveRefundSubmission(row.id as string);
+    expect(result.outcome).toBe("RESERVED");
+    if (result.outcome !== "RESERVED") throw new Error("unreachable");
+    expect(result.payment.refund_initiation_status).toBe("RESERVED");
+    expect(result.payment.refund_requested_at).not.toBeNull();
+    expect(row.refund_initiation_status).toBe("RESERVED");
+  });
+
+  it("D-RF4 a second reservation is ALREADY_RESERVED and the IS NULL predicate blocks re-write", async () => {
+    const row = capturedRow();
+    const first = await repo.reserveRefundSubmission(row.id as string);
+    if (first.outcome !== "RESERVED") throw new Error("unreachable");
+    const firstTimestamp = first.payment.refund_requested_at;
+    const rawTimestamp = row.refund_requested_at;
+
+    const second = await repo.reserveRefundSubmission(row.id as string);
+    expect(second.outcome).toBe("ALREADY_RESERVED");
+    if (second.outcome !== "ALREADY_RESERVED") throw new Error("unreachable");
+    expect(second.payment.refund_requested_at).toBe(firstTimestamp);
+    // The row's timestamp is byte-identical: the second UPDATE matched no rows.
+    expect(row.refund_requested_at).toBe(rawTimestamp);
+  });
+
+  it("D-RF5 non-CAPTURED rows cannot acquire a CAPTURED reservation", async () => {
+    fake.rowsFor(payments).push(
+      paymentRow({ status: "CREATED" }),
+      paymentRow({ status: "FAILED" }),
+      paymentRow({ status: "REFUNDED" }),
+    );
+    for (const row of fake.rowsFor(payments)) {
+      expect((await repo.reserveRefundSubmission(row.id as string)).outcome).toBe(
+        "NOOP_STATE_CHANGED",
+      );
+      expect(row.refund_requested_at).toBeNull();
+    }
+  });
+
+  it("D-RF6 concurrent reservations yield exactly one RESERVED", async () => {
+    const row = capturedRow();
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => repo.reserveRefundSubmission(row.id as string)),
+    );
+    expect(results.filter((r) => r.outcome === "RESERVED")).toHaveLength(1);
+    expect(results.filter((r) => r.outcome === "ALREADY_RESERVED")).toHaveLength(4);
+  });
+
+  it("D-RF8/RF9 result markers persist without clearing the reservation", async () => {
+    const row = capturedRow();
+    const reserved = await repo.reserveRefundSubmission(row.id as string);
+    if (reserved.outcome !== "RESERVED") throw new Error("unreachable");
+
+    const submitted = await repo.markRefundSubmissionResult(row.id as string, {
+      refund_provider_id: "rfnd_dz",
+      refund_initiation_status: "SUBMITTED",
+    });
+    expect(submitted!.refund_provider_id).toBe("rfnd_dz");
+    expect(submitted!.refund_initiation_status).toBe("SUBMITTED");
+    expect(submitted!.refund_requested_at).toBe(reserved.payment.refund_requested_at);
+
+    const review = await repo.markRefundSubmissionResult(row.id as string, {
+      refund_initiation_status: "MANUAL_REVIEW",
+      refund_initiation_reason: "AMBIGUOUS_TIMEOUT",
+    });
+    expect(review!.refund_initiation_reason).toBe("AMBIGUOUS_TIMEOUT");
+    expect(review!.refund_requested_at).toBe(reserved.payment.refund_requested_at);
+    expect(review!.refund_provider_id).toBe("rfnd_dz");
+  });
+
+  it("D-RF10 webhook/reconciliation/CAS writes preserve the refund columns", async () => {
+    const row = capturedRow();
+    const reserved = await repo.reserveRefundSubmission(row.id as string);
+    if (reserved.outcome !== "RESERVED") throw new Error("unreachable");
+    await repo.markRefundSubmissionResult(row.id as string, {
+      refund_provider_id: "rfnd_dz10",
+      refund_initiation_status: "SUBMITTED",
+    });
+
+    await repo.updateWebhookResult(row.id as string, WEBHOOK);
+    await repo.markReconciliationResult(row.id as string, {
+      reconciliation_status: "MANUAL_REVIEW",
+      reconciliation_reason: "x",
+      last_reconciled_at: "2026-01-01T02:00:00.000Z",
+    });
+    const after = await repo.compareAndSetStatus(row.id as string, "CAPTURED", "CAPTURED");
+
+    expect(after.outcome).toBe("UPDATED");
+    if (after.outcome !== "UPDATED") throw new Error("unreachable");
+    expect(after.payment.refund_requested_at).toBe(reserved.payment.refund_requested_at);
+    expect(after.payment.refund_provider_id).toBe("rfnd_dz10");
+    expect(after.payment.refund_initiation_status).toBe("SUBMITTED");
+  });
+
+  it("D-RF12 reservation reports NOT_FOUND for a missing row", async () => {
+    const result = await repo.reserveRefundSubmission("00000000-0000-4000-8000-0000000000ff");
+    expect(result.outcome).toBe("NOT_FOUND");
+  });
+
+  it("RF11 Memory and Drizzle refund-initiation semantics match", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+    async function run(target: PaymentRepository): Promise<Record<string, unknown> | null> {
+      const created = await target.create({ razorpay_order_id: "order_rf_parity", amount: 100 });
+      await target.updateWebhookResult(created.id, WEBHOOK);
+      const reserved = await target.reserveRefundSubmission(created.id);
+      if (reserved.outcome !== "RESERVED") throw new Error(`expected RESERVED, got ${reserved.outcome}`);
+      await target.markRefundSubmissionResult(created.id, {
+        refund_provider_id: "rfnd_parity",
+        refund_initiation_status: "SUBMITTED",
+      });
+      const second = await target.reserveRefundSubmission(created.id);
+      expect(second.outcome).toBe("ALREADY_RESERVED");
+      return snapshot(await target.getById(created.id));
+    }
+
+    const memoryRepo = new MemoryPaymentRepository();
+    const memory = await run(memoryRepo);
+    const drizzle = await run(repo);
+    expect(drizzle).toEqual(memory);
   });
 });

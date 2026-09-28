@@ -245,6 +245,10 @@ describe("PAYMENT_RECONCILIATION-A3 durable foundation (memory)", () => {
       reconciliation_reason: null,
       manual_review: false,
       last_reconciled_at: null,
+      refund_requested_at: null,
+      refund_provider_id: null,
+      refund_initiation_status: "NONE",
+      refund_initiation_reason: null,
       created_at: T0,
       updated_at: T0,
       ...overrides,
@@ -261,5 +265,191 @@ describe("PAYMENT_RECONCILIATION-A3 durable foundation (memory)", () => {
       staleBefore: "2026-01-01T01:00:00.000Z",
     });
     expect(selected.map((p) => p.id)).toEqual(["old", "flagged"]);
+  });
+});
+
+// ============================================
+// PAYMENT_CANCEL_REFUND-A1 durable refund-initiation foundation (memory).
+//
+// Covers RF1-RF12: schema/migration exposure, NONE defaults, exactly-once
+// reservation CAS, reservation retention (never cleared), the narrow result
+// marker and additive preservation of the refund columns by every other
+// write path. Drizzle parity lives in drizzle/drizzlePaymentRepository.test.ts.
+// ============================================
+
+describe("PAYMENT_CANCEL_REFUND-A1 refund reservation foundation (memory)", () => {
+  let repo: MemoryPaymentRepository;
+
+  beforeEach(() => {
+    repo = new MemoryPaymentRepository();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function capturedPayment(order = "order_rf", pay = "pay_rf"): Promise<PaymentDTO> {
+    const created = await repo.create({ razorpay_order_id: order, amount: 100 });
+    await repo.updateWebhookResult(created.id, webhook({ razorpay_payment_id: pay }));
+    const after = await repo.getById(created.id);
+    if (!after) throw new Error("seed failed");
+    return after;
+  }
+
+  it("RF1 schema + migration expose all refund-initiation fields", () => {
+    expect(payments.refund_requested_at.name).toBe("refund_requested_at");
+    expect(payments.refund_provider_id.name).toBe("refund_provider_id");
+    expect(payments.refund_initiation_status.name).toBe("refund_initiation_status");
+    expect(payments.refund_initiation_reason.name).toBe("refund_initiation_reason");
+
+    const drizzleDir = path.resolve(__dirname, "../../../../packages/db/drizzle");
+    const sql = fs
+      .readdirSync(drizzleDir)
+      .filter((name) => name.endsWith(".sql"))
+      .map((name) => fs.readFileSync(path.join(drizzleDir, name), "utf8"))
+      .join("\n");
+    for (const column of [
+      "refund_requested_at",
+      "refund_provider_id",
+      "refund_initiation_status",
+      "refund_initiation_reason",
+    ]) {
+      expect(sql).toContain(`ADD COLUMN "${column}"`);
+    }
+  });
+
+  it("RF2 a new payment defaults to no refund initiation", async () => {
+    const created = await repo.create({ razorpay_order_id: "order_rf2", amount: 100 });
+    expect(created.refund_requested_at).toBeNull();
+    expect(created.refund_provider_id).toBeNull();
+    expect(created.refund_initiation_status).toBe("NONE");
+    expect(created.refund_initiation_reason).toBeNull();
+  });
+
+  it("RF3 a CAPTURED unreserved payment can be reserved exactly once", async () => {
+    const payment = await capturedPayment("order_rf3", "pay_rf3");
+    const result = await repo.reserveRefundSubmission(payment.id);
+    expect(result.outcome).toBe("RESERVED");
+    if (result.outcome !== "RESERVED") throw new Error("unreachable");
+    expect(result.payment.refund_initiation_status).toBe("RESERVED");
+    expect(result.payment.refund_requested_at).not.toBeNull();
+    // Explicit default expected status is CAPTURED.
+    const again = await repo.getById(payment.id);
+    expect(again!.refund_initiation_status).toBe("RESERVED");
+  });
+
+  it("RF4 a second reservation is ALREADY_RESERVED with the original timestamp", async () => {
+    const payment = await capturedPayment("order_rf4", "pay_rf4");
+    const first = await repo.reserveRefundSubmission(payment.id);
+    if (first.outcome !== "RESERVED") throw new Error("unreachable");
+    const firstTimestamp = first.payment.refund_requested_at;
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+    const second = await repo.reserveRefundSubmission(payment.id);
+    expect(second.outcome).toBe("ALREADY_RESERVED");
+    if (second.outcome !== "ALREADY_RESERVED") throw new Error("unreachable");
+    expect(second.payment.refund_requested_at).toBe(firstTimestamp);
+  });
+
+  it("RF5 CREATED/FAILED/REFUNDED cannot acquire a CAPTURED reservation", async () => {
+    const created = await repo.create({ razorpay_order_id: "order_rf5a", amount: 100 });
+    expect((await repo.reserveRefundSubmission(created.id)).outcome).toBe("NOOP_STATE_CHANGED");
+
+    const failed = await repo.create({ razorpay_order_id: "order_rf5b", amount: 100 });
+    await repo.updateWebhookResult(failed.id, webhook({ status: "FAILED" }));
+    expect((await repo.reserveRefundSubmission(failed.id)).outcome).toBe("NOOP_STATE_CHANGED");
+
+    const refunded = await repo.create({ razorpay_order_id: "order_rf5c", amount: 100 });
+    await repo.updateWebhookResult(refunded.id, webhook({ status: "REFUNDED" }));
+    expect((await repo.reserveRefundSubmission(refunded.id)).outcome).toBe("NOOP_STATE_CHANGED");
+  });
+
+  it("RF6 concurrent reservations yield exactly one RESERVED", async () => {
+    const payment = await capturedPayment("order_rf6", "pay_rf6");
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => repo.reserveRefundSubmission(payment.id)),
+    );
+    const reserved = results.filter((r) => r.outcome === "RESERVED");
+    const already = results.filter((r) => r.outcome === "ALREADY_RESERVED");
+    expect(reserved).toHaveLength(1);
+    expect(already).toHaveLength(4);
+  });
+
+  it("RF7 reservation advances updated_at", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(T0));
+    const payment = await capturedPayment("order_rf7", "pay_rf7");
+    vi.setSystemTime(new Date("2026-01-01T00:09:00.000Z"));
+    const result = await repo.reserveRefundSubmission(payment.id);
+    expect(result.outcome).toBe("RESERVED");
+    if (result.outcome !== "RESERVED") throw new Error("unreachable");
+    expect(result.payment.updated_at).toBe("2026-01-01T00:09:00.000Z");
+    expect(result.payment.updated_at).not.toBe(payment.updated_at);
+  });
+
+  it("RF8 SUBMITTED marker persists the provider refund id without clearing the reservation", async () => {
+    const payment = await capturedPayment("order_rf8", "pay_rf8");
+    const reserved = await repo.reserveRefundSubmission(payment.id);
+    if (reserved.outcome !== "RESERVED") throw new Error("unreachable");
+
+    const marked = await repo.markRefundSubmissionResult(payment.id, {
+      refund_provider_id: "rfnd_123",
+      refund_initiation_status: "SUBMITTED",
+    });
+    expect(marked!.refund_provider_id).toBe("rfnd_123");
+    expect(marked!.refund_initiation_status).toBe("SUBMITTED");
+    expect(marked!.refund_requested_at).toBe(reserved.payment.refund_requested_at);
+    expect(marked!.refund_requested_at).not.toBeNull();
+  });
+
+  it("RF9 MANUAL_REVIEW marker persists the reason without clearing the reservation", async () => {
+    const payment = await capturedPayment("order_rf9", "pay_rf9");
+    const reserved = await repo.reserveRefundSubmission(payment.id);
+    if (reserved.outcome !== "RESERVED") throw new Error("unreachable");
+
+    const marked = await repo.markRefundSubmissionResult(payment.id, {
+      refund_initiation_status: "MANUAL_REVIEW",
+      refund_initiation_reason: "AMBIGUOUS_TIMEOUT",
+    });
+    expect(marked!.refund_initiation_status).toBe("MANUAL_REVIEW");
+    expect(marked!.refund_initiation_reason).toBe("AMBIGUOUS_TIMEOUT");
+    expect(marked!.refund_requested_at).toBe(reserved.payment.refund_requested_at);
+  });
+
+  it("RF10 webhook and reconciliation mutations preserve the refund columns", async () => {
+    const payment = await capturedPayment("order_rf10", "pay_rf10");
+    const reserved = await repo.reserveRefundSubmission(payment.id);
+    if (reserved.outcome !== "RESERVED") throw new Error("unreachable");
+    await repo.markRefundSubmissionResult(payment.id, {
+      refund_provider_id: "rfnd_10",
+      refund_initiation_status: "SUBMITTED",
+    });
+
+    const afterWebhook = await repo.updateWebhookResult(payment.id, webhook({ razorpay_payment_id: "pay_rf10" }));
+    expect(afterWebhook!.refund_requested_at).toBe(reserved.payment.refund_requested_at);
+    expect(afterWebhook!.refund_provider_id).toBe("rfnd_10");
+    expect(afterWebhook!.refund_initiation_status).toBe("SUBMITTED");
+
+    const afterReconcile = await repo.markReconciliationResult(payment.id, {
+      reconciliation_status: "MANUAL_REVIEW",
+      reconciliation_reason: "x",
+      last_reconciled_at: "2026-01-01T02:00:00.000Z",
+    });
+    expect(afterReconcile!.refund_requested_at).toBe(reserved.payment.refund_requested_at);
+    expect(afterReconcile!.refund_provider_id).toBe("rfnd_10");
+
+    const afterCas = await repo.compareAndSetStatus(payment.id, "CAPTURED", "CAPTURED");
+    expect(afterCas.outcome).toBe("UPDATED");
+    if (afterCas.outcome !== "UPDATED") throw new Error("unreachable");
+    expect(afterCas.payment.refund_requested_at).toBe(reserved.payment.refund_requested_at);
+    expect(afterCas.payment.refund_provider_id).toBe("rfnd_10");
+  });
+
+  it("RF12 reservation reports NOT_FOUND for a missing row", async () => {
+    const result = await repo.reserveRefundSubmission(
+      "00000000-0000-4000-8000-0000000000ff",
+    );
+    expect(result.outcome).toBe("NOT_FOUND");
   });
 });

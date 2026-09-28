@@ -7,6 +7,41 @@ import { randomUUID } from "node:crypto";
 export type PaymentStatus = "CREATED" | "AUTHORIZED" | "CAPTURED" | "FAILED" | "REFUNDED";
 
 /**
+ * Durable refund-initiation lifecycle (PAYMENT_CANCEL_REFUND-A1). Stored as
+ * text (not a DB enum) like `reconciliation_status`, so new states can be
+ * introduced without a migration; the valid set is enforced here.
+ *
+ *   NONE          no refund initiation reservation exists
+ *   RESERVED      local exactly-once reservation acquired BEFORE the gateway call
+ *   SUBMITTED     gateway returned a successful submission; provider id may exist
+ *   MANUAL_REVIEW initiation reached a state that must not be blindly retried
+ *
+ * This is deliberately distinct from the business `status`; `REFUNDED` stays a
+ * `status` value and is never duplicated into this field.
+ */
+export type RefundInitiationStatus = "NONE" | "RESERVED" | "SUBMITTED" | "MANUAL_REVIEW";
+
+const REFUND_INITIATION_STATUSES: ReadonlySet<string> = new Set([
+  "NONE",
+  "RESERVED",
+  "SUBMITTED",
+  "MANUAL_REVIEW",
+]);
+
+/**
+ * Fail-closed normalization for persisted refund-initiation status values.
+ * Anything unrecognized (including null/undefined/legacy) becomes `NONE`, so a
+ * malformed row can never be mistaken for a live reservation.
+ */
+export function normalizeRefundInitiationStatus(
+  value: unknown,
+): RefundInitiationStatus {
+  return typeof value === "string" && REFUND_INITIATION_STATUSES.has(value)
+    ? (value as RefundInitiationStatus)
+    : "NONE";
+}
+
+/**
  * Outcome of the latest reconciliation pass (PAYMENT_RECONCILIATION-A3).
  * Stored as text (not a DB enum) so new outcomes can be introduced without a
  * schema migration; the valid set is enforced here.
@@ -35,6 +70,12 @@ export interface PaymentDTO {
   reconciliation_reason: string | null;
   manual_review: boolean;
   last_reconciled_at: string | null;
+  /** Exactly-once refund reservation timestamp; NEVER cleared once set. */
+  refund_requested_at: string | null;
+  /** Provider refund id from a successful gateway submission. */
+  refund_provider_id: string | null;
+  refund_initiation_status: RefundInitiationStatus;
+  refund_initiation_reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -112,6 +153,31 @@ export interface StatusConvergencePatch {
   gateway_status?: string | null;
 }
 
+/**
+ * Atomic outcome of acquiring the exactly-once refund-submission reservation.
+ *
+ * `RESERVED`          this caller won and set `refund_requested_at`
+ * `ALREADY_RESERVED`  a prior/concurrent caller already reserved (or submitted)
+ * `NOOP_STATE_CHANGED` the row exists but its status is not the expected one
+ * `NOT_FOUND`         no such payment row
+ */
+export type ReserveRefundSubmissionResult =
+  | { outcome: "RESERVED"; payment: PaymentDTO }
+  | { outcome: "ALREADY_RESERVED"; payment: PaymentDTO }
+  | { outcome: "NOOP_STATE_CHANGED"; payment: PaymentDTO }
+  | { outcome: "NOT_FOUND" };
+
+/**
+ * Narrow follow-up marker for a refund reservation. It may advance the
+ * initiation status/reason and persist the provider refund id, but it MUST NOT
+ * clear `refund_requested_at` — that is the point of the reservation.
+ */
+export interface RefundSubmissionResultUpdate {
+  refund_provider_id?: string | null;
+  refund_initiation_status: RefundInitiationStatus;
+  refund_initiation_reason?: string | null;
+}
+
 export interface PaymentRepository {
   create(input: CreatePaymentInput): Promise<PaymentDTO>;
   getById(id: string): Promise<PaymentDTO | null>;
@@ -144,6 +210,25 @@ export interface PaymentRepository {
     target: PaymentStatus,
     patch?: StatusConvergencePatch,
   ): Promise<CompareAndSetStatusResult>;
+  /**
+   * Atomically acquires the exactly-once refund-submission reservation. The
+   * predicate is `id = paymentId AND status = expectedStatus AND
+   * refund_requested_at IS NULL`; only the first caller wins. On success it sets
+   * `refund_requested_at = now`, `refund_initiation_status = RESERVED` and
+   * `updated_at = now`. `refund_requested_at` is never cleared afterwards.
+   */
+  reserveRefundSubmission(
+    paymentId: string,
+    expectedStatus?: PaymentStatus,
+  ): Promise<ReserveRefundSubmissionResult>;
+  /**
+   * Records the outcome of a refund submission WITHOUT touching the
+   * reservation. Never clears `refund_requested_at`.
+   */
+  markRefundSubmissionResult(
+    id: string,
+    update: RefundSubmissionResultUpdate,
+  ): Promise<PaymentDTO | null>;
   _reset(): void;
 }
 
@@ -226,6 +311,10 @@ export class MemoryPaymentRepository implements PaymentRepository {
       reconciliation_reason: null,
       manual_review: false,
       last_reconciled_at: null,
+      refund_requested_at: null,
+      refund_provider_id: null,
+      refund_initiation_status: "NONE",
+      refund_initiation_reason: null,
       created_at: now,
       updated_at: now,
     };
@@ -339,6 +428,56 @@ export class MemoryPaymentRepository implements PaymentRepository {
     }
     this.payments.set(id, updated);
     return { outcome: "UPDATED", payment: updated };
+  }
+
+  async reserveRefundSubmission(
+    paymentId: string,
+    expectedStatus: PaymentStatus = "CAPTURED",
+  ): Promise<ReserveRefundSubmissionResult> {
+    const payment = this.payments.get(paymentId);
+    if (!payment) return { outcome: "NOT_FOUND" };
+    // A reservation, once taken, is permanent: report it before the status
+    // check so a REFUNDED row that was already reserved is still
+    // ALREADY_RESERVED rather than NOOP_STATE_CHANGED.
+    if (payment.refund_requested_at !== null) {
+      return { outcome: "ALREADY_RESERVED", payment };
+    }
+    if (payment.status !== expectedStatus) {
+      return { outcome: "NOOP_STATE_CHANGED", payment };
+    }
+    // No await between the guard and the write: in a single-threaded runtime
+    // two concurrent callers cannot both observe `refund_requested_at === null`.
+    const now = new Date().toISOString();
+    const updated: PaymentDTO = {
+      ...payment,
+      refund_requested_at: now,
+      refund_initiation_status: "RESERVED",
+      updated_at: now,
+    };
+    this.payments.set(paymentId, updated);
+    return { outcome: "RESERVED", payment: updated };
+  }
+
+  async markRefundSubmissionResult(
+    id: string,
+    update: RefundSubmissionResultUpdate,
+  ): Promise<PaymentDTO | null> {
+    const payment = this.payments.get(id);
+    if (!payment) return null;
+    // `refund_requested_at` is intentionally never assigned here.
+    const updated: PaymentDTO = {
+      ...payment,
+      refund_initiation_status: update.refund_initiation_status,
+      updated_at: new Date().toISOString(),
+    };
+    if (update.refund_provider_id !== undefined) {
+      updated.refund_provider_id = update.refund_provider_id;
+    }
+    if (update.refund_initiation_reason !== undefined) {
+      updated.refund_initiation_reason = update.refund_initiation_reason;
+    }
+    this.payments.set(id, updated);
+    return updated;
   }
 
   _reset(): void {

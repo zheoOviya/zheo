@@ -176,6 +176,13 @@
       "when": 1792560009172,
       "tag": "0024_fixed_wither",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792560009173,
+      "tag": "0025_soft_cobalt_man",
+      "breakpoints": true
     }
   ]
 }
