@@ -12,6 +12,7 @@ import type {
   ReconciliationCandidateQuery,
   ReconciliationResultUpdate,
   CompareAndSetStatusResult,
+  StatusConvergencePatch,
 } from "../paymentRepository";
 import { normalizeCandidateLimit } from "../paymentRepository";
 
@@ -263,18 +264,38 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     id: string,
     expected: PaymentStatus,
     target: PaymentStatus,
+    patch?: StatusConvergencePatch,
   ): Promise<CompareAndSetStatusResult> {
-    const current = await this.findByPaymentId(id);
-    if (!current) return { outcome: "NOT_FOUND" };
+    const currentRow = await this.findRawRow(id);
+    if (!currentRow) return { outcome: "NOT_FOUND" };
+    const current = mapPaymentRow(currentRow);
     if (current.status !== expected) {
       return { outcome: "NOOP_STATE_CHANGED", payment: current };
+    }
+
+    const values: Record<string, unknown> = {
+      status: target,
+      updated_at: new Date(),
+    };
+    if (patch) {
+      if (patch.gateway_status !== undefined) values.gateway_status = patch.gateway_status;
+      if (patch.razorpay_payment_id !== undefined || patch.method !== undefined) {
+        // Additive metadata merge: preserve currency/webhook_raw and only
+        // overlay the gateway identity owned by the reconciliation CAS.
+        const meta = { ...((currentRow.metadata as Record<string, unknown> | null) ?? {}) };
+        if (patch.razorpay_payment_id !== undefined) {
+          meta.razorpay_payment_id = patch.razorpay_payment_id;
+        }
+        if (patch.method !== undefined) meta.method = patch.method;
+        values.metadata = meta;
+      }
     }
 
     // Atomic guard: the DB predicate (id AND status = expected) is the source
     // of truth, so a concurrent writer that moved the status first loses.
     const updated = (await (this.db
       .update(payments)
-      .set({ status: target, updated_at: new Date() })
+      .set(values)
       .where(
         and(eq(payments.id, id), eq(payments.status, expected)),
       ) as unknown as ReturningUpdate).returning()) as Record<string, unknown>[];
@@ -288,12 +309,16 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     return { outcome: "UPDATED", payment: after ?? current };
   }
 
-  private async findByPaymentId(paymentId: string): Promise<PaymentDTO | null> {
+  private async findRawRow(paymentId: string): Promise<Record<string, unknown> | null> {
     const rows = (await this.db
       .select()
       .from(payments)
       .where(eq(payments.id, paymentId))) as Record<string, unknown>[];
-    const row = rows[0];
+    return rows[0] ?? null;
+  }
+
+  private async findByPaymentId(paymentId: string): Promise<PaymentDTO | null> {
+    const row = await this.findRawRow(paymentId);
     return row ? mapPaymentRow(row) : null;
   }
 

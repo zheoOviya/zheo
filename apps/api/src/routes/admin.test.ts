@@ -78,6 +78,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
       { method: "get" as const, path: "/api/v1/admin/notifications/health" },
       { method: "get" as const, path: "/api/v1/admin/notifications/age" },
       { method: "get" as const, path: "/api/v1/admin/notifications" },
+      { method: "get" as const, path: "/api/v1/admin/payments/reconciliation" },
     ];
 
     for (const ep of readEndpoints) {
@@ -163,6 +164,101 @@ describe("Admin RBAC (A-01, A-11)", () => {
         .put("/api/v1/admin/kill-switches/vendor_churn_protection")
         .send({ enabled: true });
       expect(res.status).toBe(401);
+    });
+  });
+
+  describe("Payment reconciliation admin endpoints (PAYMENT_RECONCILIATION-B1 RC18 RC19)", () => {
+    beforeEach(() => {
+      sharedPaymentRepo._reset();
+      sharedOrderRepo._reset();
+    });
+
+    afterEach(() => {
+      sharedPaymentRepo._reset();
+      sharedOrderRepo._reset();
+    });
+
+    it("RC18: GET report is bounded to the frozen limit and counts-only", async () => {
+      // CAPTURED rows are candidates regardless of age with includeCaptured=true,
+      // so 150 seeded rows must still yield at most the frozen default of 100.
+      for (let i = 0; i < 150; i += 1) {
+        const created = await sharedPaymentRepo.create({
+          razorpay_order_id: `order_rc18_${i}`,
+          amount: 100,
+        });
+        await sharedPaymentRepo.compareAndSetStatus(created.id, "CREATED", "CAPTURED", {});
+      }
+
+      const res = await request(app)
+        .get("/api/v1/admin/payments/reconciliation")
+        .set("Authorization", adminToken("ADMIN"));
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.limit).toBe(100);
+      expect(res.body.data.candidates).toBe(100);
+      expect(res.body.data.include_captured).toBe(true);
+      expect(res.body.data.stale_age_seconds).toBe(600);
+      expect(res.body.data.counts).toEqual({
+        NONE: expect.any(Number),
+        CONVERGED: expect.any(Number),
+        RETRY: expect.any(Number),
+        MANUAL_REVIEW: expect.any(Number),
+        ERROR: expect.any(Number),
+      });
+      // The report is counts only: no gateway/webhook payload keys may leak.
+      expect(res.body.data).not.toHaveProperty("payments");
+      expect(JSON.stringify(res.body)).not.toMatch(/webhook_raw|razorpay_payment_id/);
+    });
+
+    it("RC19: POST /payments/reconciliation/run requires write privilege", async () => {
+      const forbidden = await request(app)
+        .post("/api/v1/admin/payments/reconciliation/run")
+        .set("Authorization", adminToken("OPS_AGENT"))
+        .send({});
+      expect(forbidden.status).toBe(403);
+
+      const unauthenticated = await request(app)
+        .post("/api/v1/admin/payments/reconciliation/run")
+        .send({});
+      expect(unauthenticated.status).toBe(401);
+    });
+
+    it("RC19: POST delegates to the same bounded batch engine and converges local state", async () => {
+      const captured = await sharedPaymentRepo.create({
+        razorpay_order_id: "order_rc19",
+        amount: 100,
+      });
+      await sharedPaymentRepo.compareAndSetStatus(captured.id, "CREATED", "CAPTURED", {});
+
+      const res = await request(app)
+        .post("/api/v1/admin/payments/reconciliation/run")
+        .set("Authorization", adminToken("ADMIN"))
+        .send({ limit: 1000 });
+
+      expect(res.status).toBe(200);
+      // Exact ReconciliationBatchResult shape proves the admin route delegates to
+      // the same engine (not a parallel implementation).
+      expect(res.body.data).toEqual({
+        scanned: expect.any(Number),
+        converged: expect.any(Number),
+        noop: expect.any(Number),
+        retry: expect.any(Number),
+        manual_review: expect.any(Number),
+        errors: expect.any(Number),
+      });
+      expect(res.body.data.scanned).toBeGreaterThanOrEqual(1);
+      // A CAPTURED payment with no order/gift is flagged for review, never mutated.
+      expect(res.body.data.manual_review + res.body.data.retry).toBeGreaterThanOrEqual(1);
+      expect((await sharedPaymentRepo.getById(captured.id))!.status).toBe("CAPTURED");
+    });
+
+    it("RC19: invalid POST payload is rejected without invoking the engine", async () => {
+      const res = await request(app)
+        .post("/api/v1/admin/payments/reconciliation/run")
+        .set("Authorization", adminToken("ADMIN"))
+        .send({ limit: 0 });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("VALIDATION_ERROR");
     });
   });
 

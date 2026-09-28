@@ -97,6 +97,21 @@ export type CompareAndSetStatusResult =
   | { outcome: "NOOP_STATE_CHANGED"; payment: PaymentDTO }
   | { outcome: "NOT_FOUND" };
 
+/**
+ * Optional gateway identity persisted atomically with a reconciliation CAS.
+ *
+ * A local payment may converge to CAPTURED/REFUNDED because of gateway truth
+ * rather than a webhook, so the gateway payment id/method must be written in
+ * the same mutation as the status. Persisting it keeps webhook idempotency
+ * (`findByRazorpayPaymentId`) intact for a capture that arrives after
+ * reconciliation already converged the row.
+ */
+export interface StatusConvergencePatch {
+  razorpay_payment_id?: string;
+  method?: string;
+  gateway_status?: string | null;
+}
+
 export interface PaymentRepository {
   create(input: CreatePaymentInput): Promise<PaymentDTO>;
   getById(id: string): Promise<PaymentDTO | null>;
@@ -119,11 +134,15 @@ export interface PaymentRepository {
    * Atomic status CAS. Only writes when the persisted status still equals
    * `expected`; a mismatch is a no-op. This is the only safe way for the
    * reconciliation engine to converge/flag a payment status.
+   *
+   * `patch` optionally persists gateway identity (payment id/method/provider
+   * status) inside the same atomic write.
    */
   compareAndSetStatus(
     id: string,
     expected: PaymentStatus,
     target: PaymentStatus,
+    patch?: StatusConvergencePatch,
   ): Promise<CompareAndSetStatusResult>;
   _reset(): void;
 }
@@ -299,6 +318,7 @@ export class MemoryPaymentRepository implements PaymentRepository {
     id: string,
     expected: PaymentStatus,
     target: PaymentStatus,
+    patch?: StatusConvergencePatch,
   ): Promise<CompareAndSetStatusResult> {
     const payment = this.payments.get(id);
     if (!payment) return { outcome: "NOT_FOUND" };
@@ -310,6 +330,13 @@ export class MemoryPaymentRepository implements PaymentRepository {
       status: target,
       updated_at: new Date().toISOString(),
     };
+    if (patch) {
+      if (patch.razorpay_payment_id !== undefined) {
+        updated.razorpay_payment_id = patch.razorpay_payment_id;
+      }
+      if (patch.method !== undefined) updated.method = patch.method;
+      if (patch.gateway_status !== undefined) updated.gateway_status = patch.gateway_status;
+    }
     this.payments.set(id, updated);
     return { outcome: "UPDATED", payment: updated };
   }

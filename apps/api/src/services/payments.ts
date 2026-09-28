@@ -4,6 +4,7 @@ import type { GiftRepository } from "../repositories/giftRepository";
 import type { OrderRepository } from "../repositories/orderRepository";
 import type { PaymentDTO, PaymentRepository } from "../repositories/paymentRepository";
 import { razorpayService, type RazorpayWebhookPayload } from "./razorpay";
+import { isCaptureQuarantined as isCaptureQuarantinedShared } from "./paymentIntegrity";
 
 // ============================================
 // Payments context service (payments bounded context)
@@ -196,24 +197,19 @@ export class PaymentService {
    * True when a captured gateway payment must be quarantined instead of
    * fulfilled: wrong currency, amount not equal to the amount requested at
    * create-order, or disagreement with the order/gift total (RISK-PAY-4).
+   *
+   * The predicate itself lives in paymentIntegrity so webhook processing and
+   * reconciliation evaluate the exact same frozen rule.
    */
   private async isCaptureQuarantined(
     payment: PaymentDTO,
     entity: RazorpayWebhookPayload["payload"]["payment"]["entity"],
   ): Promise<boolean> {
-    const expectedPaise = Math.round(payment.amount * 100);
-    if (entity.currency !== "INR") return true;
-    if (typeof entity.amount !== "number" || entity.amount !== expectedPaise) return true;
-
-    if (payment.gift_id) {
-      const gift = this.giftRepo ? await this.giftRepo.getById(payment.gift_id) : null;
-      return !gift || Math.round(gift.price_paid * 100) !== expectedPaise;
-    }
-    if (payment.order_id) {
-      const order = await this.orderRepo.getById(payment.order_id);
-      return !order || Math.round(order.total_amount * 100) !== expectedPaise;
-    }
-    return true;
+    return isCaptureQuarantinedShared(
+      payment,
+      { currency: entity.currency, amount: entity.amount },
+      { orderRepo: this.orderRepo, giftRepo: this.giftRepo },
+    );
   }
 
   async processWebhook(

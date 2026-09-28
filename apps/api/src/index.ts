@@ -92,6 +92,15 @@ async function main() {
   );
   startNotificationRetrySweep();
 
+  // Payment reconciliation sweep (PAYMENT_RECONCILIATION-B1): converges local
+  // payment/order state against gateway truth. Unref'd timer; read-only with
+  // respect to money (it never submits refunds). Stopped explicitly during
+  // shutdown before DB teardown.
+  const { startPaymentReconciliationSweep, stopPaymentReconciliationSweep } = await import(
+    "./services/paymentReconciliation"
+  );
+  startPaymentReconciliationSweep();
+
   // WebSocket upgrade handling on the same HTTP server (EOS Layer 1, P05)
   initWebSocketServer(server);
 
@@ -109,6 +118,7 @@ async function main() {
     shuttingDown = true;
     logger.info({ message: "shutdown_initiated", signal });
     stopNotificationRetrySweep();
+    stopPaymentReconciliationSweep();
     server.close(async () => {
       logger.info({ message: "http_server_closed" });
       await shutdownEventSubscriber();

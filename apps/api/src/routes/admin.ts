@@ -38,6 +38,11 @@ import {
   ADMIN_OVERRIDE_TARGET_STATUSES,
   evaluateOverridePolicy,
 } from "./adminOrderOverridePolicy";
+import {
+  buildReconciliationReport,
+  defaultReconciliationDeps,
+  runPaymentReconciliationBatch,
+} from "../services/paymentReconciliation";
 
 const adminRouter: Router = Router();
 
@@ -1408,6 +1413,51 @@ adminRouter.put(
       ...(body.data.assignee ? { new_assignee: body.data.assignee } : {}),
     });
     ok(res, updated);
+  }),
+);
+
+// ============================================
+// Payment reconciliation (PAYMENT_RECONCILIATION-B1)
+//
+// GET is a bounded read-only diagnostic report (counts only, never gateway
+// payloads or webhook bodies). POST invokes the exact same batch engine the
+// scheduler uses; it converges local state via CAS and never moves money.
+// ============================================
+
+adminRouter.get(
+  "/payments/reconciliation",
+  adminReadOnly,
+  asyncHandler(async (_req, res) => {
+    const report = await buildReconciliationReport(defaultReconciliationDeps());
+    ok(res, report);
+  }),
+);
+
+const ReconciliationRunSchema = z.object({
+  limit: z.number().int().min(1).max(1000).optional(),
+  include_captured: z.boolean().optional(),
+  stale_before: z.string().datetime().optional(),
+});
+
+adminRouter.post(
+  "/payments/reconciliation/run",
+  adminWriteLimiter, adminWrite,
+  asyncHandler(async (req, res) => {
+    const body = ReconciliationRunSchema.safeParse(req.body ?? {});
+    if (!body.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid reconciliation payload",
+        400,
+        body.error.flatten(),
+      );
+    }
+    const result = await runPaymentReconciliationBatch(defaultReconciliationDeps(), {
+      limit: body.data.limit,
+      includeCaptured: body.data.include_captured,
+      staleBefore: body.data.stale_before,
+    });
+    ok(res, result);
   }),
 );
 
