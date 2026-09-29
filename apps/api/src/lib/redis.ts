@@ -1,6 +1,11 @@
 import Redis from "ioredis";
 import { config } from "../config";
 import { logger } from "./logger";
+import {
+  resolveRedisMode,
+  type RedisMode,
+  type RedisModeInput,
+} from "./redisMode";
 
 // ============================================
 // Redis client factory. In test env returns a stub
@@ -137,9 +142,38 @@ let rawIsRealRedis = false;
 // memoize on the raw connection instead of on the facade wrapper.
 const facadeToRaw = new WeakMap<RedisLike, RedisLike>();
 
+function runtimeRedisModeInput(): RedisModeInput {
+  return { nodeEnv: process.env.NODE_ENV, redisUrl: config.redis.url };
+}
+
+/**
+ * Fail-fast production guard. Throws RedisConfigError when production is
+ * configured without a usable REDIS_URL so `main()` exits non-zero rather than
+ * silently booting on the process-local MemoryRedis stub. No-op outside
+ * production. Accepts an explicit input for deterministic tests.
+ */
+export function assertRedisConfig(input: RedisModeInput = runtimeRedisModeInput()): RedisMode {
+  return resolveRedisMode(input);
+}
+
+/**
+ * Reporting-only mode probe for health/config surfaces. Never throws: startup
+ * enforcement belongs to assertRedisConfig(). Production cannot reach serving
+ * with a blank URL (startup would have failed), so a misconfigured value is
+ * reported conservatively as MEMORY rather than being mistaken for real Redis.
+ */
+export function getRedisMode(): RedisMode {
+  try {
+    return resolveRedisMode(runtimeRedisModeInput());
+  } catch {
+    return "MEMORY";
+  }
+}
+
 function getRawCommandClient(): RedisLike {
   if (client) return client;
-  if (process.env.NODE_ENV === "test" || !config.redis.url) {
+  const mode = resolveRedisMode(runtimeRedisModeInput());
+  if (mode === "MEMORY") {
     client = new MemoryRedis();
     rawIsRealRedis = false;
     return client;
@@ -161,6 +195,10 @@ function getRawCommandClient(): RedisLike {
   });
   // ioredis exposes a heavily overloaded `set`; the structural surface we use
   // (set/get/del/zadd/zremrangebyscore/zcard/pexpire) is guaranteed by ioredis.
+  //
+  // A configured real Redis is NEVER replaced by the memory stub at runtime:
+  // connection loss surfaces as a non-ready status / degraded commands, not a
+  // silent backend downgrade.
   client = redis as unknown as RedisLike;
   rawIsRealRedis = true;
   return client;

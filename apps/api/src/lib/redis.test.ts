@@ -263,4 +263,21 @@ describe("redis readiness + facade (EVENTBUS-REDIS-ISOLATION)", () => {
     expect(secondRaw).not.toBe(firstRaw);
     expect(second).not.toBe(injected);
   });
+
+  // CFG8 (DATA_PERSISTENCE_CONFIG_TRUTH-B1): a configured real Redis is never
+  // silently replaced by the in-process MemoryRedis stub when its connection
+  // fails. The failure propagates and the same REAL-backed facade persists.
+  it("CFG8: configured real Redis is not silently downgraded to MemoryRedis on failure", async () => {
+    const redis = getRedis();
+    expect(redis).not.toBeInstanceOf(MemoryRedis);
+
+    const raw = latestFake();
+    raw.connectMode = "reject-once";
+
+    await expect(redis.get("k")).rejects.toThrow("connect refused");
+
+    const again = getRedis();
+    expect(again).toBe(redis);
+    expect(again).not.toBeInstanceOf(MemoryRedis);
+  });
 });

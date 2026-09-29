@@ -1343,20 +1343,33 @@ describe("Admin RBAC (A-01, A-11)", () => {
       const data = res.body.data;
       expect(data.status).toBe("ok");
       expect(["postgres", "memory"]).toContain(data.storage_mode);
+      expect(["REAL", "MEMORY"]).toContain(data.redis_mode);
       expect(["reachable", "degraded", "memory"]).toContain(data.redis);
       expect(typeof data.uptime_seconds).toBe("number");
       expect(typeof data.latency_ms).toBe("number");
       expect(typeof data.timestamp).toBe("string");
     });
 
-    it("H1: test/memory mode -> redis=memory, postgres=memory, status=ok over HTTP 200", async () => {
+    it("H1: test/memory mode -> redis=memory, redis_mode=MEMORY, postgres=memory, status=ok over HTTP 200", async () => {
       const res = await request(app)
         .get("/api/v1/admin/health")
         .set("Authorization", adminToken("ADMIN"));
       expect(res.status).toBe(200);
+      expect(res.body.data.redis_mode).toBe("MEMORY");
       expect(res.body.data.redis).toBe("memory");
       expect(res.body.data.postgres).toBe("memory");
       expect(res.body.data.status).toBe("ok");
+    });
+
+    it("H1b (CFG7): health payload never leaks the configured Redis URL", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/health")
+        .set("Authorization", adminToken("ADMIN"));
+      expect(res.status).toBe(200);
+      const serialized = JSON.stringify(res.body);
+      expect(serialized).not.toContain("redis://");
+      expect(serialized).not.toContain(":6379");
+      expect(serialized).not.toMatch(/password|secret|token/i);
     });
 
     it("H2: degraded Redis + reachable Postgres -> status=degraded, HTTP 200", async () => {
@@ -1372,6 +1385,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
         .get("/api/v1/admin/health")
         .set("Authorization", adminToken("ADMIN"));
       expect(res.status).toBe(200);
+      expect(res.body.data.redis_mode).toBe("REAL");
       expect(res.body.data.redis).toBe("degraded");
       expect(res.body.data.postgres).toBe("reachable");
       expect(res.body.data.status).toBe("degraded");
@@ -1414,6 +1428,7 @@ describe("Admin RBAC (A-01, A-11)", () => {
         .get("/api/v1/admin/health")
         .set("Authorization", adminToken("ADMIN"));
       expect(res.status).toBe(200);
+      expect(res.body.data.redis_mode).toBe("REAL");
       expect(res.body.data.redis).toBe("reachable");
       expect(res.body.data.postgres).toBe("reachable");
       expect(res.body.data.status).toBe("ok");

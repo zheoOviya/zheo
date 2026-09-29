@@ -18,13 +18,12 @@ import {
   sharedNotificationRepo,
   getStorageMode,
 } from "../repositories/shared";
-import { getRedis } from "../lib/redis";
+import { getRedis, getRedisMode } from "../lib/redis";
 import { probePostgres } from "../lib/db";
 import {
   decodeNotificationInspectionCursor,
   encodeNotificationInspectionCursor,
 } from "../repositories/notificationRepository";
-import { config } from "../config";
 import { emit, createEventEnvelope } from "../lib/eventBus";
 import { getCatalogRepository } from "./catalog";
 import { getVendorApprovalTransactionPort } from "../repositories/drizzle/vendorApprovalTransactionPort";
@@ -83,8 +82,11 @@ adminRouter.get(
   asyncHandler(async (req, res) => {
     const started = Date.now();
     const storageMode = getStorageMode();
+    // Truthful backend identity: MEMORY is the process-local dev/test stub and
+    // is never reported as production Redis health.
+    const redisMode = getRedisMode();
     let redisStatus: "reachable" | "degraded" | "memory";
-    if (process.env.NODE_ENV === "test" || !config.redis.url) {
+    if (redisMode === "MEMORY") {
       redisStatus = "memory";
     } else {
       try {
@@ -121,6 +123,7 @@ adminRouter.get(
     ok(res, {
       status,
       storage_mode: storageMode,
+      redis_mode: redisMode,
       redis: redisStatus,
       postgres: postgresStatus,
       uptime_seconds: Math.round(process.uptime()),

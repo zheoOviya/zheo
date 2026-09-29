@@ -39,7 +39,7 @@ import { adminRouter } from "./routes/admin";
 import { adminDineInRouter } from "./routes/adminDineIn";
 import { vendorApplicationRouter } from "./routes/vendorApplications";
 import { requireVendorOrAdmin } from "./middleware/requireRoles";
-import { getRedis } from "./lib/redis";
+import { getRedis, getRedisMode } from "./lib/redis";
 import { probePostgres } from "./lib/db";
 
 // EOS Layer 1 wiring: loyalty + retention contexts subscribe to
@@ -137,13 +137,22 @@ export function createApp(): Express {
     const status: Record<string, string> = { api: "ok" };
     let healthy = true;
 
-    try {
-      const redis = getRedis();
-      status.redis = redis.status === "ready" ? "ok" : redis.status;
-      if (redis.status !== "ready") healthy = false;
-    } catch {
-      status.redis = "unreachable";
-      healthy = false;
+    // Report the SELECTED backend truthfully. MEMORY means the process-local
+    // stub is backing OTP/revocation/rate-limit/cache/EventBus state and must
+    // never be presented as real Redis health.
+    const redisMode = getRedisMode();
+    status.redis_mode = redisMode;
+    if (redisMode === "MEMORY") {
+      status.redis = "memory";
+    } else {
+      try {
+        const redis = getRedis();
+        status.redis = redis.status === "ready" ? "ok" : redis.status;
+        if (redis.status !== "ready") healthy = false;
+      } catch {
+        status.redis = "unreachable";
+        healthy = false;
+      }
     }
 
     if (process.env.NODE_ENV === "test") {

@@ -2,7 +2,7 @@ import "dotenv/config";
 import { createServer } from "node:http";
 import { config } from "./config";
 import { closeDb, probePostgres } from "./lib/db";
-import { getRedis } from "./lib/redis";
+import { getRedis, assertRedisConfig } from "./lib/redis";
 import { shutdownEventSubscriber } from "./lib/eventBus";
 import { logger } from "./lib/logger";
 import { initWebSocketServer } from "./lib/websocket";
@@ -23,6 +23,13 @@ async function main() {
   // Fail fast on insecure production configuration (weak/missing JWT secrets,
   // or the dev auth bypass left enabled). Throws -> process exits non-zero.
   assertSecureConfig();
+
+  // Fail closed when production lacks a real Redis backend. The in-process
+  // MemoryRedis stub is dev/test-only; silently using it in production would
+  // make OTP storage, token revocation, rate limiting, catalog cache, and
+  // EventBus/WebSocket state process-local and non-durable. Throws
+  // RedisConfigError -> process exits non-zero. No silent memory fallback.
+  assertRedisConfig();
 
   // Probe PostgreSQL before any repository module loads. Pool construction is
   // lazy (never opens a socket), so a live database must be verified with a
