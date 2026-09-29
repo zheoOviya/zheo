@@ -263,6 +263,203 @@ describe("Admin RBAC (A-01, A-11)", () => {
     });
   });
 
+  describe("Payment manual-review resolution (PAYMENT_CAPTURED_UNFULFILLED-B1)", () => {
+    const ORDER_ID = "44444444-4444-4444-8444-444444444444";
+    const RAZORPAY_ORDER_ID = "order_pay1_route";
+
+    beforeEach(() => {
+      resetRedisForTests();
+      sharedOrderRepo._reset();
+      sharedPaymentRepo._reset();
+    });
+
+    afterEach(() => {
+      sharedOrderRepo._reset();
+      sharedPaymentRepo._reset();
+    });
+
+    function seedOrder(status: OrderStatus = "PAYMENT_FAILED"): OrderDTO {
+      const now = new Date().toISOString();
+      return sharedOrderRepo._seed({
+        id: ORDER_ID,
+        user_id: "consumer-test-id",
+        restaurant_id: "11111111-1111-4111-8111-111111111111",
+        items: [],
+        total_amount: 100,
+        status,
+        commission_rate: 0.08,
+        commission_amount: 8,
+        pickup_otp: null,
+        checked_in: false,
+        scheduled_pickup_time: null,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+
+    async function seedCapturedPayment(gatewayAmountPaise = 10000) {
+      const created = await sharedPaymentRepo.create({
+        order_id: ORDER_ID,
+        razorpay_order_id: RAZORPAY_ORDER_ID,
+        amount: 100,
+      });
+      const { payload } = razorpayService.buildMockWebhook(
+        RAZORPAY_ORDER_ID,
+        gatewayAmountPaise,
+        "payment.captured",
+      );
+      const paymentId = payload.payload.payment.entity.id;
+      await sharedPaymentRepo.compareAndSetStatus(created.id, "CREATED", "CAPTURED", {
+        razorpay_payment_id: paymentId,
+      });
+      return { id: created.id, paymentId };
+    }
+
+    async function markManualReview(paymentId: string) {
+      await sharedPaymentRepo.markReconciliationResult(paymentId, {
+        reconciliation_status: "MANUAL_REVIEW",
+        reconciliation_reason: "PAYMENT_FAILED_RECOVERY_INTEGRITY_FAILED",
+        last_reconciled_at: new Date().toISOString(),
+        manual_review: true,
+      });
+    }
+
+    it("OPS_AGENT is forbidden (SUPER_ADMIN only)", async () => {
+      const res = await request(app)
+        .post(`/api/v1/admin/orders/${ORDER_ID}/manual-review/resolve`)
+        .set("Authorization", adminToken("OPS_AGENT"))
+        .send({ action: "KEEP_MANUAL_REVIEW" });
+      expect(res.status).toBe(403);
+    });
+
+    it("ADMIN is forbidden (SUPER_ADMIN only)", async () => {
+      const res = await request(app)
+        .post(`/api/v1/admin/orders/${ORDER_ID}/manual-review/resolve`)
+        .set("Authorization", adminToken("ADMIN"))
+        .send({ action: "KEEP_MANUAL_REVIEW" });
+      expect(res.status).toBe(403);
+    });
+
+    it("unauthenticated request is 401", async () => {
+      const res = await request(app)
+        .post(`/api/v1/admin/orders/${ORDER_ID}/manual-review/resolve`)
+        .send({ action: "KEEP_MANUAL_REVIEW" });
+      expect(res.status).toBe(401);
+    });
+
+    it("invalid action -> 400 VALIDATION_ERROR", async () => {
+      const res = await request(app)
+        .post(`/api/v1/admin/orders/${ORDER_ID}/manual-review/resolve`)
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ action: "NUKE" });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("RECOVER_TO_CONFIRMED without from_status -> 400", async () => {
+      seedOrder();
+      await seedCapturedPayment();
+      const res = await request(app)
+        .post(`/api/v1/admin/orders/${ORDER_ID}/manual-review/resolve`)
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ action: "RECOVER_TO_CONFIRMED" });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("RECOVER_TO_CONFIRMED with proven gateway capture -> CONFIRMED", async () => {
+      seedOrder("PAYMENT_FAILED");
+      const { id } = await seedCapturedPayment(10000);
+      await markManualReview(id);
+
+      const res = await request(app)
+        .post(`/api/v1/admin/orders/${ORDER_ID}/manual-review/resolve`)
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ action: "RECOVER_TO_CONFIRMED", from_status: "PAYMENT_FAILED" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.order_status).toBe("CONFIRMED");
+      expect((await sharedOrderRepo.getById(ORDER_ID))!.status).toBe("CONFIRMED");
+    });
+
+    it("RECOVER on an ordinary non-manual-review capture -> 409 PAYMENT_NOT_IN_MANUAL_REVIEW", async () => {
+      seedOrder("PAYMENT_FAILED");
+      await seedCapturedPayment(10000);
+
+      const res = await request(app)
+        .post(`/api/v1/admin/orders/${ORDER_ID}/manual-review/resolve`)
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ action: "RECOVER_TO_CONFIRMED", from_status: "PAYMENT_FAILED" });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe("PAYMENT_NOT_IN_MANUAL_REVIEW");
+      expect((await sharedOrderRepo.getById(ORDER_ID))!.status).toBe("PAYMENT_FAILED");
+    });
+
+    it("RECOVER integrity failure -> 409, order unchanged", async () => {
+      seedOrder("PAYMENT_FAILED");
+      const { id } = await seedCapturedPayment(9999);
+      await markManualReview(id);
+
+      const res = await request(app)
+        .post(`/api/v1/admin/orders/${ORDER_ID}/manual-review/resolve`)
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ action: "RECOVER_TO_CONFIRMED", from_status: "PAYMENT_FAILED" });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe("CAPTURE_INTEGRITY_VIOLATION");
+      expect((await sharedOrderRepo.getById(ORDER_ID))!.status).toBe("PAYMENT_FAILED");
+    });
+
+    it("FULL_REFUND with no gateway truth -> 409, no refund submitted", async () => {
+      seedOrder("PAYMENT_FAILED");
+      const created = await sharedPaymentRepo.create({
+        order_id: ORDER_ID,
+        razorpay_order_id: RAZORPAY_ORDER_ID,
+        amount: 100,
+      });
+      await sharedPaymentRepo.compareAndSetStatus(created.id, "CREATED", "CAPTURED", {
+        razorpay_payment_id: "pay_absent_route",
+      });
+      await markManualReview(created.id);
+
+      const res = await request(app)
+        .post(`/api/v1/admin/orders/${ORDER_ID}/manual-review/resolve`)
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ action: "FULL_REFUND", from_status: "PAYMENT_FAILED" });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe("CAPTURE_INTEGRITY_VIOLATION");
+      expect((await sharedPaymentRepo.getById(created.id))!.refund_requested_at).toBeNull();
+    });
+
+    it("KEEP_MANUAL_REVIEW records a reason and mutates no business state", async () => {
+      seedOrder("PAYMENT_FAILED");
+      const created = await sharedPaymentRepo.create({
+        order_id: ORDER_ID,
+        razorpay_order_id: RAZORPAY_ORDER_ID,
+        amount: 100,
+      });
+      await sharedPaymentRepo.compareAndSetStatus(created.id, "CREATED", "CAPTURED", {
+        razorpay_payment_id: "pay_keep_route",
+      });
+      await markManualReview(created.id);
+
+      const res = await request(app)
+        .post(`/api/v1/admin/orders/${ORDER_ID}/manual-review/resolve`)
+        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .send({ action: "KEEP_MANUAL_REVIEW", reason: "OPERATOR_REVIEWING" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.order_status).toBe("PAYMENT_FAILED");
+      expect((await sharedOrderRepo.getById(ORDER_ID))!.status).toBe("PAYMENT_FAILED");
+      const after = (await sharedPaymentRepo.getById(created.id))!;
+      expect(after.status).toBe("CAPTURED");
+      expect(after.manual_review).toBe(true);
+      expect(after.reconciliation_reason).toBe("OPERATOR_REVIEWING");
+    });
+  });
+
   describe("Notification operability metrics (NOTIFICATION-OPERABILITY-A2)", () => {
     const USER_ID = "00000000-0000-4000-8000-0000000000a2";
     const FUTURE_AT = new Date("2999-01-01T00:00:00.000Z");

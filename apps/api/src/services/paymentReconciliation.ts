@@ -10,7 +10,7 @@ import type {
 } from "../repositories/paymentRepository";
 import { normalizeCandidateLimit } from "../repositories/paymentRepository";
 import { sharedGiftRepo, sharedOrderRepo, sharedPaymentRepo } from "../repositories/shared";
-import { isCaptureQuarantined, PAY4_CURRENCY } from "./paymentIntegrity";
+import { isCaptureQuarantined, validateCapturedAgainstGateway, PAY4_CURRENCY } from "./paymentIntegrity";
 import {
   isRazorpayReadError,
   razorpayService,
@@ -156,6 +156,26 @@ async function casConflict(
 }
 
 /**
+ * PAY1 (Option C) recovery revalidation. A captured payment whose order is
+ * PAYMENT_FAILED may only be recovered to CONFIRMED when the full PAY4 facts
+ * are re-proven from gateway truth. Fail-closed: any missing/mismatched fact
+ * returns false, so the caller keeps the order unconverged and flags review.
+ */
+async function revalidateCapturedAgainstGateway(
+  payment: PaymentDTO,
+  deps: ReconciliationDeps,
+): Promise<boolean> {
+  const gatewayPaymentId = payment.razorpay_payment_id;
+  if (!gatewayPaymentId) return false;
+  const entity = await deps.gateway.fetchPayment(gatewayPaymentId);
+  const violation = await validateCapturedAgainstGateway(payment, entity, {
+    orderRepo: deps.orderRepo,
+    giftRepo: deps.giftRepo,
+  });
+  return violation === null;
+}
+
+/**
  * Local convergence for a payment that is (or has just become) CAPTURED.
  * Order: atomic PAYMENT_PENDING -> CONFIRMED CAS (event only on success).
  * Gift: existing CAS paid-confirm (never a second gift state machine).
@@ -281,6 +301,80 @@ async function convergeCapturedEntity(
     return record(payment, deps, {
       outcome: "MANUAL_REVIEW",
       reason: "ORDER_CONVERGENCE_CONFLICT",
+      gatewayStatus,
+      manualReview: true,
+    });
+  }
+  if (order.status === "PAYMENT_FAILED") {
+    // PAY1 (Option C): a captured payment whose order was previously marked
+    // PAYMENT_FAILED is a legitimate retry capture. Revalidate the full PAY4
+    // facts from gateway truth BEFORE recovering the order to CONFIRMED.
+    if (!(await revalidateCapturedAgainstGateway(payment, deps))) {
+      return record(payment, deps, {
+        outcome: "MANUAL_REVIEW",
+        reason: "PAYMENT_FAILED_RECOVERY_INTEGRITY_FAILED",
+        gatewayStatus,
+        manualReview: true,
+      });
+    }
+    const recovered = await deps.orderRepo.transitionStatus(
+      order.id,
+      "PAYMENT_FAILED",
+      "CONFIRMED",
+    );
+    if (recovered) {
+      await emit(
+        createEventEnvelope("PaymentSucceeded", order.id, {
+          order_id: order.id,
+          payment_id: payment.id,
+          amount: payment.amount,
+        }),
+      );
+      return record(payment, deps, { outcome: "CONVERGED", reason, gatewayStatus, emitted: true });
+    }
+    const afterFailed = await deps.orderRepo.getById(order.id);
+    if (afterFailed && ORDER_CONFIRMED_OR_LATER.has(afterFailed.status)) {
+      return record(payment, deps, {
+        outcome: "NOOP",
+        reason: "ORDER_ALREADY_CONFIRMED",
+        gatewayStatus,
+      });
+    }
+    if (afterFailed && afterFailed.status === "PAYMENT_FAILED") {
+      return record(payment, deps, { outcome: "RETRY", reason: "ORDER_CAS_RETRY", gatewayStatus });
+    }
+    return record(payment, deps, {
+      outcome: "MANUAL_REVIEW",
+      reason: "ORDER_CONVERGENCE_CONFLICT",
+      gatewayStatus,
+      manualReview: true,
+    });
+  }
+  if (order.status === "DRAFT") {
+    // Option C: DRAFT carries placement/approval semantics (editable group
+    // carts, catering B2B approval). PAY1 never auto-confirms a DRAFT order.
+    return record(payment, deps, {
+      outcome: "MANUAL_REVIEW",
+      reason: "ORDER_DRAFT_CONFLICT",
+      gatewayStatus,
+      manualReview: true,
+    });
+  }
+  if (order.status === "CANCELLED") {
+    // PAY2 boundary: PAY1 never converts a cancelled order back to CONFIRMED.
+    // A durable refund reservation defers to PAY2/PAY3; its absence preserves
+    // manual review.
+    if (payment.refund_requested_at != null) {
+      return record(payment, deps, {
+        outcome: "MANUAL_REVIEW",
+        reason: "CANCELLED_REFUND_DEFERRED_TO_PAY2",
+        gatewayStatus,
+        manualReview: true,
+      });
+    }
+    return record(payment, deps, {
+      outcome: "MANUAL_REVIEW",
+      reason: `ORDER_${order.status}_CONFLICT`,
       gatewayStatus,
       manualReview: true,
     });

@@ -443,4 +443,108 @@ describe("OrderRefundService cancellation + refund choke point (PAY2-B)", () => 
       status: 404,
     });
   });
+
+  // ============================================
+  // PAY1 (PAYMENT_CAPTURED_UNFULFILLED-B1): operator FULL_REFUND entry into the
+  // SAME choke point. No order mutation; exactly-once; fail-closed identity.
+  // ============================================
+
+  describe("submitFullRefundForCapturedPayment (PAY1 operator full refund)", () => {
+    async function seedCapturedOrder(): Promise<{ order: OrderDTO; payment: PaymentDTO }> {
+      const order = seedOrder({ status: "CONFIRMED", total_amount: 250 });
+      const payment = await seedPayment(order, "CAPTURED");
+      return { order, payment };
+    }
+
+    // FR1: one full refund POST; reservation set; payment stays CAPTURED.
+    it("FR1 CAPTURED -> SUBMITTED, exactly one full POST, payment stays CAPTURED", async () => {
+      const { payment } = await seedCapturedOrder();
+      gateway.nextId = "rfnd_fr1";
+
+      const result = await service.submitFullRefundForCapturedPayment(payment.id);
+
+      expect(result).toBe("SUBMITTED");
+      expect(gateway.count).toBe(1);
+      expect(gateway.calls[0]).toEqual({
+        paymentId: payment.razorpay_payment_id,
+        amountInPaise: 25000,
+      });
+      const after = (await payments.getById(payment.id))!;
+      expect(after.refund_initiation_status).toBe("SUBMITTED");
+      expect(after.refund_provider_id).toBe("rfnd_fr1");
+      expect(after.refund_requested_at).not.toBeNull();
+      expect(after.status).toBe("CAPTURED");
+    });
+
+    // FR2: duplicate operator refund never fires a second POST.
+    it("FR2 second call -> ALREADY_RESERVED, no second POST", async () => {
+      const { payment } = await seedCapturedOrder();
+      const first = await service.submitFullRefundForCapturedPayment(payment.id);
+      const second = await service.submitFullRefundForCapturedPayment(payment.id);
+
+      expect(first).toBe("SUBMITTED");
+      expect(second).toBe("ALREADY_RESERVED");
+      expect(gateway.count).toBe(1);
+    });
+
+    // FR3: a non-CAPTURED payment is refused before any reservation.
+    it("FR3 non-CAPTURED payment -> PAYMENT_NOT_CAPTURED, no POST, no reservation", async () => {
+      const order = seedOrder({ status: "CONFIRMED" });
+      const payment = await seedPayment(order, "CREATED");
+
+      await expect(service.submitFullRefundForCapturedPayment(payment.id)).rejects.toMatchObject({
+        code: "PAYMENT_NOT_CAPTURED",
+        status: 409,
+      });
+
+      expect(gateway.count).toBe(0);
+      expect((await payments.getById(payment.id))!.refund_requested_at).toBeNull();
+    });
+
+    // FR4: a CAPTURED payment with no gateway id fails closed, no reservation.
+    it("FR4 CAPTURED + missing gateway id -> PAYMENT_IDENTITY_MISSING, no POST/reservation", async () => {
+      const order = seedOrder({ status: "CONFIRMED" });
+      const payment = await seedPayment(order, "CAPTURED", { razorpayPaymentId: null });
+
+      await expect(service.submitFullRefundForCapturedPayment(payment.id)).rejects.toMatchObject({
+        code: "PAYMENT_IDENTITY_MISSING",
+        status: 409,
+      });
+
+      expect(gateway.count).toBe(0);
+      const after = (await payments.getById(payment.id))!;
+      expect(after.refund_requested_at).toBeNull();
+      expect(after.refund_initiation_status).toBe("MANUAL_REVIEW");
+      expect(after.refund_initiation_reason).toBe("CAPTURED_MISSING_PAYMENT_ID");
+    });
+
+    // FR5: ambiguous gateway failure retains the reservation; a retry cannot POST.
+    it("FR5 ambiguous gateway failure -> SUBMISSION_FAILED, MANUAL_REVIEW, retry is ALREADY_RESERVED", async () => {
+      const { payment } = await seedCapturedOrder();
+      gateway.behavior = "throw";
+
+      const result = await service.submitFullRefundForCapturedPayment(payment.id);
+
+      expect(result).toBe("SUBMISSION_FAILED");
+      expect(gateway.count).toBe(1);
+      const after = (await payments.getById(payment.id))!;
+      expect(after.refund_requested_at).not.toBeNull();
+      expect(after.refund_initiation_status).toBe("MANUAL_REVIEW");
+      expect(after.refund_initiation_reason).toBe("AMBIGUOUS_REFUND_SUBMISSION");
+      expect(after.status).toBe("CAPTURED");
+
+      gateway.behavior = "success";
+      const retry = await service.submitFullRefundForCapturedPayment(payment.id);
+      expect(retry).toBe("ALREADY_RESERVED");
+      expect(gateway.count).toBe(1);
+    });
+
+    // FR6: unknown payment surfaces the truthful 404.
+    it("FR6 missing payment -> PAYMENT_NOT_FOUND", async () => {
+      await expect(service.submitFullRefundForCapturedPayment(randomUUID())).rejects.toMatchObject({
+        code: "PAYMENT_NOT_FOUND",
+        status: 404,
+      });
+    });
+  });
 });

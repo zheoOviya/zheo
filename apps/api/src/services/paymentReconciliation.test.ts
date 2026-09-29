@@ -511,6 +511,92 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect((await orderRepo.getById(order.id))!.status).toBe("CANCELLED");
   });
 
+  // ============================================
+  // PAY1 (PAYMENT_CAPTURED_UNFULFILLED-B1, Option C): captured-but-unfulfilled
+  // recovery. CAPTURED + PAYMENT_FAILED may only recover after a full PAY4
+  // gateway revalidation; DRAFT is never auto-confirmed; CANCELLED defers to
+  // PAY2.
+  // ============================================
+
+  // P1-3a: captured + PAYMENT_FAILED + proven gateway capture -> CONFIRMED.
+  it("PAY1-PF1 CAPTURED + PAYMENT_FAILED + valid gateway capture -> CONFIRMED + event", async () => {
+    const { order, payment } = await seedOrderPayment({ status: "PAYMENT_FAILED" });
+    await paymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
+      razorpay_payment_id: "pay_pay1_pf1",
+    });
+    gateway.payments.push(captured("pay_pay1_pf1", payment.razorpay_order_id, 10000));
+    const events = captureEvents("PaymentSucceeded");
+
+    const result = await reconcilePayment(payment.id, deps());
+
+    expect(result.outcome).toBe("CONVERGED");
+    expect(result.emitted).toBe(true);
+    expect((await orderRepo.getById(order.id))!.status).toBe("CONFIRMED");
+    expect((await paymentRepo.getById(payment.id))!.status).toBe("CAPTURED");
+    expect(events).toHaveLength(1);
+  });
+
+  // P1-3b: captured + PAYMENT_FAILED but gateway amount disagrees -> no recovery.
+  it("PAY1-PF2 CAPTURED + PAYMENT_FAILED + gateway amount mismatch -> MANUAL_REVIEW", async () => {
+    const { order, payment } = await seedOrderPayment({ status: "PAYMENT_FAILED" });
+    await paymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
+      razorpay_payment_id: "pay_pay1_pf2",
+    });
+    gateway.payments.push(captured("pay_pay1_pf2", payment.razorpay_order_id, 9999));
+
+    const result = await reconcilePayment(payment.id, deps());
+
+    expect(result.outcome).toBe("MANUAL_REVIEW");
+    expect(result.reason).toBe("PAYMENT_FAILED_RECOVERY_INTEGRITY_FAILED");
+    expect((await orderRepo.getById(order.id))!.status).toBe("PAYMENT_FAILED");
+    expect((await paymentRepo.getById(payment.id))!.manual_review).toBe(true);
+  });
+
+  // P1-3c: captured + PAYMENT_FAILED with no gateway entity -> fail closed.
+  it("PAY1-PF3 CAPTURED + PAYMENT_FAILED + missing gateway entity -> MANUAL_REVIEW", async () => {
+    const { order, payment } = await seedOrderPayment({ status: "PAYMENT_FAILED" });
+    await paymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
+      razorpay_payment_id: "pay_pay1_pf3",
+    });
+
+    const result = await reconcilePayment(payment.id, deps());
+
+    expect(result.outcome).toBe("MANUAL_REVIEW");
+    expect(result.reason).toBe("PAYMENT_FAILED_RECOVERY_INTEGRITY_FAILED");
+    expect((await orderRepo.getById(order.id))!.status).toBe("PAYMENT_FAILED");
+  });
+
+  // P1-4: captured + DRAFT is never auto-confirmed (placement semantics).
+  it("PAY1-D1 CAPTURED + DRAFT -> MANUAL_REVIEW, order stays DRAFT", async () => {
+    const { order, payment } = await seedOrderPayment({ status: "DRAFT" });
+    await paymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
+      razorpay_payment_id: "pay_pay1_d1",
+    });
+    gateway.payments.push(captured("pay_pay1_d1", payment.razorpay_order_id, 10000));
+
+    const result = await reconcilePayment(payment.id, deps());
+
+    expect(result.outcome).toBe("MANUAL_REVIEW");
+    expect(result.reason).toBe("ORDER_DRAFT_CONFLICT");
+    expect((await orderRepo.getById(order.id))!.status).toBe("DRAFT");
+  });
+
+  // P1-4b: captured + CANCELLED + reservation but no proven refund defers to PAY2.
+  it("PAY1-C1 CAPTURED + CANCELLED + reservation, no refund -> PAY2-deferred MANUAL_REVIEW", async () => {
+    const { order, payment } = await seedOrderPayment({ status: "CANCELLED" });
+    await paymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
+      razorpay_payment_id: "pay_pay1_c1",
+    });
+    await paymentRepo.reserveRefundSubmission(payment.id);
+
+    const result = await reconcilePayment(payment.id, deps());
+
+    expect(result.outcome).toBe("MANUAL_REVIEW");
+    expect(result.reason).toBe("CANCELLED_REFUND_DEFERRED_TO_PAY2");
+    expect((await orderRepo.getById(order.id))!.status).toBe("CANCELLED");
+    expect((await paymentRepo.getById(payment.id))!.status).toBe("CAPTURED");
+  });
+
   it("RC13 same PAY-4 quarantined payment id -> NEVER promoted", async () => {
     const { order, payment } = await seedOrderPayment({ status: "PAYMENT_PENDING" });
     await paymentRepo.updateWebhookResult(payment.id, {

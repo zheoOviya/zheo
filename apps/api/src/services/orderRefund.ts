@@ -252,6 +252,69 @@ export class OrderRefundService {
     return { order: finalOrder, refund, idempotent: false };
   }
 
+  /**
+   * Operator FULL_REFUND for a captured payment that is NOT being cancelled
+   * (e.g. a MANUAL_REVIEW captured payment). It reuses the SAME exactly-once
+   * reservation primitive as paid cancellation and mutates NO order state:
+   *   1. Reserve the submission BEFORE any gateway call (permanent).
+   *   2. Only the reservation winner POSTs; an ALREADY_RESERVED row never POSTs.
+   *   3. Full amount only (no partial refund).
+   *   4. Ambiguous failure keeps the reservation and flags MANUAL_REVIEW.
+   *   5. Locally SUBMITTED only; the business status stays CAPTURED until the
+   *      refund webhook / reconciliation proves the refund.
+   */
+  async submitFullRefundForCapturedPayment(paymentId: string): Promise<RefundDisposition> {
+    const payment = await this.paymentRepo.getById(paymentId);
+    if (!payment) {
+      throw new AppError("PAYMENT_NOT_FOUND", "Payment not found", 404);
+    }
+    if (payment.status !== "CAPTURED") {
+      throw new AppError(
+        "PAYMENT_NOT_CAPTURED",
+        `Cannot refund: payment is ${payment.status}, not CAPTURED`,
+        409,
+      );
+    }
+    if (!payment.razorpay_payment_id) {
+      await this.paymentRepo.markRefundSubmissionResult(payment.id, {
+        refund_initiation_status: "MANUAL_REVIEW",
+        refund_initiation_reason: "CAPTURED_MISSING_PAYMENT_ID",
+      });
+      throw new AppError(
+        "PAYMENT_IDENTITY_MISSING",
+        "Captured payment has no gateway payment id; refund blocked for manual review",
+        409,
+      );
+    }
+
+    const reservation = await this.paymentRepo.reserveRefundSubmission(payment.id, "CAPTURED");
+    if (reservation.outcome === "ALREADY_RESERVED") return "ALREADY_RESERVED";
+    if (reservation.outcome !== "RESERVED") {
+      throw new AppError(
+        "REFUND_RESERVATION_UNAVAILABLE",
+        "Payment is not in a refundable state",
+        409,
+      );
+    }
+
+    const expectedPaise = Math.round(payment.amount * 100);
+    try {
+      const result = await this.gateway.refund(payment.razorpay_payment_id, expectedPaise);
+      await this.paymentRepo.markRefundSubmissionResult(payment.id, {
+        refund_provider_id: result.id,
+        refund_initiation_status: "SUBMITTED",
+        refund_initiation_reason: null,
+      });
+      return "SUBMITTED";
+    } catch {
+      await this.paymentRepo.markRefundSubmissionResult(payment.id, {
+        refund_initiation_status: "MANUAL_REVIEW",
+        refund_initiation_reason: "AMBIGUOUS_REFUND_SUBMISSION",
+      });
+      return "SUBMISSION_FAILED";
+    }
+  }
+
   /** Refund disposition for an order that is already terminal. Read-only. */
   private async existingRefundDisposition(orderId: string): Promise<RefundDisposition> {
     const payment = await this.paymentRepo.getByOrderId(orderId);

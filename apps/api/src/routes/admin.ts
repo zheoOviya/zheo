@@ -44,6 +44,7 @@ import {
   runPaymentReconciliationBatch,
 } from "../services/paymentReconciliation";
 import { sharedOrderRefundService } from "../services/orderRefund";
+import { sharedPaymentManualReviewService } from "../services/paymentManualReview";
 
 const adminRouter: Router = Router();
 
@@ -1469,6 +1470,59 @@ adminRouter.post(
       limit: body.data.limit,
       includeCaptured: body.data.include_captured,
       staleBefore: body.data.stale_before,
+    });
+    ok(res, result);
+  }),
+);
+
+// ============================================
+// PAY1 manual-review resolution (PAYMENT_CAPTURED_UNFULFILLED-B1, Option C)
+//
+// SUPER_ADMIN-only. A captured payment that reconciliation flagged MANUAL_REVIEW
+// is inert: it is neither fulfilled nor refunded. This endpoint is the single
+// explicit operator decision that resolves it. It never fakes placement or
+// approval (a DRAFT catering order stays refused) and never blind-writes an
+// order: RECOVER_TO_CONFIRMED revalidates gateway truth then CASes from the
+// operator-observed from_status; FULL_REFUND delegates to the shared exactly-once
+// refund choke point; KEEP_MANUAL_REVIEW only records a reason.
+// ============================================
+
+const ManualReviewResolveSchema = z.object({
+  action: z.enum(["RECOVER_TO_CONFIRMED", "FULL_REFUND", "KEEP_MANUAL_REVIEW"]),
+  from_status: OrderStatusSchema.optional(),
+  reason: z.string().min(1).optional(),
+});
+
+adminRouter.post(
+  "/orders/:id/manual-review/resolve",
+  adminWriteLimiter, adminWrite,
+  asyncHandler(async (req, res) => {
+    const id = req.params.id as string;
+    const actorRole = res.locals.userRole as string;
+    if (actorRole !== "SUPER_ADMIN") {
+      throw new AppError("FORBIDDEN", "Only SUPER_ADMIN can resolve a manual review", 403);
+    }
+    const body = ManualReviewResolveSchema.safeParse(req.body ?? {});
+    if (!body.success) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid manual-review payload",
+        400,
+        body.error.flatten(),
+      );
+    }
+
+    const result = await sharedPaymentManualReviewService.resolve(id, body.data);
+
+    const actorId = res.locals.userId as string;
+    await sharedAuditRepo.log(actorId, "payment_manual_review_resolved", {
+      order_id: id,
+      action: result.action,
+      from_status: result.from_status,
+      order_status: result.order_status,
+      payment_status: result.payment_status,
+      refund: result.refund ?? null,
+      reason: body.data.reason ?? null,
     });
     ok(res, result);
   }),
