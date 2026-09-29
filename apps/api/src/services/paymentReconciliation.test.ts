@@ -407,6 +407,110 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(after!.manual_review).toBe(true);
   });
 
+  // PAY2-B: the deliberate cancellation crash boundary.
+  // CAPTURED + CANCELLED + reservation + proven full gateway refund -> converge
+  // the payment to REFUNDED while the order stays the valid CANCELLED terminal.
+  it("CR17 CAPTURED + CANCELLED + reservation + full gateway refund -> payment REFUNDED, order CANCELLED", async () => {
+    const { order, payment } = await seedOrderPayment({ status: "CANCELLED" });
+    await paymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
+      razorpay_payment_id: "pay_cr17",
+    });
+    await paymentRepo.reserveRefundSubmission(payment.id);
+    gateway.refunds.push(gatewayRefund("refund_cr17", "pay_cr17", 10000));
+
+    const result = await reconcilePayment(payment.id, deps());
+
+    expect(result.outcome).toBe("CONVERGED");
+    expect((await paymentRepo.getById(payment.id))!.status).toBe("REFUNDED");
+    expect((await orderRepo.getById(order.id))!.status).toBe("CANCELLED");
+  });
+
+  // PAY2-B: a reservation without a proven full gateway refund must never be
+  // upgraded to REFUNDED.
+  it("CR18 CAPTURED + CANCELLED + reservation but no confirmed refund -> not falsely REFUNDED", async () => {
+    const { payment } = await seedOrderPayment({ status: "CANCELLED" });
+    await paymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
+      razorpay_payment_id: "pay_cr18",
+    });
+    await paymentRepo.reserveRefundSubmission(payment.id);
+
+    const result = await reconcilePayment(payment.id, deps());
+
+    expect(result.outcome).toBe("MANUAL_REVIEW");
+    const after = (await paymentRepo.getById(payment.id))!;
+    expect(after.status).toBe("CAPTURED");
+    expect(after.refund_requested_at).not.toBeNull();
+    expect(after.manual_review).toBe(true);
+  });
+
+  // PAY2-B: CAPTURED + CANCELLED without a reservation is the historical
+  // dangerous state and must always be MANUAL_REVIEW.
+  it("CR19 CAPTURED + CANCELLED without reservation -> MANUAL_REVIEW", async () => {
+    const { payment } = await seedOrderPayment({ status: "CANCELLED" });
+    await paymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
+      razorpay_payment_id: "pay_cr19",
+    });
+
+    const result = await reconcilePayment(payment.id, deps());
+
+    expect(result.outcome).toBe("MANUAL_REVIEW");
+    expect(result.reason).toBe("ORDER_CANCELLED_CONFLICT");
+    expect((await paymentRepo.getById(payment.id))!.refund_requested_at).toBeNull();
+  });
+
+  // PAY2-B: local REFUNDED + order CANCELLED is a valid converged terminal pair.
+  it("CR20 payment REFUNDED + order CANCELLED -> reconciliation CONVERGED/no-op", async () => {
+    const { order, payment } = await seedOrderPayment({ status: "CANCELLED" });
+    await paymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
+      razorpay_payment_id: "pay_cr20",
+    });
+    await paymentRepo.compareAndSetStatus(payment.id, "CAPTURED", "REFUNDED", {
+      gateway_status: "processed",
+    });
+    gateway.refunds.push(gatewayRefund("refund_cr20", "pay_cr20", 10000));
+
+    const result = await reconcilePayment(payment.id, deps());
+
+    expect(result.outcome).toBe("CONVERGED");
+    expect((await paymentRepo.getById(payment.id))!.status).toBe("REFUNDED");
+    expect((await orderRepo.getById(order.id))!.status).toBe("CANCELLED");
+  });
+
+  // R30/B1R: PAY3 must NOT auto-converge CAPTURED + CANCELLED without the
+  // durable cancellation refund reservation, even when a full gateway refund is
+  // observed (out-of-band/manual refund stays visible).
+  it("R30 CAPTURED + CANCELLED + full gateway refund + NO reservation -> MANUAL_REVIEW", async () => {
+    const { order, payment } = await seedOrderPayment({ status: "CANCELLED" });
+    await paymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
+      razorpay_payment_id: "pay_r30",
+    });
+    gateway.refunds.push(gatewayRefund("refund_r30", "pay_r30", 10000));
+
+    const result = await reconcilePayment(payment.id, deps());
+
+    expect(result.outcome).toBe("MANUAL_REVIEW");
+    expect(result.reason).toBe("CANCELLED_WITHOUT_REFUND_RESERVATION");
+    expect((await paymentRepo.getById(payment.id))!.status).toBe("CAPTURED");
+    expect((await orderRepo.getById(order.id))!.status).toBe("CANCELLED");
+  });
+
+  // R31/B1R: with the reservation present, the deliberate CAPTURED + CANCELLED
+  // flow still converges to REFUNDED.
+  it("R31 CAPTURED + CANCELLED + reservation + full refund -> still converges", async () => {
+    const { order, payment } = await seedOrderPayment({ status: "CANCELLED" });
+    await paymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
+      razorpay_payment_id: "pay_r31",
+    });
+    await paymentRepo.reserveRefundSubmission(payment.id);
+    gateway.refunds.push(gatewayRefund("refund_r31", "pay_r31", 10000));
+
+    const result = await reconcilePayment(payment.id, deps());
+
+    expect(result.outcome).toBe("CONVERGED");
+    expect((await paymentRepo.getById(payment.id))!.status).toBe("REFUNDED");
+    expect((await orderRepo.getById(order.id))!.status).toBe("CANCELLED");
+  });
+
   it("RC13 same PAY-4 quarantined payment id -> NEVER promoted", async () => {
     const { order, payment } = await seedOrderPayment({ status: "PAYMENT_PENDING" });
     await paymentRepo.updateWebhookResult(payment.id, {

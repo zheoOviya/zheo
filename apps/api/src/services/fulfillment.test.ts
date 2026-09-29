@@ -47,7 +47,6 @@ import type {
 import type { OrderStatus } from "@snakzap/types";
 
 const OID = "11111111-1111-4111-8111-111111111111";
-const OID_2 = "11111111-1111-4111-8111-222222222222";
 const REST_ID = "33333333-3333-4333-8333-333333333333";
 
 function orderDto(
@@ -93,7 +92,6 @@ const log = (entry: string): void => {
 
 class ControllableOrderRepository extends MemoryOrderRepository {
   advanceRace = false;
-  cancelRace = false;
   consumeRace = false;
 
   override async transitionStatus(
@@ -102,12 +100,6 @@ class ControllableOrderRepository extends MemoryOrderRepository {
     toStatus: OrderStatus,
   ): Promise<OrderDTO | null> {
     log("orders.transitionStatus");
-    if (this.cancelRace) {
-      this.cancelRace = false;
-      // Simulate a concurrent writer winning between read and CAS.
-      await this.updateStatus(orderId, "READY_FOR_PICKUP");
-      return null;
-    }
     return super.transitionStatus(orderId, fromStatus, toStatus);
   }
 
@@ -415,116 +407,6 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
       const out = await h.service.confirmPickup(OID, "1234");
       expect(out.status).toBe("PICKED_UP");
       expect((await h.gifts.getById(gift.id))?.status).toBe("FULFILLED");
-    });
-  });
-
-  // ---------------- cancel ----------------
-
-  describe("cancelOrder", () => {
-    it("C1 cancels a CONFIRMED order", async () => {
-      h.seed(OID, "CONFIRMED");
-      const out = await h.service.cancelOrder(OID);
-      expect(out.status).toBe("CANCELLED");
-      expect(state.log).toContain("orders.transitionStatus");
-    });
-
-    it("C2 releases a gift bound to this order in the same tx", async () => {
-      const gift = await h.claimedGift();
-      await h.gifts.bindToOrder(gift.id, OID);
-      h.seed(OID, "CONFIRMED", { giftId: gift.id });
-      await h.service.cancelOrder(OID);
-      expect(state.log).toContain("gifts.releaseFromOrder");
-      const begin = state.log.indexOf("tx.begin");
-      const release = state.log.indexOf("gifts.releaseFromOrder");
-      const end = state.log.indexOf("tx.end");
-      expect(release).toBeGreaterThan(begin);
-      expect(end).toBeGreaterThan(release);
-      const stored = await h.gifts.getById(gift.id);
-      expect(stored?.redeemed_order_id).toBeNull();
-      expect(stored?.status).toBe("ACTIVE");
-    });
-
-    it("C3 leaves a gift bound to another order undisturbed", async () => {
-      const gift = await h.claimedGift();
-      await h.gifts.bindToOrder(gift.id, OID_2);
-      h.seed(OID, "CONFIRMED", { giftId: gift.id });
-      await h.service.cancelOrder(OID);
-      const stored = await h.gifts.getById(gift.id);
-      expect(stored?.redeemed_order_id).toBe(OID_2);
-      expect(stored?.status).toBe("CLAIMED");
-    });
-
-    it("C4 non-cancellable status is INVALID_TRANSITION", async () => {
-      h.seed(OID, "READY_FOR_PICKUP");
-      await expect(h.service.cancelOrder(OID)).rejects.toMatchObject({
-        code: "INVALID_TRANSITION",
-        status: 400,
-      });
-    });
-
-    it("C5 missing order is ORDER_NOT_FOUND", async () => {
-      await expect(h.service.cancelOrder(OID)).rejects.toMatchObject({
-        code: "ORDER_NOT_FOUND",
-        status: 404,
-      });
-    });
-
-    it("C6 concurrent status change fails the CAS as no-longer-cancellable", async () => {
-      h.seed(OID, "CONFIRMED");
-      h.orders.cancelRace = true;
-      await expect(h.service.cancelOrder(OID)).rejects.toMatchObject({
-        code: "INVALID_TRANSITION",
-        status: 400,
-      });
-    });
-
-    it("C7 lost cancel CAS emits nothing", async () => {
-      h.seed(OID, "CONFIRMED");
-      h.orders.cancelRace = true;
-      await expect(h.service.cancelOrder(OID)).rejects.toBeTruthy();
-      expect(published()).toBe(false);
-      expect(state.log.some((e) => e.startsWith("emit:"))).toBe(false);
-    });
-
-    it("C8 gift releaseFromOrder throw aborts the tx with zero events", async () => {
-      const gift = await h.claimedGift();
-      await h.gifts.bindToOrder(gift.id, OID);
-      h.seed(OID, "CONFIRMED", { giftId: gift.id });
-      h.txGiftReleaseThrow = true;
-
-      await expect(h.service.cancelOrder(OID)).rejects.toThrow(
-        "controlled release failure",
-      );
-
-      // CAS mutation must occur first, release attempt second.
-      const cas = state.log.indexOf("orders.transitionStatus");
-      const release = state.log.indexOf("gifts.releaseFromOrder");
-      expect(cas).toBeGreaterThanOrEqual(0);
-      expect(release).toBeGreaterThan(cas);
-      expect(published()).toBe(false);
-      expect(state.log.some((e) => e.startsWith("emit:"))).toBe(false);
-    });
-
-    it("C9 successful cancel orders CAS < release < commit < post-commit publish", async () => {
-      const gift = await h.claimedGift();
-      await h.gifts.bindToOrder(gift.id, OID);
-      h.seed(OID, "CONFIRMED", { giftId: gift.id });
-
-      await h.service.cancelOrder(OID);
-
-      const begin = state.log.indexOf("tx.begin");
-      const cas = state.log.indexOf("orders.transitionStatus");
-      const release = state.log.indexOf("gifts.releaseFromOrder");
-      const commit = state.log.indexOf("tx.end");
-      const publish = state.log.indexOf("publish");
-      expect(begin).toBeGreaterThanOrEqual(0);
-      expect(cas).toBeGreaterThan(begin);
-      expect(release).toBeGreaterThan(cas);
-      expect(commit).toBeGreaterThan(release);
-      expect(publish).toBeGreaterThan(commit);
-      // Cancel has no EventBus emit; the status update is the only external
-      // effect and it strictly follows the tx callback resolving.
-      expect(state.log.some((e) => e.startsWith("emit:"))).toBe(false);
     });
   });
 

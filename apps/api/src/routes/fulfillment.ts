@@ -12,6 +12,7 @@ import {
   sharedGiftRepo,
 } from "../repositories/shared";
 import { FulfillmentService } from "../services/fulfillment";
+import { sharedOrderRefundService } from "../services/orderRefund";
 import { GeoFenceService } from "../services/geoFence";
 
 // ============================================
@@ -202,8 +203,10 @@ vendorRouter.put(
     }
     await assertRestaurantAccess(res, order.restaurant_id);
 
-    const updated = await fulfillmentService.cancelOrder(order.id);
-    ok(res, { order_id: updated.id, status: updated.status });
+    // Single cancellation + refund choke point shared with the admin override
+    // route. A paid (CAPTURED) order gets exactly one full refund submission.
+    const result = await sharedOrderRefundService.cancelOrder(order.id);
+    ok(res, { order_id: result.order.id, status: result.order.status });
   }),
 );
 

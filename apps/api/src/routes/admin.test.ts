@@ -3,6 +3,7 @@ import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { jwtService } from "../services/jwt";
+import { razorpayService } from "../services/razorpay";
 import { sharedKillSwitchRepo, sharedIdentityRepo, sharedSupportRepo, sharedRoleRepo, sharedOrderRepo, sharedPaymentRepo, sharedLoyaltyRepo, sharedAuditRepo, sharedVendorApplicationRepo, sharedNotificationRepo } from "../repositories/shared";
 import type { OrderDTO } from "../repositories/orderRepository";
 import type { OrderStatus } from "@snakzap/types";
@@ -1877,6 +1878,99 @@ describe("Admin RBAC (A-01, A-11)", () => {
       expect(res.status).toBe(409);
       const after = (await sharedAuditRepo.all()).length;
       expect(after).toBe(before);
+    });
+
+    // CR13/CR14 — admin CANCELLED goes through the same paid-cancellation choke
+    // point as the vendor path; `force` never bypasses the refund requirement.
+    async function seedCapturedOrder(id: string): Promise<string> {
+      const o = seedOrder(id, "CONFIRMED");
+      const payment = await sharedPaymentRepo.create({
+        order_id: o.id,
+        razorpay_order_id: `order_${o.id.slice(0, 8)}`,
+        amount: o.total_amount,
+      });
+      await sharedPaymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
+        razorpay_payment_id: `pay_${o.id.slice(0, 8)}`,
+      });
+      return o.id;
+    }
+
+    it("CR13 admin paid cancellation uses the shared refund choke point", async () => {
+      const orderId = await seedCapturedOrder(`${ORDER_PREFIX}f`);
+      const refundSpy = vi.spyOn(razorpayService, "refund");
+      try {
+        const res = await override(orderId, "SUPER_ADMIN", {
+          status: "CANCELLED",
+          from_status: "CONFIRMED",
+        });
+        expect(res.status).toBe(200);
+        expect(res.body.data.status).toBe("CANCELLED");
+        expect(refundSpy).toHaveBeenCalledTimes(1);
+        const payment = await sharedPaymentRepo.getByOrderId(orderId);
+        expect(payment?.refund_initiation_status).toBe("SUBMITTED");
+        expect((await sharedOrderRepo.getById(orderId))!.status).toBe("CANCELLED");
+      } finally {
+        refundSpy.mockRestore();
+      }
+    });
+
+    it("CR14 admin force cannot bypass the refund requirement", async () => {
+      const orderId = await seedCapturedOrder(`${ORDER_PREFIX}g`);
+      const refundSpy = vi.spyOn(razorpayService, "refund");
+      try {
+        const res = await override(orderId, "SUPER_ADMIN", {
+          status: "CANCELLED",
+          from_status: "CONFIRMED",
+          force: true,
+          reason: "ops cancel",
+        });
+        expect(res.status).toBe(200);
+        expect(res.body.data.status).toBe("CANCELLED");
+        expect(refundSpy).toHaveBeenCalledTimes(1);
+        const payment = await sharedPaymentRepo.getByOrderId(orderId);
+        expect(payment?.refund_initiation_status).toBe("SUBMITTED");
+      } finally {
+        refundSpy.mockRestore();
+      }
+    });
+
+    // R32/B1R — the admin optimistic precondition must survive the choke point.
+    it("R32 admin stale from_status on CANCELLED override -> precondition failure, no POST", async () => {
+      const orderId = await seedCapturedOrder(`${ORDER_PREFIX}h`);
+      await sharedOrderRepo.updateStatus(orderId, "PREPARING");
+      const refundSpy = vi.spyOn(razorpayService, "refund");
+      try {
+        const res = await override(orderId, "SUPER_ADMIN", {
+          status: "CANCELLED",
+          from_status: "CONFIRMED",
+        });
+        expect(res.status).toBe(409);
+        expect(res.body.error.code).toBe("CONCURRENT_MODIFICATION");
+        expect(refundSpy).not.toHaveBeenCalled();
+        const payment = await sharedPaymentRepo.getByOrderId(orderId);
+        expect(payment?.refund_requested_at).toBeNull();
+        expect((await sharedOrderRepo.getById(orderId))!.status).toBe("PREPARING");
+      } finally {
+        refundSpy.mockRestore();
+      }
+    });
+
+    it("R33 admin exact from_status paid cancel -> shared choke point, exactly one refund POST", async () => {
+      const orderId = await seedCapturedOrder(`${ORDER_PREFIX}i`);
+      const refundSpy = vi.spyOn(razorpayService, "refund");
+      try {
+        const res = await override(orderId, "SUPER_ADMIN", {
+          status: "CANCELLED",
+          from_status: "CONFIRMED",
+        });
+        expect(res.status).toBe(200);
+        expect(res.body.data.status).toBe("CANCELLED");
+        expect(refundSpy).toHaveBeenCalledTimes(1);
+        const payment = await sharedPaymentRepo.getByOrderId(orderId);
+        expect(payment?.refund_initiation_status).toBe("SUBMITTED");
+      } finally {
+        refundSpy.mockRestore();
+      }
     });
   });
 

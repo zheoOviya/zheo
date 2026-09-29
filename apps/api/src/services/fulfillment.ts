@@ -70,57 +70,6 @@ export class FulfillmentService {
     return this.txPort ?? getFulfillmentTransactionPort();
   }
 
-  /**
-   * Vendor cancellation. Allowed only before the order becomes ready for
-   * pickup (a ready order must be handed over or handled via pickup OTP).
-   */
-  async cancelOrder(orderId: string): Promise<OrderDTO> {
-    const order = await this.orderRepo.getById(orderId);
-    if (!order) {
-      throw new AppError("ORDER_NOT_FOUND", "Order not found", 404);
-    }
-    const cancellable = new Set<OrderStatus>([
-      "DRAFT",
-      "PAYMENT_PENDING",
-      "CONFIRMED",
-      "PREPARING",
-    ]);
-    if (!cancellable.has(order.status)) {
-      throw new AppError("INVALID_TRANSITION", `Order in ${order.status} cannot be cancelled`, 400);
-    }
-
-    // Status CAS is the first mutation; gift unbinds share the same commit
-    // boundary, so a partial cancel (status CANCELLED with gifts still bound,
-    // or vice versa) is not representable in Postgres.
-    const observedStatus = order.status;
-    const updated = await this.getTransactionPort().runInTransaction(
-      async ({ orders, gifts }) => {
-        const cancelled = await orders.transitionStatus(orderId, observedStatus, "CANCELLED");
-        if (!cancelled) return null;
-
-        const giftLines = order.items.filter((i) => i.gift_id);
-        for (const line of giftLines) {
-          // Unbind only when THIS order holds the gift (CAS); a gift already
-          // re-deployed into another order stays put.
-          if (line.gift_id) await gifts.releaseFromOrder(line.gift_id, order.id);
-        }
-        return cancelled;
-      },
-    );
-
-    if (!updated) {
-      throw new AppError("INVALID_TRANSITION", "Order is no longer cancellable", 400);
-    }
-
-    await publishStatusUpdate({
-      order_id: updated.id,
-      restaurant_id: updated.restaurant_id,
-      status: "CANCELLED",
-    });
-
-    return updated;
-  }
-
   async advanceOrderStatus(
     orderId: string,
   ): Promise<{ order: OrderDTO; nextStatus: string; earlyReadyAlerted: boolean }> {

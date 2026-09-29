@@ -444,10 +444,27 @@ async function observeGatewayRefund(
       manualReview: true,
     });
   }
-  if (order.status !== "CONFIRMED" && order.status !== "REFUNDED") {
+  if (
+    order.status !== "CONFIRMED" &&
+    order.status !== "REFUNDED" &&
+    order.status !== "CANCELLED"
+  ) {
     return record(payment, deps, {
       outcome: "MANUAL_REVIEW",
       reason: `REFUND_ORDER_${order.status}_CONFLICT`,
+      gatewayStatus: full.status,
+      manualReview: true,
+    });
+  }
+  if (order.status === "CANCELLED" && payment.refund_requested_at == null) {
+    // PAY2-B: a deliberate CAPTURED + CANCELLED auto-convergence is only
+    // legitimate when the payment went through the durable cancellation refund
+    // reservation (the choke point reserves BEFORE the gateway). A full gateway
+    // refund observed without that reservation is an out-of-band/manual refund
+    // and must stay visible for review, never silently converge to REFUNDED.
+    return record(payment, deps, {
+      outcome: "MANUAL_REVIEW",
+      reason: "CANCELLED_WITHOUT_REFUND_RESERVATION",
       gatewayStatus: full.status,
       manualReview: true,
     });

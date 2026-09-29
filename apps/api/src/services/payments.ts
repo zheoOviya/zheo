@@ -18,6 +18,20 @@ import { isCaptureQuarantined as isCaptureQuarantinedShared } from "./paymentInt
 // supports 100+ methods); "cod" is pay-at-pickup with no gateway.
 export type PaymentMethod = "upi" | "card" | "netbanking" | "wallet" | "cod";
 
+/**
+ * Order states that already represent a successful capture convergence. A late
+ * capture webhook for one of these is an idempotent no-op, never a rewrite.
+ * CANCELLED / PAYMENT_FAILED / REFUNDED are deliberately absent: they must never
+ * be resurrected by a capture (RISK_PAY_2 late-capture resurrection fix).
+ */
+const ORDER_POST_CAPTURE_OK: ReadonlySet<string> = new Set([
+  "CONFIRMED",
+  "PREPARING",
+  "ALMOST_READY",
+  "READY_FOR_PICKUP",
+  "PICKED_UP",
+]);
+
 // In-process per-gift serialization for payment-order creation. The
 // get-then-create idempotency check is read-then-write; without a unique
 // constraint on payments.gift_id two concurrent first-time calls could mint
@@ -324,26 +338,71 @@ export class PaymentService {
     }
 
     if (isCaptured) {
-      await this.orderRepo.updateStatus(payment.order_id, "CONFIRMED");
-      await emit(
-        createEventEnvelope("PaymentSucceeded", payment.order_id, {
-          order_id: payment.order_id,
-          payment_id: payment.id,
-          amount: payment.amount,
-        }),
+      // CAS only from PAYMENT_PENDING: a capture must never blindly resurrect a
+      // cancelled (or otherwise incompatible) order. This closes the
+      // late-capture resurrection race (RISK_PAY_2).
+      const confirmed = await this.orderRepo.transitionStatus(
+        payment.order_id,
+        "PAYMENT_PENDING",
+        "CONFIRMED",
       );
-      return { processed: true, idempotent: false, orderStatus: "CONFIRMED" };
+      if (confirmed) {
+        await emit(
+          createEventEnvelope("PaymentSucceeded", payment.order_id, {
+            order_id: payment.order_id,
+            payment_id: payment.id,
+            amount: payment.amount,
+          }),
+        );
+        return { processed: true, idempotent: false, orderStatus: "CONFIRMED" };
+      }
+
+      const current = await this.orderRepo.getById(payment.order_id);
+      if (current && ORDER_POST_CAPTURE_OK.has(current.status)) {
+        // Capture converged already (idempotent): no event, no rewrite.
+        return { processed: false, idempotent: true, orderStatus: current.status };
+      }
+
+      // CANCELLED / PAYMENT_FAILED / REFUNDED / missing order: preserve history
+      // and flag for reconciliation/manual review. Money state is handled by the
+      // refund workflow, never by rewriting the order here.
+      await this.paymentRepo.markReconciliationResult(payment.id, {
+        reconciliation_status: "MANUAL_REVIEW",
+        reconciliation_reason: `LATE_CAPTURE_ORDER_${current?.status ?? "MISSING"}`,
+        last_reconciled_at: new Date().toISOString(),
+        manual_review: true,
+      });
+      return { processed: true, idempotent: false, orderStatus: current?.status };
     }
 
-    await this.orderRepo.updateStatus(payment.order_id, "PAYMENT_FAILED");
-    await emit(
-      createEventEnvelope("PaymentFailed", payment.order_id, {
-        order_id: payment.order_id,
-        payment_id: payment.id,
-        reason: entity.description ?? "Payment failed",
-      }),
+    const failed = await this.orderRepo.transitionStatus(
+      payment.order_id,
+      "PAYMENT_PENDING",
+      "PAYMENT_FAILED",
     );
-    return { processed: true, idempotent: false, orderStatus: "PAYMENT_FAILED" };
+    if (failed) {
+      await emit(
+        createEventEnvelope("PaymentFailed", payment.order_id, {
+          order_id: payment.order_id,
+          payment_id: payment.id,
+          reason: entity.description ?? "Payment failed",
+        }),
+      );
+      return { processed: true, idempotent: false, orderStatus: "PAYMENT_FAILED" };
+    }
+
+    const currentFailedOrder = await this.orderRepo.getById(payment.order_id);
+    if (currentFailedOrder && currentFailedOrder.status === "PAYMENT_FAILED") {
+      return { processed: false, idempotent: true, orderStatus: "PAYMENT_FAILED" };
+    }
+    // Incompatible order state (e.g. CANCELLED): preserve history, no event.
+    await this.paymentRepo.markReconciliationResult(payment.id, {
+      reconciliation_status: "MANUAL_REVIEW",
+      reconciliation_reason: `LATE_FAILURE_ORDER_${currentFailedOrder?.status ?? "MISSING"}`,
+      last_reconciled_at: new Date().toISOString(),
+      manual_review: true,
+    });
+    return { processed: true, idempotent: false, orderStatus: currentFailedOrder?.status };
   }
 
   private async processRefundWebhook(
@@ -408,7 +467,45 @@ export class PaymentService {
     }
 
     if (payment.order_id) {
-      await this.orderRepo.updateStatus(payment.order_id, "REFUNDED");
+      const order = await this.orderRepo.getById(payment.order_id);
+      if (order && order.status === "CONFIRMED") {
+        // CAS CONFIRMED -> REFUNDED; never a blind rewrite.
+        const moved = await this.orderRepo.transitionStatus(
+          payment.order_id,
+          "CONFIRMED",
+          "REFUNDED",
+        );
+        if (!moved) {
+          const after = await this.orderRepo.getById(payment.order_id);
+          if (after?.status !== "REFUNDED") {
+            await this.paymentRepo.markReconciliationResult(payment.id, {
+              reconciliation_status: "MANUAL_REVIEW",
+              reconciliation_reason: "REFUND_ORDER_CONVERGENCE_CONFLICT",
+              last_reconciled_at: new Date().toISOString(),
+              manual_review: true,
+            });
+            return { processed: true, idempotent: false, orderStatus: after?.status };
+          }
+        }
+        return { processed: true, idempotent: false, orderStatus: "REFUNDED" };
+      }
+      if (order && order.status === "REFUNDED") {
+        return { processed: true, idempotent: false, orderStatus: "REFUNDED" };
+      }
+      if (order && order.status === "CANCELLED") {
+        // Deliberate PAY2 terminal combination: payment REFUNDED, order remains
+        // the valid CANCELLED terminal state (no history rewrite).
+        return { processed: true, idempotent: false, orderStatus: "CANCELLED" };
+      }
+      // PICKED_UP / PREPARING / missing: a stale refund must never rewrite an
+      // incompatible order. Flag for manual review instead.
+      await this.paymentRepo.markReconciliationResult(payment.id, {
+        reconciliation_status: "MANUAL_REVIEW",
+        reconciliation_reason: `REFUND_ORDER_${order?.status ?? "MISSING"}_CONFLICT`,
+        last_reconciled_at: new Date().toISOString(),
+        manual_review: true,
+      });
+      return { processed: true, idempotent: false, orderStatus: order?.status };
     }
     return { processed: true, idempotent: false, orderStatus: "REFUNDED" };
   }

@@ -1,12 +1,13 @@
 import type { Express } from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { onEvent } from "../lib/eventBus";
 import { jwtService } from "../services/jwt";
 import { razorpayService } from "../services/razorpay";
 import { PaymentService } from "../services/payments";
+import { sharedOrderRefundService } from "../services/orderRefund";
 import { sharedOrderRepo } from "../repositories/shared";
 import { sharedPaymentRepo } from "../repositories/shared";
 import { sharedGiftRepo } from "../repositories/shared";
@@ -681,6 +682,148 @@ describe("Payments routes", () => {
         .expect(404);
 
       expect(res.body.error.code).toBe("PAYMENT_NOT_FOUND");
+    });
+  });
+
+  // ============================================
+  // PAYMENT_CANCEL_REFUND-B1 (PAY2-B): cancellation <-> capture/refund webhook
+  // integration. CR9-CR12.
+  // ============================================
+  describe("Cancellation + refund webhook convergence (PAY2-B)", () => {
+    async function setupCapturedOrder() {
+      const { orderId, totalAmount } = await createDraftOrder(app);
+      const createRes = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders())
+        .send({ order_id: orderId })
+        .expect(200);
+      const rpOrderId = createRes.body.data.razorpay_order_id as string;
+      const captured = razorpayService.buildMockWebhook(
+        rpOrderId,
+        Math.round(totalAmount * 100),
+        "payment.captured",
+      );
+      await request(app)
+        .post("/api/v1/payments/webhook")
+        .set("X-Razorpay-Signature", captured.signature)
+        .set("Content-Type", "application/json")
+        .send(captured.payload)
+        .expect(200);
+      const paymentId = captured.payload.payload.payment.entity.id as string;
+      return { orderId, totalAmount, rpOrderId, paymentId };
+    }
+
+    function postRefund(paymentId: string, amountPaise: number) {
+      const refund = razorpayService.buildMockRefundWebhook(paymentId, amountPaise);
+      return request(app)
+        .post("/api/v1/payments/webhook")
+        .set("X-Razorpay-Signature", refund.signature)
+        .set("Content-Type", "application/json")
+        .send(refund.payload);
+    }
+
+    // CR9: refund webhook after CANCELLED -> payment REFUNDED, order stays CANCELLED.
+    it("CR9 refund webhook after cancellation -> payment REFUNDED, order stays CANCELLED", async () => {
+      const { orderId, totalAmount, paymentId } = await setupCapturedOrder();
+
+      const cancel = await sharedOrderRefundService.cancelOrder(orderId);
+      expect(cancel.order.status).toBe("CANCELLED");
+
+      const res = await postRefund(paymentId, Math.round(totalAmount * 100)).expect(200);
+      expect(res.body.data.processed).toBe(true);
+      expect(res.body.data.order_status).toBe("CANCELLED");
+
+      expect((await sharedPaymentRepo.findByRazorpayPaymentId(paymentId))?.status).toBe("REFUNDED");
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("CANCELLED");
+    });
+
+    // CR10: a stale refund webhook cannot move an incompatible order to REFUNDED.
+    it("CR10 stale refund webhook cannot move PICKED_UP to REFUNDED", async () => {
+      const { orderId, totalAmount, paymentId } = await setupCapturedOrder();
+      await sharedOrderRepo.updateStatus(orderId, "PICKED_UP");
+
+      const res = await postRefund(paymentId, Math.round(totalAmount * 100)).expect(200);
+
+      expect(res.body.data.order_status).toBe("PICKED_UP");
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("PICKED_UP");
+      const payment = await sharedPaymentRepo.findByRazorpayPaymentId(paymentId);
+      expect(payment?.status).toBe("REFUNDED");
+      expect(payment?.manual_review).toBe(true);
+    });
+
+    // CR11: a late capture must never resurrect a cancelled order.
+    it("CR11 late capture after PAYMENT_PENDING cancellation -> never resurrected", async () => {
+      const { orderId, totalAmount } = await createDraftOrder(app);
+      const createRes = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders())
+        .send({ order_id: orderId })
+        .expect(200);
+      const rpOrderId = createRes.body.data.razorpay_order_id as string;
+
+      const cancel = await sharedOrderRefundService.cancelOrder(orderId);
+      expect(cancel.order.status).toBe("CANCELLED");
+
+      const events: string[] = [];
+      onEvent("PaymentSucceeded", async () => {
+        events.push("PaymentSucceeded");
+      });
+      const captured = razorpayService.buildMockWebhook(
+        rpOrderId,
+        Math.round(totalAmount * 100),
+        "payment.captured",
+      );
+      const res = await request(app)
+        .post("/api/v1/payments/webhook")
+        .set("X-Razorpay-Signature", captured.signature)
+        .set("Content-Type", "application/json")
+        .send(captured.payload)
+        .expect(200);
+
+      expect(res.body.data.order_status).toBe("CANCELLED");
+      expect((await sharedOrderRepo.getById(orderId))?.status).toBe("CANCELLED");
+      expect(events).toEqual([]);
+      const payment = await sharedPaymentRepo.findByRazorpayOrderId(rpOrderId);
+      expect(payment?.status).toBe("CAPTURED");
+      expect(payment?.manual_review).toBe(true);
+    });
+
+    // CR12: capture/cancel race in both interleavings -> at most one refund, no resurrection.
+    it("CR12 capture/cancel race -> no duplicate refund and no resurrection", async () => {
+      const refundSpy = vi.spyOn(razorpayService, "refund");
+
+      // Interleaving A: capture first, then cancel -> exactly one refund.
+      const { orderId: capturedFirst, totalAmount } = await setupCapturedOrder();
+      const cancelA = await sharedOrderRefundService.cancelOrder(capturedFirst);
+      expect(cancelA.order.status).toBe("CANCELLED");
+      expect(cancelA.refund).toBe("SUBMITTED");
+      expect(refundSpy).toHaveBeenCalledTimes(1);
+
+      // Interleaving B: cancel first, then a late capture -> never resurrected.
+      const { orderId: cancelledFirst } = await createDraftOrder(app);
+      const createRes = await request(app)
+        .post("/api/v1/payments/create-order")
+        .set(authHeaders())
+        .send({ order_id: cancelledFirst })
+        .expect(200);
+      const rpOrderId = createRes.body.data.razorpay_order_id as string;
+      await sharedOrderRefundService.cancelOrder(cancelledFirst);
+      const captured = razorpayService.buildMockWebhook(
+        rpOrderId,
+        Math.round(totalAmount * 100),
+        "payment.captured",
+      );
+      await request(app)
+        .post("/api/v1/payments/webhook")
+        .set("X-Razorpay-Signature", captured.signature)
+        .set("Content-Type", "application/json")
+        .send(captured.payload)
+        .expect(200);
+      expect((await sharedOrderRepo.getById(cancelledFirst))?.status).toBe("CANCELLED");
+
+      // Still exactly one refund across both interleavings.
+      expect(refundSpy).toHaveBeenCalledTimes(1);
+      refundSpy.mockRestore();
     });
   });
 });

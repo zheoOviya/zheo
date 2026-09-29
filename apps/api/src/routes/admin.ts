@@ -43,6 +43,7 @@ import {
   defaultReconciliationDeps,
   runPaymentReconciliationBatch,
 } from "../services/paymentReconciliation";
+import { sharedOrderRefundService } from "../services/orderRefund";
 
 const adminRouter: Router = Router();
 
@@ -438,7 +439,19 @@ adminRouter.post(
 
     // Single authoritative CAS write against the precondition. No blind
     // fallback and no retry: null means a concurrent writer won the race.
-    const updated = await sharedOrderRepo.transitionStatus(id, from_status, status);
+    //
+    // CANCELLED is routed through the shared cancellation/refund choke point so
+    // a paid order is refunded exactly once. `force` never bypasses that: the
+    // refund safety check lives in the choke point, outside the override policy.
+    // `from_status` is passed through as the optimistic precondition so the
+    // choke point cannot cancel a state this request did not observe.
+    let updated: OrderDTO | null;
+    if (status === "CANCELLED") {
+      const result = await sharedOrderRefundService.cancelOrder(id, from_status);
+      updated = result.order;
+    } else {
+      updated = await sharedOrderRepo.transitionStatus(id, from_status, status);
+    }
     if (!updated) {
       throw new AppError(
         "CONCURRENT_MODIFICATION",
