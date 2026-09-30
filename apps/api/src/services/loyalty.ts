@@ -10,6 +10,7 @@ import type {
   StampCard,
 } from "../repositories/loyaltyRepository";
 import type { OrderRepository } from "../repositories/orderRepository";
+import { getConsumerTransactionPort } from "../repositories/drizzle/consumerTransactionPort";
 import { logger } from "../lib/logger";
 
 // ============================================
@@ -21,6 +22,17 @@ import { logger } from "../lib/logger";
 
 export const REFERRAL_BONUS = 50;
 export const STAMP_CARD_SIZE = 10;
+
+/** EVT-C2 durable consumer names. */
+export const CONSUMER_ORDER_STAMP = "loyalty.order_stamp";
+export const CONSUMER_GIFT_STAMP = "loyalty.gift_stamp";
+
+/** Repositories a stamp effect writes through (transaction-scoped for the
+ *  durable consumer path; the service's own repos for direct/legacy calls). */
+export interface LoyaltyStampEffectDeps {
+  loyalty: LoyaltyRepository;
+  orders: OrderRepository;
+}
 
 export interface ApplyReferralInput {
   claimantUserId: string;
@@ -182,41 +194,69 @@ export class LoyaltyService {
     return this.repo.getStampCards(userId);
   }
 
+  private stampDeps(): LoyaltyStampEffectDeps {
+    return { loyalty: this.repo, orders: this.orderRepo };
+  }
+
   /**
-   * OrderPickedUp hook. Increments the user-restaurant stamp card. On the
-   * 10th pickup the card unlocks a free item, resets to 0, and emits
-   * StampCardRewardUnlocked for the notification layer.
+   * Stamp effect only for a paid pickup (no audit/emit side effects). Used by
+   * the atomic EVT-C2 consumer, which supplies transaction-scoped deps so the
+   * card increment shares the marker's transaction.
    */
-  async onOrderPickedUp(orderId: string): Promise<StampCard | null> {
-    const order = await this.orderRepo.getById(orderId);
+  async applyOrderStamp(
+    orderId: string,
+    deps: LoyaltyStampEffectDeps = this.stampDeps(),
+  ): Promise<{
+    user_id: string;
+    restaurant_id: string;
+    before: StampCard | null;
+    card: StampCard;
+    reward_unlocked: boolean;
+  } | null> {
+    const order = await deps.orders.getById(orderId);
     if (!order) return null;
 
-    const before = await this.repo.getStampCard(order.user_id, order.restaurant_id);
-    const { card, reward_unlocked } = await this.repo.incrementStamp(
+    const before = await deps.loyalty.getStampCard(order.user_id, order.restaurant_id);
+    const { card, reward_unlocked } = await deps.loyalty.incrementStamp(
       order.user_id,
       order.restaurant_id,
     );
 
-    await sharedAuditRepo.log(order.user_id, "stamp_incremented", {
-      order_id: order.id,
+    return {
+      user_id: order.user_id,
       restaurant_id: order.restaurant_id,
+      before,
+      card,
+      reward_unlocked,
+    };
+  }
+
+  /** OrderPickedUp stamp effect, followed by audit log + reward event. */
+  async onOrderPickedUp(orderId: string): Promise<StampCard | null> {
+    const result = await this.applyOrderStamp(orderId);
+    if (!result) return null;
+    const { user_id, restaurant_id, before, card, reward_unlocked } = result;
+
+    await sharedAuditRepo.log(user_id, "stamp_incremented", {
+      order_id: orderId,
+      restaurant_id,
       stamp_count: card.stamp_count,
       total_orders: card.total_orders,
       reward_unlocked,
     });
 
     if (reward_unlocked) {
-      await sharedAuditRepo.log(order.user_id, "stamp_card_reward_unlocked", {
-        order_id: order.id,
-        restaurant_id: order.restaurant_id,
+      await sharedAuditRepo.log(user_id, "stamp_card_reward_unlocked", {
+        order_id: orderId,
+        restaurant_id,
         reward_type: "FREE_ITEM",
         stamp_count_before: before?.stamp_count ?? STAMP_CARD_SIZE,
         rewards_earned: card.rewards_earned,
       });
       await emit(
-        createEventEnvelope("StampCardRewardUnlocked", order.user_id, {
-          user_id: order.user_id,
-          restaurant_id: order.restaurant_id,
+        createEventEnvelope("StampCardRewardUnlocked", user_id, {
+          user_id,
+          restaurant_id,
           reward_type: "FREE_ITEM",
           stamp_count_before: before?.stamp_count ?? STAMP_CARD_SIZE,
           rewards_earned: card.rewards_earned,
@@ -228,6 +268,26 @@ export class LoyaltyService {
   }
 
   /**
+   * Gift stamp effect only (no audit/emit). The SENDER earns the stamp for a
+   * gifted pickup; transaction-scoped deps are supplied by the durable consumer.
+   */
+  async applyGiftStamp(
+    event: { gift_id: string; sender_id: string; restaurant_id: string },
+    loyalty: LoyaltyRepository = this.repo,
+  ): Promise<{
+    before: StampCard | null;
+    card: StampCard;
+    reward_unlocked: boolean;
+  }> {
+    const before = await loyalty.getStampCard(event.sender_id, event.restaurant_id);
+    const { card, reward_unlocked } = await loyalty.incrementStamp(
+      event.sender_id,
+      event.restaurant_id,
+    );
+    return { before, card, reward_unlocked };
+  }
+
+  /**
    * GiftFulfilled hook. The SENDER earns the stamp for a gifted pickup
    * (recipient does not double-dip with their own paid items).
    */
@@ -236,11 +296,7 @@ export class LoyaltyService {
     sender_id: string;
     restaurant_id: string;
   }): Promise<StampCard | null> {
-    const before = await this.repo.getStampCard(event.sender_id, event.restaurant_id);
-    const { card, reward_unlocked } = await this.repo.incrementStamp(
-      event.sender_id,
-      event.restaurant_id,
-    );
+    const { before, card, reward_unlocked } = await this.applyGiftStamp(event);
 
     await sharedAuditRepo.log(event.sender_id, "gift_stamp_incremented", {
       gift_id: event.gift_id,
@@ -285,16 +341,86 @@ let registered = false;
 export function registerLoyaltyEventHandlers(): void {
   if (registered) return;
   registered = true;
+
+  // Atomic, idempotent paid-pickup stamp consumer (EVT-C2): marker + card
+  // increment share one transaction. Duplicate delivery loses the claim and
+  // mutates nothing; a failing effect rolls the marker back and rejects.
   onEvent("OrderPickedUp", async (event) => {
     const payload = event.payload as { order_id: string };
-    await loyaltyService.onOrderPickedUp(payload.order_id);
+    const result = await getConsumerTransactionPort().runInTransaction(
+      async (scope) => {
+        const won = await scope.claim(CONSUMER_ORDER_STAMP, event.event_id);
+        if (!won) return null;
+        return loyaltyService.applyOrderStamp(payload.order_id, {
+          loyalty: scope.loyalty,
+          orders: scope.orders,
+        });
+      },
+    );
+    if (!result) return;
+
+    await sharedAuditRepo.log(result.user_id, "stamp_incremented", {
+      order_id: payload.order_id,
+      restaurant_id: result.restaurant_id,
+      stamp_count: result.card.stamp_count,
+      total_orders: result.card.total_orders,
+      reward_unlocked: result.reward_unlocked,
+    });
+
+    if (result.reward_unlocked) {
+      await sharedAuditRepo.log(result.user_id, "stamp_card_reward_unlocked", {
+        order_id: payload.order_id,
+        restaurant_id: result.restaurant_id,
+        reward_type: "FREE_ITEM",
+        stamp_count_before: result.before?.stamp_count ?? STAMP_CARD_SIZE,
+        rewards_earned: result.card.rewards_earned,
+      });
+      await emit(
+        createEventEnvelope("StampCardRewardUnlocked", result.user_id, {
+          user_id: result.user_id,
+          restaurant_id: result.restaurant_id,
+          reward_type: "FREE_ITEM",
+          stamp_count_before: result.before?.stamp_count ?? STAMP_CARD_SIZE,
+          rewards_earned: result.card.rewards_earned,
+        }),
+      );
+    }
   });
+
+  // Atomic, idempotent gift stamp consumer (EVT-C2), distinct consumer name.
   onEvent("GiftFulfilled", async (event) => {
     const payload = event.payload as {
       gift_id: string;
       sender_id: string;
       restaurant_id: string;
     };
-    await loyaltyService.onGiftFulfilled(payload);
+    const result = await getConsumerTransactionPort().runInTransaction(
+      async (scope) => {
+        const won = await scope.claim(CONSUMER_GIFT_STAMP, event.event_id);
+        if (!won) return null;
+        return loyaltyService.applyGiftStamp(payload, scope.loyalty);
+      },
+    );
+    if (!result) return;
+
+    await sharedAuditRepo.log(payload.sender_id, "gift_stamp_incremented", {
+      gift_id: payload.gift_id,
+      restaurant_id: payload.restaurant_id,
+      stamp_count: result.card.stamp_count,
+      total_orders: result.card.total_orders,
+      reward_unlocked: result.reward_unlocked,
+    });
+
+    if (result.reward_unlocked) {
+      await emit(
+        createEventEnvelope("StampCardRewardUnlocked", payload.sender_id, {
+          user_id: payload.sender_id,
+          restaurant_id: payload.restaurant_id,
+          reward_type: "FREE_ITEM",
+          stamp_count_before: result.before?.stamp_count ?? STAMP_CARD_SIZE,
+          rewards_earned: result.card.rewards_earned,
+        }),
+      );
+    }
   });
 }

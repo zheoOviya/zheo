@@ -166,11 +166,35 @@ function createFakeDb(): FakeDb {
       }),
     }),
     insert: (table: unknown) => ({
-      values: async (values: Record<string, unknown>) => {
-        const row = { created_at: new Date(), ...values };
-        enforceUnique(table, row);
-        rowsFor(table).push(row);
-        return [row];
+      values: (values: Record<string, unknown>) => {
+        // Lazy, builder-like: the insert runs only when awaited or when a
+        // terminal method is called, mirroring Drizzle. `.onConflictDoNothing()`
+        // swallows ONLY a unique violation (the form ensureRow relies on to
+        // stay transaction-safe).
+        const doInsert = async (): Promise<Record<string, unknown>[]> => {
+          const row = { created_at: new Date(), ...values };
+          enforceUnique(table, row);
+          rowsFor(table).push(row);
+          return [row];
+        };
+        const isUnique = (err: unknown): boolean =>
+          (err as { cause?: { code?: string } }).cause?.code === "23505";
+        return {
+          then: (
+            onFulfilled?: (v: Record<string, unknown>[]) => unknown,
+            onRejected?: (e: unknown) => unknown,
+          ) => doInsert().then(onFulfilled, onRejected),
+          catch: (onRejected: (e: unknown) => unknown) =>
+            doInsert().catch(onRejected),
+          onConflictDoNothing: async (): Promise<Record<string, unknown>[]> => {
+            try {
+              return await doInsert();
+            } catch (err) {
+              if (isUnique(err)) return [];
+              throw err;
+            }
+          },
+        };
       },
     }),
     update: (table: unknown) => ({

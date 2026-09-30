@@ -25,9 +25,11 @@ type DrizzleLike = {
     };
   };
   insert: (table: unknown) => {
-    values: (
-      values: Record<string, unknown>,
-    ) => { onConflictDoNothing: () => Promise<unknown[]> };
+    values: (values: Record<string, unknown>) => {
+      onConflictDoNothing: () => Promise<unknown[]> & {
+        returning: (fields: unknown) => Promise<unknown[]>;
+      };
+    };
   };
 };
 
@@ -56,6 +58,19 @@ export class DrizzleEventConsumerDedupRepository
       .insert(event_consumer_dedup)
       .values({ consumer_name: consumerName, event_id: eventId })
       .onConflictDoNothing();
+  }
+
+  async tryMarkProcessed(
+    consumerName: string,
+    eventId: string,
+  ): Promise<boolean> {
+    const db = this.db as unknown as DrizzleLike;
+    const rows = await db
+      .insert(event_consumer_dedup)
+      .values({ consumer_name: consumerName, event_id: eventId })
+      .onConflictDoNothing()
+      .returning({ event_id: event_consumer_dedup.event_id });
+    return rows.length > 0;
   }
 
   _reset(): void {
@@ -88,6 +103,25 @@ export async function hasProcessedInTx(
   eventId: string,
 ): Promise<boolean> {
   return new DrizzleEventConsumerDedupRepository(tx).hasProcessed(
+    consumerName,
+    eventId,
+  );
+}
+
+/**
+ * Atomic claim on the caller's transaction handle (EVT-C2).
+ *
+ * Returns `true` iff this transaction newly inserted the marker. MUST share the
+ * caller's transaction so the claim commits or rolls back together with the
+ * business effect it guards; a losing concurrent transaction sees the conflict
+ * as a no-op and must perform zero business mutation.
+ */
+export async function tryMarkProcessedInTx(
+  tx: DrizzleDb,
+  consumerName: string,
+  eventId: string,
+): Promise<boolean> {
+  return new DrizzleEventConsumerDedupRepository(tx).tryMarkProcessed(
     consumerName,
     eventId,
   );

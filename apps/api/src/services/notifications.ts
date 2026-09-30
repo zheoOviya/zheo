@@ -12,11 +12,11 @@ import {
   classifyNotificationError,
 } from "../repositories/notificationRepository";
 import type {
-  EnqueueNotificationInput,
   NotificationChannel,
   NotificationDTO,
   SafeErrorCategory,
 } from "../repositories/notificationRepository";
+import { getConsumerTransactionPort } from "../repositories/drizzle/consumerTransactionPort";
 
 // ============================================
 // Vendor onboarding notifications (outbox)
@@ -320,10 +320,6 @@ export function stopNotificationRetrySweep(): void {
   logger.info({ message: "notification_retry_sweep_stopped" });
 }
 
-async function enqueue(input: EnqueueNotificationInput): Promise<void> {
-  await sharedNotificationRepo.enqueue(input);
-}
-
 function approvedBody(name: string): string {
   return `SnakZap: your application for ${name} has been approved. You can now manage your restaurant from the vendor console.`;
 }
@@ -333,47 +329,63 @@ function rejectedBody(name: string, reason: string | null): string {
   return `SnakZap: your application for ${name} was not approved.${why}`;
 }
 
+export const CONSUMER_VENDOR_APPROVED = "notifications.vendor_approved";
+export const CONSUMER_VENDOR_REJECTED = "notifications.vendor_rejected";
+
 let registered = false;
 
 export function registerVendorNotificationHandlers(): void {
   if (registered) return;
   registered = true;
 
+  // Atomic, idempotent vendor-approval consumer (EVT-C2): the marker claim and
+  // every durable enqueue (sms + optional email) share one transaction, so a
+  // redelivery cannot duplicate the outbox rows. Distinct consumer name from
+  // the rejected path so the two effects dedup independently.
   onEvent("VendorApplicationApproved", async (event) => {
     const p = event.payload as VendorApplicationApprovedEvent;
-    await enqueue({
-      user_id: p.applicant_id,
-      channel: "sms",
-      to_address: p.phone,
-      body: approvedBody(p.name),
-    });
-    if (p.contact_email) {
-      await enqueue({
+    await getConsumerTransactionPort().runInTransaction(async (scope) => {
+      const won = await scope.claim(CONSUMER_VENDOR_APPROVED, event.event_id);
+      if (!won) return;
+      await scope.notifications.enqueue({
         user_id: p.applicant_id,
-        channel: "email",
-        to_address: p.contact_email,
+        channel: "sms",
+        to_address: p.phone,
         body: approvedBody(p.name),
       });
-    }
+      if (p.contact_email) {
+        await scope.notifications.enqueue({
+          user_id: p.applicant_id,
+          channel: "email",
+          to_address: p.contact_email,
+          body: approvedBody(p.name),
+        });
+      }
+    });
     void drainNotifications();
   });
 
+  // Atomic, idempotent vendor-rejection consumer (EVT-C2), distinct consumer name.
   onEvent("VendorApplicationRejected", async (event) => {
     const p = event.payload as VendorApplicationRejectedEvent;
-    await enqueue({
-      user_id: p.applicant_id,
-      channel: "sms",
-      to_address: p.phone,
-      body: rejectedBody(p.name, p.reason),
-    });
-    if (p.contact_email) {
-      await enqueue({
+    await getConsumerTransactionPort().runInTransaction(async (scope) => {
+      const won = await scope.claim(CONSUMER_VENDOR_REJECTED, event.event_id);
+      if (!won) return;
+      await scope.notifications.enqueue({
         user_id: p.applicant_id,
-        channel: "email",
-        to_address: p.contact_email,
+        channel: "sms",
+        to_address: p.phone,
         body: rejectedBody(p.name, p.reason),
       });
-    }
+      if (p.contact_email) {
+        await scope.notifications.enqueue({
+          user_id: p.applicant_id,
+          channel: "email",
+          to_address: p.contact_email,
+          body: rejectedBody(p.name, p.reason),
+        });
+      }
+    });
     void drainNotifications();
   });
 }

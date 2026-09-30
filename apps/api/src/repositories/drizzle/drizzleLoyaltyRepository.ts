@@ -115,17 +115,27 @@ export class DrizzleLoyaltyRepository implements LoyaltyRepository {
     return (await rowsPromise) as Record<string, unknown>[];
   }
 
-  /** Autocommit insert that ignores an expected unique violation, used only to
-   *  lazily materialize a default row before its locking transaction. */
+  /** Insert-if-absent default row before its locking transaction.
+   *
+   *  Uses ON CONFLICT DO NOTHING (no conflict target) rather than catching the
+   *  23505 error: a caught unique violation still ABORTS the enclosing
+   *  PostgreSQL transaction, which would break EVT-C2 consumers that lazily
+   *  materialize this row INSIDE their atomic marker+effect transaction (e.g.
+   *  a second cashback/streak/stamp for a user who already has the row). The
+   *  no-op conflict form never raises, so it is safe in both autocommit and
+   *  explicit-transaction callers. */
   private async ensureRow(
     table: unknown,
     values: Record<string, unknown>,
   ): Promise<void> {
-    try {
-      await this.db.insert(table).values(values);
-    } catch (err) {
-      if (!isUniqueViolation(err)) throw err;
-    }
+    const db = this.db as unknown as {
+      insert: (t: unknown) => {
+        values: (v: Record<string, unknown>) => {
+          onConflictDoNothing: () => Promise<unknown[]>;
+        };
+      };
+    };
+    await db.insert(table).values(values).onConflictDoNothing();
   }
 
   // ---- referral codes ------------------------------------------------------

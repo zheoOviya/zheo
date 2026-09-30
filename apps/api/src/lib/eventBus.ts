@@ -51,7 +51,10 @@ export function onEvent(name: EventName, handler: EventHandler): void {
   handlers.set(name, list);
 }
 
-async function dispatchToHandlers(event: TypedEventEnvelope<EventName>): Promise<void> {
+async function dispatchToHandlers(
+  event: TypedEventEnvelope<EventName>,
+  propagateHandlerErrors: boolean,
+): Promise<void> {
   logger.info({
     message: "event_emitted",
     event_name: event.event_name,
@@ -69,6 +72,11 @@ async function dispatchToHandlers(event: TypedEventEnvelope<EventName>): Promise
         event_name: event.event_name,
         error: err instanceof Error ? err.message : String(err),
       });
+      // Historical best-effort emit()/subscriber dispatch keeps swallowing
+      // per-handler failures. The strict durable-publish path sets this flag so
+      // a failed consumer reaches the relay, which then retains the outbox row
+      // for retry instead of deleting it as delivered (EVT-C2).
+      if (propagateHandlerErrors) throw err;
     }
   }
 }
@@ -131,7 +139,7 @@ function handleSubscriberMessage(channel: string, message: string): void {
     return;
   }
 
-  void dispatchToHandlers(event).catch((err) => {
+  void dispatchToHandlers(event, false).catch((err) => {
     logger.error({
       message: "event_subscriber_dispatch_error",
       error: err instanceof Error ? err.message : String(err),
@@ -238,7 +246,7 @@ export async function shutdownEventSubscriber(): Promise<void> {
 export async function emit<K extends EventName>(
   event: TypedEventEnvelope<K>,
 ): Promise<void> {
-  await dispatchToHandlers(event as TypedEventEnvelope<EventName>);
+  await dispatchToHandlers(event as TypedEventEnvelope<EventName>, false);
 
   const published = {
     ...event,
@@ -267,9 +275,12 @@ export async function emit<K extends EventName>(
  * Semantics are intentionally DIFFERENT from emit():
  *   - a transport (Redis) failure REJECTS, so the outbox relay retries the row
  *     instead of deleting it. emit() keeps its historical best-effort swallow.
- *   - in-process handler errors stay isolated and logged (unchanged dispatch
- *     semantics); a handler failure is a consumer concern, not a transport
- *     failure, so it does not reject.
+ *   - an in-process HANDLER failure also REJECTS (EVT-C2), so a failed consumer
+ *     leaves the outbox row in place for retry instead of the relay deleting it
+ *     as if the event were processed. Consumers are idempotent (marker + effect
+ *     in one transaction), so redelivery after a failure is safe.
+ *
+ * emit()'s and the subscriber's historical best-effort swallow is unchanged.
  *
  * The persisted event identity is preserved by the caller: this function never
  * mints a new event_id. DELIVERY = AT_LEAST_ONCE; EXACTLY_ONCE is not claimed.
@@ -277,7 +288,7 @@ export async function emit<K extends EventName>(
 export async function publishDurableEnvelope<K extends EventName>(
   event: TypedEventEnvelope<K>,
 ): Promise<void> {
-  await dispatchToHandlers(event as TypedEventEnvelope<EventName>);
+  await dispatchToHandlers(event as TypedEventEnvelope<EventName>, true);
 
   const published = {
     ...event,

@@ -28,6 +28,13 @@ export interface EventConsumerDedupRepository {
   /** True when this (consumer, event) pair has already been processed. */
   hasProcessed(consumerName: string, eventId: string): Promise<boolean>;
   /**
+   * Atomically claim the (consumer, event) marker. Returns `true` iff THIS call
+   * inserted the marker (i.e. won the claim) and `false` when the pair already
+   * existed. The composite PRIMARY KEY is the concurrency authority, so exactly
+   * one concurrent caller can win.
+   */
+  tryMarkProcessed(consumerName: string, eventId: string): Promise<boolean>;
+  /**
    * Record the (consumer, event) marker. Idempotent: a duplicate pair never
    * creates a second marker and never throws.
    */
@@ -58,6 +65,17 @@ export class MemoryEventConsumerDedupRepository
       event_id: eventId,
       processed_at: this.clock().toISOString(),
     });
+  }
+
+  async tryMarkProcessed(consumerName: string, eventId: string): Promise<boolean> {
+    const key = keyOf(consumerName, eventId);
+    if (this.entries.has(key)) return false;
+    this.entries.set(key, {
+      consumer_name: consumerName,
+      event_id: eventId,
+      processed_at: this.clock().toISOString(),
+    });
+    return true;
   }
 
   /** Test seam: read every marker (no production caller). */
