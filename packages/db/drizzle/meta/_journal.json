@@ -183,6 +183,13 @@
       "when": 1792560009173,
       "tag": "0025_soft_cobalt_man",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792560009174,
+      "tag": "0026_eager_grim_reaper",
+      "breakpoints": true
     }
   ]
 }

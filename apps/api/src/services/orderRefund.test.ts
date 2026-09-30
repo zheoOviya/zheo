@@ -9,6 +9,7 @@ import {
 } from "../repositories/paymentRepository";
 import { MemoryGiftRepository } from "../repositories/giftRepository";
 import { MemoryFulfillmentTransactionPort } from "../repositories/fulfillmentAtomicityContracts";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 import { OrderRefundService, type OrderRefundGateway } from "./orderRefund";
 
 // ============================================
@@ -125,7 +126,11 @@ describe("OrderRefundService cancellation + refund choke point (PAY2-B)", () => 
     payments = new GatedPaymentRepository();
     gifts = new MemoryGiftRepository();
     gateway = new FakeRefundGateway();
-    const port = new MemoryFulfillmentTransactionPort(() => ({ orders, gifts }));
+    const port = new MemoryFulfillmentTransactionPort(() => ({
+      orders,
+      gifts,
+      outbox: memoryEventOutbox,
+    }));
     service = new OrderRefundService(orders, payments, gateway, port);
   });
 

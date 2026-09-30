@@ -11,7 +11,16 @@ import {
   sharedOrderRepo,
   sharedPromotionRepo,
 } from "../repositories/shared";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
+import { EventOutboxRelay } from "../services/eventOutboxRelay";
 import { resetCatalogRepository } from "./catalog";
+
+// EVT-B2A: OrderPickedUp is now enqueued transactionally and delivered by the
+// durable relay, not a post-commit direct emit. Drain the shared memory outbox
+// so consumer side effects run through the real delivery path.
+async function drainEventOutbox(): Promise<void> {
+  await new EventOutboxRelay({ repo: memoryEventOutbox }).tick();
+}
 
 // ============================================
 // Retention routes (O12 wallet + L02 streak) + D03 spice profile
@@ -68,6 +77,7 @@ async function confirmPickup(app: Express, orderId: string): Promise<void> {
     .set(vendorAuthHeaders())
     .send({ pickup_otp: order?.pickup_otp })
     .expect(200);
+  await drainEventOutbox();
 }
 
 describe("Retention routes", () => {
@@ -75,6 +85,7 @@ describe("Retention routes", () => {
 
   beforeEach(() => {
     resetRedisForTests();
+    memoryEventOutbox._reset();
     sharedOrderRepo._reset();
     sharedLoyaltyRepo._reset();
     sharedAuditRepo._reset();

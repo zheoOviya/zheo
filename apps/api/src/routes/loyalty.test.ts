@@ -9,6 +9,15 @@ import {
   sharedLoyaltyRepo,
   sharedOrderRepo,
 } from "../repositories/shared";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
+import { EventOutboxRelay } from "../services/eventOutboxRelay";
+
+// EVT-B2A: OrderPickedUp is now enqueued transactionally and delivered by the
+// durable relay, not a post-commit direct emit. Drain the shared memory outbox
+// so consumer side effects run through the real delivery path.
+async function drainEventOutbox(): Promise<void> {
+  await new EventOutboxRelay({ repo: memoryEventOutbox }).tick();
+}
 
 // ============================================
 // Loyalty routes (L05 Refer & Earn + L01 Stamp Card) end-to-end
@@ -49,6 +58,7 @@ describe("Loyalty routes", () => {
 
   beforeEach(() => {
     resetRedisForTests();
+    memoryEventOutbox._reset();
     sharedOrderRepo._reset();
     sharedAuditRepo._reset();
     sharedLoyaltyRepo._reset();
@@ -189,6 +199,8 @@ describe("Loyalty routes", () => {
         .set(vendorAuthHeaders())
         .send({ pickup_otp: ready?.pickup_otp })
         .expect(200);
+
+      await drainEventOutbox();
 
       const cards = await request(app)
         .get("/api/v1/loyalty/stamp-cards")

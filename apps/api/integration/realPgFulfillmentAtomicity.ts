@@ -111,7 +111,11 @@ class GatedConsumePort implements FulfillmentTransactionPort {
           return typeof value === "function" ? value.bind(target) : value;
         },
       });
-      return fn({ orders: orders as FulfillmentTxRepos["orders"], gifts: repos.gifts });
+      return fn({
+        orders: orders as FulfillmentTxRepos["orders"],
+        gifts: repos.gifts,
+        outbox: repos.outbox,
+      });
     });
   }
 }
@@ -133,7 +137,11 @@ class FailingGiftPort implements FulfillmentTransactionPort {
           return typeof value === "function" ? value.bind(target) : value;
         },
       });
-      return fn({ orders: repos.orders, gifts: gifts as FulfillmentGiftRepo });
+      return fn({
+        orders: repos.orders,
+        gifts: gifts as FulfillmentGiftRepo,
+        outbox: repos.outbox,
+      });
     });
   }
 }

@@ -21,7 +21,14 @@ vi.mock("../lib/eventBus", () => ({
     event_name: string,
     aggregate_id: string,
     payload: unknown,
-  ) => ({ event_name, aggregate_id, payload }),
+    metadata: Record<string, unknown> = {},
+  ) => ({
+    event_id: globalThis.crypto.randomUUID(),
+    event_name,
+    aggregate_id,
+    payload,
+    metadata,
+  }),
   emit: vi.fn(async (envelope: { event_name: string; aggregate_id: string; payload: unknown }) => {
     state.log.push(`emit:${envelope.event_name}`);
     state.events.push(envelope);
@@ -39,6 +46,9 @@ import { MemoryOrderRepository } from "../repositories/orderRepository";
 import type { OrderDTO } from "../repositories/orderRepository";
 import { MemoryGiftRepository } from "../repositories/giftRepository";
 import type { GiftDTO } from "../repositories/giftRepository";
+import {
+  MemoryEventOutboxRepository,
+} from "../repositories/eventOutboxRepository";
 import type {
   FulfillmentOrderRepo,
   FulfillmentGiftRepo,
@@ -133,9 +143,23 @@ class ControllableOrderRepository extends MemoryOrderRepository {
   }
 }
 
+class LoggingOutbox extends MemoryEventOutboxRepository {
+  private readonly logFn: (entry: string) => void;
+  constructor(logFn: (entry: string) => void) {
+    super();
+    this.logFn = logFn;
+  }
+
+  override async enqueue(envelope: Parameters<MemoryEventOutboxRepository["enqueue"]>[0]): Promise<void> {
+    this.logFn(`outbox.enqueue:${envelope.event_name}`);
+    await super.enqueue(envelope);
+  }
+}
+
 class Harness {
   readonly orders = new ControllableOrderRepository();
   readonly gifts = new MemoryGiftRepository();
+  readonly outbox = new LoggingOutbox(log);
 
   /** Controlled failures injected into the tx-scoped gift mutations. */
   txGiftFulfillThrow = false;
@@ -175,7 +199,11 @@ class Harness {
     const port: FulfillmentTransactionPort = {
       runInTransaction: async (fn) => {
         log("tx.begin");
-        const result = await fn({ orders: this.txOrders, gifts: this.txGifts });
+        const result = await fn({
+          orders: this.txOrders,
+          gifts: this.txGifts,
+          outbox: this.outbox,
+        });
         log("tx.end");
         return result;
       },
@@ -216,8 +244,6 @@ class Harness {
 }
 
 const published = (): boolean => state.log.includes("publish");
-const emitted = (prefix: string): boolean =>
-  state.log.some((e) => e.startsWith(`emit:${prefix}`));
 
 describe("FulfillmentService CAS + atomicity semantics", () => {
   let h: Harness;
@@ -352,7 +378,7 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
       ).rejects.toMatchObject({ code: "ORDER_NOT_FOUND", status: 404 });
     });
 
-    it("P8 gift markFulfilled throw aborts the tx with zero events", async () => {
+    it("P8 gift markFulfilled throw aborts the tx with zero durable events", async () => {
       const gift = await h.claimedGift();
       await h.gifts.bindToOrder(gift.id, OID);
       h.seed(OID, "READY_FOR_PICKUP", { otp: "1234", giftId: gift.id });
@@ -367,12 +393,10 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
       expect(consume).toBeGreaterThanOrEqual(0);
       expect(fulfill).toBeGreaterThan(consume);
       expect(published()).toBe(false);
-      expect(emitted("OrderPickedUp")).toBe(false);
-      expect(emitted("GiftFulfilled")).toBe(false);
-      expect(state.log.some((e) => e.startsWith("emit:"))).toBe(false);
+      expect(h.outbox._all()).toHaveLength(0);
     });
 
-    it("P9 consume CAS miss yields zero gifts/events", async () => {
+    it("P9 consume CAS miss yields zero gifts/durable events", async () => {
       const gift = await h.claimedGift();
       await h.gifts.bindToOrder(gift.id, OID);
       h.seed(OID, "READY_FOR_PICKUP", { otp: "1234", giftId: gift.id });
@@ -385,7 +409,7 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
       expect(state.log).toContain("orders.consumePickupOtp");
       expect(state.log).not.toContain("gifts.markFulfilled");
       expect(published()).toBe(false);
-      expect(state.log.some((e) => e.startsWith("emit:"))).toBe(false);
+      expect(h.outbox._all()).toHaveLength(0);
     });
   });
 
@@ -422,39 +446,39 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
       expect(event).toBeGreaterThan(publish);
     });
 
-    it("E2 pickup commits before publishing and emitting", async () => {
+    it("E2 pickup commits (with durable events enqueued inside the tx) before publishing", async () => {
       const gift = await h.claimedGift();
       await h.gifts.bindToOrder(gift.id, OID);
       h.seed(OID, "READY_FOR_PICKUP", { otp: "1234", giftId: gift.id });
       await h.service.confirmPickup(OID, "1234");
       const consume = state.log.indexOf("orders.consumePickupOtp");
       const giftMark = state.log.indexOf("gifts.markFulfilled");
+      const picked = state.log.indexOf("outbox.enqueue:OrderPickedUp");
+      const fulfilled = state.log.indexOf("outbox.enqueue:GiftFulfilled");
       const commit = state.log.indexOf("tx.end");
       const publish = state.log.indexOf("publish");
-      const picked = state.log.indexOf("emit:OrderPickedUp");
-      const fulfilled = state.log.indexOf("emit:GiftFulfilled");
       expect(consume).toBeGreaterThanOrEqual(0);
       expect(giftMark).toBeGreaterThan(consume);
-      expect(commit).toBeGreaterThan(giftMark);
-      expect(publish).toBeGreaterThan(commit);
-      expect(picked).toBeGreaterThan(publish);
+      expect(picked).toBeGreaterThan(giftMark);
       expect(fulfilled).toBeGreaterThan(picked);
+      expect(commit).toBeGreaterThan(fulfilled);
+      expect(publish).toBeGreaterThan(commit);
     });
 
-    it("E3 rejected pickup emits no publish/event", async () => {
+    it("E3 rejected pickup emits no publish/durable event", async () => {
       h.seed(OID, "READY_FOR_PICKUP", { otp: "1234" });
       await expect(
         h.service.confirmPickup(OID, "0000"),
       ).rejects.toBeTruthy();
       expect(published()).toBe(false);
-      expect(state.log.some((e) => e.startsWith("emit:"))).toBe(false);
+      expect(h.outbox._all()).toHaveLength(0);
     });
 
-    it("E4 OrderPickedUp payload carries order_id/restaurant_id and no pickup_otp", async () => {
+    it("E4 OrderPickedUp outbox payload carries order_id/restaurant_id and no pickup_otp", async () => {
       h.seed(OID, "READY_FOR_PICKUP", { otp: "1234" });
       await h.service.confirmPickup(OID, "1234");
 
-      const pickedUp = state.events.find((e) => e.event_name === "OrderPickedUp");
+      const pickedUp = h.outbox._all().find((r) => r.event_name === "OrderPickedUp");
       expect(pickedUp).toBeDefined();
       const payload = pickedUp?.payload as Record<string, unknown>;
       expect(payload.order_id).toBe(OID);

@@ -261,6 +261,37 @@ export async function emit<K extends EventName>(
   }
 }
 
+/**
+ * EVT-B1 strict durable publish seam.
+ *
+ * Semantics are intentionally DIFFERENT from emit():
+ *   - a transport (Redis) failure REJECTS, so the outbox relay retries the row
+ *     instead of deleting it. emit() keeps its historical best-effort swallow.
+ *   - in-process handler errors stay isolated and logged (unchanged dispatch
+ *     semantics); a handler failure is a consumer concern, not a transport
+ *     failure, so it does not reject.
+ *
+ * The persisted event identity is preserved by the caller: this function never
+ * mints a new event_id. DELIVERY = AT_LEAST_ONCE; EXACTLY_ONCE is not claimed.
+ */
+export async function publishDurableEnvelope<K extends EventName>(
+  event: TypedEventEnvelope<K>,
+): Promise<void> {
+  await dispatchToHandlers(event as TypedEventEnvelope<EventName>);
+
+  const published = {
+    ...event,
+    metadata: {
+      ...event.metadata,
+      source_instance_id: SOURCE_INSTANCE_ID,
+    },
+  };
+
+  const redis = getRedis();
+  await ensureRedisReady(redis);
+  await redis.publish(EVENT_CHANNEL, JSON.stringify(published));
+}
+
 // Test-only seams. Not used by production paths.
 export function resetEventBusForTests(): void {
   stopped = false;

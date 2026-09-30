@@ -7,6 +7,7 @@ import type { ChainDTO } from "./chainRepository";
 import type { IdentityUser } from "./identityRepository";
 import type { AssignUserRoleInput, UserRoleDTO } from "./userRoleRepository";
 import type { AuditLogEntry } from "./auditRepository";
+import type { EventOutboxRepository } from "./eventOutboxRepository";
 
 // ============================================
 // Vendor-approval transaction contracts (VENDOR-APPROVAL-ATOMICITY-A2).
@@ -60,6 +61,12 @@ export interface VendorApprovalTxRepos {
   identity: VendorApprovalIdentityRepo;
   userRole: VendorApprovalUserRoleRepo;
   audit: VendorApprovalAuditRepo;
+  /**
+   * Tx-scoped transactional outbox (EVT-B2A). `enqueue` runs on the SAME
+   * transaction handle as the application CAS, so a committed approve/reject
+   * persists its event row and a rolled-back one persists none.
+   */
+  outbox: Pick<EventOutboxRepository, "enqueue">;
 }
 
 export interface VendorApprovalTransactionPort {

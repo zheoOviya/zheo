@@ -1,6 +1,7 @@
 import type { OrderStatus } from "@snakzap/types";
 import type { OrderDTO } from "./orderRepository";
 import type { GiftDTO } from "./giftRepository";
+import type { EventOutboxRepository } from "./eventOutboxRepository";
 
 // ============================================
 // Fulfillment atomicity transaction contracts (FULFILLMENT-CAS-OTP-ATOMICITY).
@@ -43,6 +44,13 @@ export interface FulfillmentGiftRepo {
 export interface FulfillmentTxRepos {
   orders: FulfillmentOrderRepo;
   gifts: FulfillmentGiftRepo;
+  /**
+   * Tx-scoped transactional outbox (EVT-B2A). `enqueue` runs on the SAME
+   * transaction handle as `orders`/`gifts`, so a committed transition persists
+   * its event row and a rolled-back transition persists none. Only the narrow
+   * `enqueue` capability is exposed to the orchestration.
+   */
+  outbox: Pick<EventOutboxRepository, "enqueue">;
 }
 
 export interface FulfillmentTransactionPort {

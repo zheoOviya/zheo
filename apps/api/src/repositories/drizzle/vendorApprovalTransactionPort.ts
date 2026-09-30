@@ -14,12 +14,14 @@ import {
   sharedVendorApplicationRepo,
 } from "../shared";
 import { getCatalogRepository } from "../../routes/catalog";
+import { memoryEventOutbox } from "../memoryEventOutbox";
 import { DrizzleVendorApplicationRepository } from "../vendorApplicationRepository";
 import { DrizzleCatalogRepository } from "../catalogRepository";
 import { DrizzleChainRepository } from "../chainRepository";
 import { DrizzleUserRoleRepository } from "../userRoleRepository";
 import { DrizzleIdentityRepository } from "./drizzleIdentityRepository";
 import { DrizzleAuditRepository } from "./drizzleAuditRepository";
+import { DrizzleEventOutboxRepository } from "./drizzleEventOutboxRepository";
 
 // ============================================
 // Drizzle vendor-approval transaction port (VENDOR-APPROVAL-ATOMICITY-A2).
@@ -38,6 +40,9 @@ export function buildVendorApprovalTxRepos(tx: DrizzleDb): VendorApprovalTxRepos
     identity: new DrizzleIdentityRepository(tx),
     userRole: new DrizzleUserRoleRepository(tx),
     audit: new DrizzleAuditRepository(tx),
+    // Same tx handle: the outbox INSERT commits or rolls back with the
+    // application status transition and its side effects (EVT-B2A).
+    outbox: new DrizzleEventOutboxRepository(tx),
   };
 }
 
@@ -83,6 +88,7 @@ function memoryVendorApprovalTxRepos(): VendorApprovalTxRepos {
     identity: sharedIdentityRepo,
     userRole: sharedUserRoleRepo,
     audit: sharedAuditRepo,
+    outbox: memoryEventOutbox,
   };
 }
 

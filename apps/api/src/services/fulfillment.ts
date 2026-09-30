@@ -231,19 +231,36 @@ export class FulfillmentService {
         throw new AppError("INVALID_OTP", "Invalid pickup OTP", 400);
       }
 
-      // OTP consumption + PICKED_UP + gift fulfillment share ONE PG transaction.
+      // OTP consumption + PICKED_UP + gift fulfillment + the durable event rows
+      // share ONE PG transaction, so the events commit iff the pickup commits.
       const result = await this.getTransactionPort().runInTransaction(
-        async ({ orders, gifts }) => {
+        async ({ orders, gifts, outbox }) => {
           const picked = await orders.consumePickupOtp(orderId, "READY_FOR_PICKUP", pickupOtp);
           if (!picked) return null;
           const fulfilled = await this.fulfillGiftsTx(gifts, picked);
+          await outbox.enqueue(
+            createEventEnvelope("OrderPickedUp", picked.id, {
+              order_id: picked.id,
+              restaurant_id: picked.restaurant_id,
+            }),
+          );
+          for (const gift of fulfilled) {
+            await outbox.enqueue(
+              createEventEnvelope("GiftFulfilled", gift.id, {
+                gift_id: gift.id,
+                sender_id: gift.sender_id,
+                restaurant_id: gift.restaurant_id,
+                order_id: picked.id,
+              }),
+            );
+          }
           return { picked, fulfilled };
         },
       );
       if (!result) {
         throw await this.pickupConflict(orderId);
       }
-      await this.afterPickup(result.picked, result.fulfilled);
+      await this.afterPickup(result.picked);
       return result.picked;
     }
 
@@ -284,33 +301,16 @@ export class FulfillmentService {
     return fulfilled;
   }
 
-  /** Post-commit pickup events/notifications only. */
-  private async afterPickup(
-    order: OrderDTO,
-    fulfilled: GiftDTO[],
-  ): Promise<void> {
+  /**
+   * Post-commit pickup side effects only. The durable OrderPickedUp /
+   * GiftFulfilled events are enqueued INSIDE the pickup transaction (EVT-B2A),
+   * so this method must not emit them again (that would double-deliver).
+   */
+  private async afterPickup(order: OrderDTO): Promise<void> {
     await publishStatusUpdate({
       order_id: order.id,
       restaurant_id: order.restaurant_id,
       status: "PICKED_UP",
     });
-
-    await emit(
-      createEventEnvelope("OrderPickedUp", order.id, {
-        order_id: order.id,
-        restaurant_id: order.restaurant_id,
-      }),
-    );
-
-    for (const gift of fulfilled) {
-      await emit(
-        createEventEnvelope("GiftFulfilled", gift.id, {
-          gift_id: gift.id,
-          sender_id: gift.sender_id,
-          restaurant_id: gift.restaurant_id,
-          order_id: order.id,
-        }),
-      );
-    }
   }
 }

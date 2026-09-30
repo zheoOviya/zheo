@@ -6,8 +6,10 @@ import {
   type FulfillmentTxRepos,
 } from "../fulfillmentAtomicityContracts";
 import { getStorageMode, sharedGiftRepo, sharedOrderRepo } from "../shared";
+import { memoryEventOutbox } from "../memoryEventOutbox";
 import { DrizzleOrderRepository } from "./drizzleOrderRepository";
 import { DrizzleGiftRepository } from "./drizzleGiftRepository";
+import { DrizzleEventOutboxRepository } from "./drizzleEventOutboxRepository";
 
 // ============================================
 // Drizzle fulfillment transaction port (FULFILLMENT-CAS-OTP-ATOMICITY).
@@ -21,6 +23,9 @@ export function buildFulfillmentTxRepos(tx: DrizzleDb): FulfillmentTxRepos {
   return {
     orders: new DrizzleOrderRepository(tx),
     gifts: new DrizzleGiftRepository(tx),
+    // Same tx handle: the outbox INSERT commits or rolls back with the order
+    // CAS and gift fulfillment (EVT-B2A).
+    outbox: new DrizzleEventOutboxRepository(tx),
   };
 }
 
@@ -62,6 +67,7 @@ function memoryFulfillmentTxRepos(): FulfillmentTxRepos {
   return {
     orders: sharedOrderRepo,
     gifts: sharedGiftRepo,
+    outbox: memoryEventOutbox,
   };
 }
 

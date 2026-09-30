@@ -24,7 +24,7 @@ import {
   decodeNotificationInspectionCursor,
   encodeNotificationInspectionCursor,
 } from "../repositories/notificationRepository";
-import { emit, createEventEnvelope } from "../lib/eventBus";
+import { createEventEnvelope } from "../lib/eventBus";
 import { getCatalogRepository } from "./catalog";
 import { getVendorApprovalTransactionPort } from "../repositories/drizzle/vendorApprovalTransactionPort";
 import type { RestaurantDTO } from "../repositories/catalogRepository";
@@ -697,6 +697,18 @@ adminRouter.put(
         outlet_count: chainId ? outletIds.length : 1,
       });
 
+      // Durable approval event, committed atomically with the status CAS and
+      // every approval side effect. No post-commit emit (EVT-B2A).
+      await repos.outbox.enqueue(
+        createEventEnvelope("VendorApplicationApproved", id, {
+          applicant_id: claimed.applicant_id,
+          name: claimed.name,
+          phone: claimed.phone,
+          contact_email: claimed.contact_email ?? null,
+          vendor_id: chainId ?? restaurant.id,
+        }),
+      );
+
       return {
         ok: true as const,
         application: claimed,
@@ -717,15 +729,6 @@ adminRouter.put(
       );
     }
 
-    await emit(
-      createEventEnvelope("VendorApplicationApproved", id, {
-        applicant_id: result.application.applicant_id,
-        name: result.application.name,
-        phone: result.application.phone,
-        contact_email: result.application.contact_email ?? null,
-        vendor_id: result.chainId ?? result.restaurant.id,
-      }),
-    );
     ok(res, {
       application: result.application,
       restaurant: result.restaurant,
@@ -766,6 +769,18 @@ adminRouter.put(
         ...(reason ? { reason } : {}),
       });
 
+      // Durable rejection event, committed atomically with the status CAS and
+      // audit. No post-commit emit (EVT-B2A).
+      await repos.outbox.enqueue(
+        createEventEnvelope("VendorApplicationRejected", id, {
+          applicant_id: claimed.applicant_id,
+          name: claimed.name,
+          phone: claimed.phone,
+          contact_email: claimed.contact_email ?? null,
+          reason: reason ?? null,
+        }),
+      );
+
       return { ok: true as const, application: claimed };
     });
 
@@ -780,15 +795,6 @@ adminRouter.put(
       );
     }
 
-    await emit(
-      createEventEnvelope("VendorApplicationRejected", id, {
-        applicant_id: result.application.applicant_id,
-        name: result.application.name,
-        phone: result.application.phone,
-        contact_email: result.application.contact_email ?? null,
-        reason: reason ?? null,
-      }),
-    );
     ok(res, result.application);
   }),
 );

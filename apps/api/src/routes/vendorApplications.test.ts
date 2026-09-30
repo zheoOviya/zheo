@@ -12,7 +12,7 @@ import {
 } from "../repositories/shared";
 import { resetCatalogRepository, getCatalogRepository } from "./catalog";
 import { resetRedisForTests } from "../lib/redis";
-import { onEvent } from "../lib/eventBus";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 
 function tokenFor(sub: string, role: string) {
   return `Bearer ${jwtService.signAccessToken({
@@ -30,32 +30,19 @@ const SUPER_ADMIN_ACTOR_ID = "vapp-superadmin-000000001";
 describe("Vendor onboarding applications", () => {
   let app: Express;
 
-  const emittedApproved: string[] = [];
-  const emittedRejected: string[] = [];
-  const approvedStatusAtEmit: Record<string, string | null> = {};
-  let throwOnApproved = false;
+  /** Durable outbox rows enqueued for an aggregate, filtered in-memory. */
+  const outboxFor = (eventName: string, appId: string) =>
+    memoryEventOutbox
+      ._all()
+      .filter((r) => r.event_name === eventName && r.aggregate_id === appId);
 
   beforeAll(async () => {
     app = createApp();
-    onEvent("VendorApplicationApproved", async (event) => {
-      emittedApproved.push(event.aggregate_id);
-      const current = await sharedVendorApplicationRepo.getById(event.aggregate_id);
-      approvedStatusAtEmit[event.aggregate_id] = current?.status ?? null;
-    });
-    onEvent("VendorApplicationRejected", async (event) => {
-      emittedRejected.push(event.aggregate_id);
-    });
-    onEvent("VendorApplicationApproved", async () => {
-      if (throwOnApproved) throw new Error("handler boom");
-    });
   });
 
   beforeEach(async () => {
     vi.restoreAllMocks();
-    emittedApproved.length = 0;
-    emittedRejected.length = 0;
-    for (const key of Object.keys(approvedStatusAtEmit)) delete approvedStatusAtEmit[key];
-    throwOnApproved = false;
+    memoryEventOutbox._reset();
     sharedVendorApplicationRepo._reset();
     sharedIdentityRepo._reset();
     sharedUserRoleRepo._reset();
@@ -381,13 +368,15 @@ describe("Vendor onboarding applications", () => {
     ).toBe(true);
   });
 
-  it("A7: approved event fires only after the transaction callback resolves", async () => {
+  it("A7: approval persists exactly one durable event for the committed transition", async () => {
     const created = await apply();
     const appId = created.body.data.id as string;
     const res = await approveApp(appId);
     expect(res.status).toBe(200);
-    expect(emittedApproved).toContain(appId);
-    expect(approvedStatusAtEmit[appId]).toBe("APPROVED");
+    const rows = outboxFor("VendorApplicationApproved", appId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("PENDING");
+    expect((await sharedVendorApplicationRepo.getById(appId))?.status).toBe("APPROVED");
   });
 
   it("A8: CAS-null loser produces zero side effects", async () => {
@@ -399,7 +388,7 @@ describe("Vendor onboarding applications", () => {
     const res = await approveApp(appId);
     expect(res.status).toBe(409);
     expect(spy).not.toHaveBeenCalled();
-    expect(emittedApproved.filter((x) => x === appId)).toHaveLength(1);
+    expect(outboxFor("VendorApplicationApproved", appId)).toHaveLength(1);
   });
 
   // ============================================
@@ -449,7 +438,7 @@ describe("Vendor onboarding applications", () => {
     ).toBe(true);
   });
 
-  it("J6: loser reject writes no additional audit and emits nothing", async () => {
+  it("J6: loser reject writes no additional audit and enqueues no extra event", async () => {
     const created = await apply();
     const appId = created.body.data.id as string;
     await rejectApp(appId, "bad").expect(200);
@@ -461,14 +450,14 @@ describe("Vendor onboarding applications", () => {
         (l) => l.action === "vendor_application_rejected" && l.metadata.application_id === appId,
       ),
     ).toHaveLength(1);
-    expect(emittedRejected.filter((x) => x === appId)).toHaveLength(1);
+    expect(outboxFor("VendorApplicationRejected", appId)).toHaveLength(1);
   });
 
   // ============================================
   // A2 failure control flow (memory mode — no rollback claim)
   // ============================================
 
-  it("F1/F2: transaction callback error propagates and emits nothing", async () => {
+  it("F1/F2: transaction callback error propagates and enqueues nothing", async () => {
     const created = await apply();
     const appId = created.body.data.id as string;
     vi.spyOn(getCatalogRepository(), "createRestaurant").mockRejectedValueOnce(
@@ -476,16 +465,54 @@ describe("Vendor onboarding applications", () => {
     );
     const res = await approveApp(appId);
     expect(res.status).toBe(500);
-    expect(emittedApproved).not.toContain(appId);
+    expect(outboxFor("VendorApplicationApproved", appId)).toHaveLength(0);
   });
 
-  it("F3: event handler failure does not turn committed success into failure", async () => {
+  it("F3: committed approval is durable exactly once (no direct+outbox double path)", async () => {
     const created = await apply();
     const appId = created.body.data.id as string;
-    throwOnApproved = true;
     const res = await approveApp(appId);
-    throwOnApproved = false;
     expect(res.status).toBe(200);
-    expect(emittedApproved).toContain(appId);
+    expect(outboxFor("VendorApplicationApproved", appId)).toHaveLength(1);
+  });
+
+  // ============================================
+  // EVT-B2A producer wiring — named invariants
+  // ============================================
+
+  it("B2A-A1: approval commit persists exactly one VendorApplicationApproved row", async () => {
+    const created = await apply();
+    const appId = created.body.data.id as string;
+    const res = await approveApp(appId);
+    expect(res.status).toBe(200);
+    const rows = outboxFor("VendorApplicationApproved", appId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.aggregate_id).toBe(appId);
+    expect(rows[0]?.status).toBe("PENDING");
+    expect((rows[0]?.payload as { applicant_id?: string }).applicant_id).toBe(APPLICANT_ID);
+  });
+
+  it("B2A-A2: rejection commit persists exactly one VendorApplicationRejected row", async () => {
+    const created = await apply();
+    const appId = created.body.data.id as string;
+    const res = await rejectApp(appId, "GST mismatch");
+    expect(res.status).toBe(200);
+    const rows = outboxFor("VendorApplicationRejected", appId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.aggregate_id).toBe(appId);
+    expect(rows[0]?.status).toBe("PENDING");
+  });
+
+  it("B2A-A3: aborted transition enqueues zero events (memory has no rollback)", async () => {
+    const created = await apply();
+    const appId = created.body.data.id as string;
+    vi.spyOn(getCatalogRepository(), "createRestaurant").mockRejectedValueOnce(
+      new Error("catalog boom"),
+    );
+    const res = await approveApp(appId);
+    expect(res.status).toBe(500);
+    // The enqueue is the LAST step, so a failure before it leaves no event row.
+    // Business rollback atomicity is Postgres-only (realPgProducerOutboxBoundary).
+    expect(outboxFor("VendorApplicationApproved", appId)).toHaveLength(0);
   });
 });
