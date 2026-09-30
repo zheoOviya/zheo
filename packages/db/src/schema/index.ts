@@ -18,3 +18,4 @@ export * from "./promotions";
 export * from "./posOrderMappings";
 export * from "./checkoutIdempotency";
 export * from "./eventOutbox";
+export * from "./eventConsumerDedup";
