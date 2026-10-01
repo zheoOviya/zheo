@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { onEvent } from "../lib/eventBus";
 import { resetRedisForTests } from "../lib/redis";
 import { MemoryOrderRepository } from "../repositories/orderRepository";
 import { MemoryGiftRepository } from "../repositories/giftRepository";
 import { MemoryCheckoutIdempotencyRepository } from "../repositories/checkoutIdempotencyRepository";
 import type { OrderCheckoutTransactionPort } from "../repositories/orderCheckoutContracts";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 import { getCatalogRepository, resetCatalogRepository } from "../routes/catalog";
 import {
   OrderingService,
@@ -55,17 +55,20 @@ describe("durable consumer checkout idempotency (A2)", () => {
   let idemRepo: MemoryCheckoutIdempotencyRepository;
   let service: OrderingService;
 
-  function trackEvents(): string[] {
-    const seen: string[] = [];
-    onEvent("OrderCreated", async (event) => {
-      seen.push(event.aggregate_id);
-    });
-    return seen;
+  function orderCreatedRows(aggregateId?: string): number {
+    return memoryEventOutbox
+      ._all()
+      .filter(
+        (r) =>
+          r.event_name === "OrderCreated" &&
+          (aggregateId === undefined || r.aggregate_id === aggregateId),
+      ).length;
   }
 
   beforeEach(() => {
     resetRedisForTests();
     resetCatalogRepository();
+    memoryEventOutbox._reset();
     orderRepo = new MemoryOrderRepository();
     giftRepo = new MemoryGiftRepository();
     idemRepo = new MemoryCheckoutIdempotencyRepository();
@@ -79,7 +82,6 @@ describe("durable consumer checkout idempotency (A2)", () => {
   });
 
   it("U1 same user/key/payload replays the SAME order and creates once", async () => {
-    const events = trackEvents();
     const first = await service.placeOrderIdempotent(makeRequest(), "key-u1");
     expect(first.replayed).toBe(false);
 
@@ -88,7 +90,7 @@ describe("durable consumer checkout idempotency (A2)", () => {
     expect(second.order.id).toBe(first.order.id);
 
     expect(await orderRepo.getAll()).toHaveLength(1);
-    expect(events.filter((id) => id === first.order.id)).toHaveLength(1);
+    expect(orderCreatedRows(first.order.id)).toBe(1);
   });
 
   it("U2 same user/key/different payload -> 409 IDEMPOTENCY_KEY_REUSED, no second order", async () => {
@@ -130,6 +132,7 @@ describe("durable consumer checkout idempotency (A2)", () => {
           orders: orderRepo,
           gifts: giftRepo,
           idempotency: idemRepo,
+          outbox: memoryEventOutbox,
         });
         calls += 1;
         if (calls === 1) throw new Error("commit_failed");
@@ -164,7 +167,6 @@ describe("durable consumer checkout idempotency (A2)", () => {
   });
 
   it("U6 concurrent same-key checkouts converge on exactly one order", async () => {
-    const events = trackEvents();
     const [a, b] = await Promise.all([
       service.placeOrderIdempotent(makeRequest(), "key-u6"),
       service.placeOrderIdempotent(makeRequest(), "key-u6"),
@@ -173,16 +175,15 @@ describe("durable consumer checkout idempotency (A2)", () => {
     expect(a.order.id).toBe(b.order.id);
     expect([a.replayed, b.replayed].filter((r) => r === false)).toHaveLength(1);
     expect(await orderRepo.getAll()).toHaveLength(1);
-    expect(events.filter((id) => id === a.order.id)).toHaveLength(1);
+    expect(orderCreatedRows(a.order.id)).toBe(1);
   });
 
-  it("U7 a replay emits ZERO duplicate OrderCreated events", async () => {
-    const events = trackEvents();
+  it("U7 a replay enqueues ZERO duplicate OrderCreated events", async () => {
     const first = await service.placeOrderIdempotent(makeRequest(), "key-u7");
     await service.placeOrderIdempotent(makeRequest(), "key-u7");
     await service.placeOrderIdempotent(makeRequest(), "key-u7");
 
-    expect(events.filter((id) => id === first.order.id)).toHaveLength(1);
+    expect(orderCreatedRows(first.order.id)).toBe(1);
   });
 
   it("U8 Memory backend matches the durable semantic contract", async () => {

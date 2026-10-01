@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OrderStatus } from "@snakzap/types";
-import { onEvent } from "../lib/eventBus";
 import { resetRedisForTests } from "../lib/redis";
 import {
   type CreateOrderInput,
   MemoryOrderRepository,
 } from "../repositories/orderRepository";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 import { getCatalogRepository, resetCatalogRepository } from "../routes/catalog";
 import { CateringService, type CateringOrderRequest } from "./catering";
 
@@ -14,9 +14,9 @@ import { CateringService, type CateringOrderRequest } from "./catering";
 //
 // Catering confirmation must be a from-state CAS (DRAFT -> CONFIRMED), never a
 // blind update. A CAS miss must raise the existing CATERING_CONFIRM_FAILED and
-// emit zero CateringOrderCreated events. Create and confirm stay separate
-// commits, so no atomicity/rollback is claimed here (real CAS truth is proven
-// by the real-PG harness).
+// enqueue zero CateringOrderCreated rows. EVT-B2B-NP1 binds create + CAS +
+// outbox to ONE transaction (real rollback truth is proven by the real-PG
+// harness; the memory port is an explicit passthrough).
 // ============================================
 
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
@@ -85,6 +85,7 @@ describe("CateringService state truth (A2)", () => {
   beforeEach(() => {
     resetRedisForTests();
     resetCatalogRepository();
+    memoryEventOutbox._reset();
     orderRepo = new InstrumentedOrderRepo();
     service = new CateringService(orderRepo, getCatalogRepository());
   });
@@ -142,33 +143,40 @@ describe("CateringService state truth (A2)", () => {
     );
   });
 
-  it("U5 a CAS miss emits ZERO CateringOrderCreated events", async () => {
-    const seen: string[] = [];
-    onEvent("CateringOrderCreated", async () => {
-      seen.push("CateringOrderCreated");
-    });
+  it("U5 a CAS miss enqueues ZERO CateringOrderCreated rows", async () => {
     orderRepo.forceTransitionNull = true;
 
     await expect(service.placeCateringOrder(request())).rejects.toMatchObject({
       code: "CATERING_CONFIRM_FAILED",
     });
 
-    expect(seen).toEqual([]);
+    expect(
+      memoryEventOutbox._all().filter((r) => r.event_name === "CateringOrderCreated"),
+    ).toHaveLength(0);
   });
 
-  it("U6 the transition commits before CateringOrderCreated is emitted", async () => {
-    let statusAtEmit: OrderStatus | null = null;
-    let emitCount = 0;
-    onEvent("CateringOrderCreated", async () => {
-      emitCount += 1;
-      const orders = await orderRepo.getAll();
-      statusAtEmit = orders[0]?.status ?? null;
-    });
+  it("U6 the transition and CateringOrderCreated enqueue share one transaction", async () => {
+    let statusAtEnqueue: OrderStatus | null = null;
+    let enqueueCount = 0;
+    const originalEnqueue = memoryEventOutbox.enqueue.bind(memoryEventOutbox);
+    memoryEventOutbox.enqueue = async (event) => {
+      if (event.event_name === "CateringOrderCreated") {
+        enqueueCount += 1;
+        statusAtEnqueue = (await orderRepo.getAll())[0]?.status ?? null;
+      }
+      return originalEnqueue(event);
+    };
 
-    const order = await service.placeCateringOrder(request());
+    try {
+      const order = await service.placeCateringOrder(request());
 
-    expect(order.status).toBe("CONFIRMED");
-    expect(emitCount).toBe(1);
-    expect(statusAtEmit).toBe("CONFIRMED");
+      expect(order.status).toBe("CONFIRMED");
+      expect(enqueueCount).toBe(1);
+      // The CAS has already applied when the event is enqueued on the same
+      // commit boundary.
+      expect(statusAtEnqueue).toBe("CONFIRMED");
+    } finally {
+      memoryEventOutbox.enqueue = originalEnqueue;
+    }
   });
 });

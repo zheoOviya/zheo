@@ -1,7 +1,7 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { config } from "../config";
-import { createEventEnvelope, emit } from "../lib/eventBus";
+import { createEventEnvelope } from "../lib/eventBus";
 import { logger } from "../lib/logger";
 import { AppError } from "../middleware/envelope";
 import type { CatalogRepository } from "../repositories/catalogRepository";
@@ -185,14 +185,14 @@ export class PetpoojaPosService {
 
     let order: OrderDTO;
     try {
-      order = await port.runInTransaction(async ({ orders, pos }) => {
+      order = await port.runInTransaction(async ({ orders, pos, outbox }) => {
         // Tx-scoped OrderingService shares the transaction handle so the order
         // and its items are written on the SAME connection. The checkout tx port
         // is disabled (useCheckoutTx:false) because this import already runs
         // inside its own transaction; wrapping again would open a second,
         // unrelated transaction. OrderCreated is suppressed
-        // (emitOrderCreated:false) because emitting before commit could publish
-        // a phantom event for an order that then rolls back.
+        // (emitOrderCreated:false) so the inner checkout never writes its own
+        // outbox row; this import enqueues both rows on ITS transaction below.
         const txOrdering = new OrderingService(
           orders as unknown as OrderRepository,
           this.catalogRepo,
@@ -210,6 +210,23 @@ export class PetpoojaPosService {
         // Pre-paid POS order -> skip DRAFT/PAYMENT_PENDING, go to CONFIRMED.
         await orders.updateStatus(created.id, "CONFIRMED");
         await pos.recordOrder(restaurantId, payload.pos_order_id, created.id);
+
+        // EVT-B2B-NP1: both import events are enqueued on the SAME commit
+        // boundary as the order + idempotency mapping. A rolled-back import
+        // persists no event, and the loser of a concurrent-import race throws
+        // before reaching here, so it emits ZERO rows.
+        await outbox.enqueue(
+          createEventEnvelope("OrderCreated", created.id, { order: created }, {
+            correlation_id: randomUUID(),
+          }),
+        );
+        await outbox.enqueue(
+          createEventEnvelope("PosOrderImported", created.id, {
+            order_id: created.id,
+            pos_order_id: payload.pos_order_id,
+            restaurant_id: restaurantId,
+          }),
+        );
         return created;
       });
     } catch (err) {
@@ -239,22 +256,9 @@ export class PetpoojaPosService {
       };
     }
 
-    // Post-commit events only. Both are best-effort (emit never throws), so a
-    // subscriber failure can never roll back an already-committed import, and
-    // the loser above emits ZERO events.
-    await emit(
-      createEventEnvelope("OrderCreated", order.id, { order }, {
-        correlation_id: randomUUID(),
-      }),
-    );
-    await emit(
-      createEventEnvelope("PosOrderImported", order.id, {
-        order_id: order.id,
-        pos_order_id: payload.pos_order_id,
-        restaurant_id: restaurantId,
-      }),
-    );
-
+    // EVT-B2B-NP1: OrderCreated and PosOrderImported are enqueued inside the
+    // import transaction (no post-commit emit), so a subscriber failure can
+    // never affect the committed import and the loser emits ZERO events.
     logger.info({
       message: "pos_order_imported",
       pos_order_id: payload.pos_order_id,

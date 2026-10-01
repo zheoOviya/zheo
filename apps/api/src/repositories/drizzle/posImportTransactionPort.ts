@@ -2,6 +2,7 @@ import type { DrizzleDb } from "../../lib/dbType";
 import type { PosImportTransactionPort, PosImportTxRepos } from "../posRepository";
 import { DrizzleOrderRepository } from "./drizzleOrderRepository";
 import { DrizzlePosOrderRepository } from "./drizzlePosOrderRepository";
+import { DrizzleEventOutboxRepository } from "./drizzleEventOutboxRepository";
 
 // ============================================
 // Drizzle POS-import transaction port (POS-MAPPING-PG-DURABILITY frozen).
@@ -16,6 +17,9 @@ export function buildPosImportTxRepos(tx: DrizzleDb): PosImportTxRepos {
   return {
     orders: new DrizzleOrderRepository(tx),
     pos: new DrizzlePosOrderRepository(tx),
+    // Same tx handle: the OrderCreated/PosOrderImported rows commit or roll
+    // back with the internal order and its idempotency mapping.
+    outbox: new DrizzleEventOutboxRepository(tx),
   };
 }
 

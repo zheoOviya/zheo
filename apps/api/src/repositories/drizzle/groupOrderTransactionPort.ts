@@ -2,6 +2,7 @@ import type { DrizzleDb } from "../../lib/dbType";
 import type { GroupOrderTransactionPort, GroupOrderTxRepos } from "../groupCartRepository";
 import { DrizzleOrderRepository } from "./drizzleOrderRepository";
 import { DrizzleGroupCartRepository } from "./drizzleGroupCartRepository";
+import { DrizzleEventOutboxRepository } from "./drizzleEventOutboxRepository";
 
 // ============================================
 // Drizzle group-order transaction port (frozen GROUP-CART-PG-DURABILITY-A1R1).
@@ -15,6 +16,8 @@ export function buildGroupOrderTxRepos(tx: DrizzleDb): GroupOrderTxRepos {
   return {
     orders: new DrizzleOrderRepository(tx),
     carts: new DrizzleGroupCartRepository(tx),
+    // Same tx handle: the group event rows commit or roll back with the cart.
+    outbox: new DrizzleEventOutboxRepository(tx),
   };
 }
 

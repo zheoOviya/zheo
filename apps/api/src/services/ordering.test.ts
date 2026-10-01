@@ -16,6 +16,8 @@ import {
 } from "../repositories/drizzle/orderCheckoutTransactionPort";
 import { DrizzleOrderRepository } from "../repositories/drizzle/drizzleOrderRepository";
 import { DrizzleGiftRepository } from "../repositories/drizzle/drizzleGiftRepository";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
+import type { EventOutboxRow } from "../repositories/eventOutboxRepository";
 import { getCatalogRepository, resetCatalogRepository } from "../routes/catalog";
 import { OrderingService } from "./ordering";
 import { calculatePriceBreakdown } from "./pricing";
@@ -87,6 +89,9 @@ async function seedClaimedGift(giftRepo: MemoryGiftRepository): Promise<string> 
   return gift.id;
 }
 
+const orderCreatedRows = (): EventOutboxRow[] =>
+  memoryEventOutbox._all().filter((r) => r.event_name === "OrderCreated");
+
 describe("OrderingService consumer checkout atomicity (A3)", () => {
   let orderRepo: MemoryOrderRepository;
   let giftRepo: MemoryGiftRepository;
@@ -95,12 +100,13 @@ describe("OrderingService consumer checkout atomicity (A3)", () => {
   beforeEach(() => {
     resetRedisForTests();
     resetCatalogRepository();
+    memoryEventOutbox._reset();
     orderRepo = new MemoryOrderRepository();
     giftRepo = new MemoryGiftRepository();
     service = new OrderingService(orderRepo, getCatalogRepository(), giftRepo);
   });
 
-  it("U1 places the order, its items, and the gift bind in one transaction then emits once", async () => {
+  it("U1 places the order, its items, and the gift bind in one transaction then enqueues once", async () => {
     const giftId = await seedClaimedGift(giftRepo);
     const seen: string[] = [];
     onEvent("OrderCreated", async () => {
@@ -111,7 +117,7 @@ describe("OrderingService consumer checkout atomicity (A3)", () => {
     const port: OrderCheckoutTransactionPort = {
       runInTransaction: (fn) => {
         txCalls += 1;
-        return fn({ orders: orderRepo, gifts: giftRepo });
+        return fn({ orders: orderRepo, gifts: giftRepo, outbox: memoryEventOutbox });
       },
     };
     service = new OrderingService(
@@ -140,7 +146,9 @@ describe("OrderingService consumer checkout atomicity (A3)", () => {
     expect(persisted?.status).toBe("DRAFT");
     const bound = await giftRepo.getById(giftId);
     expect(bound?.redeemed_order_id).toBe(order.id);
-    expect(seen).toEqual(["OrderCreated"]);
+    // EVT-B2B-NP1: durable enqueue replaces the post-commit direct emit.
+    expect(orderCreatedRows()).toHaveLength(1);
+    expect(seen).toEqual([]);
   });
 
   it("U2 a lost gift CAS rejects with GIFT_ALREADY_REDEEMED, emits nothing, and retires the order", async () => {
@@ -158,6 +166,7 @@ describe("OrderingService consumer checkout atomicity (A3)", () => {
             bindToOrder: async () => null,
             releaseFromOrder: async () => null,
           },
+          outbox: memoryEventOutbox,
         }),
     };
     service = new OrderingService(
@@ -183,12 +192,13 @@ describe("OrderingService consumer checkout atomicity (A3)", () => {
     ).rejects.toMatchObject({ code: "GIFT_ALREADY_REDEEMED" });
 
     expect(seen).toEqual([]);
+    expect(memoryEventOutbox._all()).toHaveLength(0);
     const orders = await orderRepo.getAll();
     expect(orders).toHaveLength(1);
     expect(orders[0]?.status).toBe("CANCELLED");
   });
 
-  it("U3 a transaction failure rejects and emits zero OrderCreated events", async () => {
+  it("U3 a transaction failure rejects and never direct-emits OrderCreated", async () => {
     const seen: string[] = [];
     onEvent("OrderCreated", async () => {
       seen.push("OrderCreated");
@@ -196,7 +206,7 @@ describe("OrderingService consumer checkout atomicity (A3)", () => {
 
     const port: OrderCheckoutTransactionPort = {
       runInTransaction: async (fn) => {
-        await fn({ orders: orderRepo, gifts: giftRepo });
+        await fn({ orders: orderRepo, gifts: giftRepo, outbox: memoryEventOutbox });
         throw new Error("commit_failed");
       },
     };
@@ -215,10 +225,14 @@ describe("OrderingService consumer checkout atomicity (A3)", () => {
       }),
     ).rejects.toThrow("commit_failed");
 
+    // No direct emit on this path. The event row is enqueued inside the
+    // callback, so the memory passthrough (MEMORY_ROLLBACK_PROVEN: NO) keeps it;
+    // real Postgres rollback => zero rows is proven by the real-PG harness.
     expect(seen).toEqual([]);
+    expect(orderCreatedRows().length).toBeLessThanOrEqual(1);
   });
 
-  it("U4 places a gift-free order and emits exactly one OrderCreated", async () => {
+  it("U4 places a gift-free order and enqueues exactly one OrderCreated", async () => {
     const seen: string[] = [];
     onEvent("OrderCreated", async () => {
       seen.push("OrderCreated");
@@ -233,13 +247,16 @@ describe("OrderingService consumer checkout atomicity (A3)", () => {
     expect(order.status).toBe("DRAFT");
     expect(order.items).toHaveLength(1);
     expect(order.items[0]?.quantity).toBe(2);
-    expect(seen).toEqual(["OrderCreated"]);
+    // EVT-B2B-NP1: exactly one durable row, no direct emit.
+    expect(orderCreatedRows()).toHaveLength(1);
+    expect(seen).toEqual([]);
   });
 
   it("U5 the memory port is an explicit passthrough with no rollback guarantee", async () => {
     const port = new MemoryOrderCheckoutTransactionPort(() => ({
       orders: orderRepo,
       gifts: giftRepo,
+      outbox: memoryEventOutbox,
     }));
 
     const created = await orderRepo.create(buildInput());
@@ -265,6 +282,7 @@ describe("OrderingService consumer checkout atomicity (A3)", () => {
     expect(observed).not.toBeNull();
     expect(observed!.orders).toBe(orderRepo);
     expect(observed!.gifts).toBe(giftRepo);
+    expect(observed!.outbox).toBe(memoryEventOutbox);
 
     const txHandle = {};
     const transaction = vi.fn(

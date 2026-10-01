@@ -1,6 +1,7 @@
 import type { OrderStatus } from "@snakzap/types";
 import type { CreateOrderInput, OrderDTO } from "./orderRepository";
 import type { GiftDTO } from "./giftRepository";
+import type { EventOutboxRepository } from "./eventOutboxRepository";
 import type {
   CheckoutIdempotencyClaim,
   ClaimCheckoutIdempotencyInput,
@@ -50,6 +51,13 @@ export interface OrderCheckoutTxRepos {
    * working unchanged. Required only when a checkout carries a key.
    */
   idempotency?: OrderCheckoutIdempotencyRepo;
+  /**
+   * Tx-scoped transactional outbox (EVT-B2B-NP1). `enqueue` runs on the SAME
+   * transaction handle as `orders`/`gifts`, so a committed `OrderCreated` row
+   * persists with the order aggregate and a rolled-back checkout persists none.
+   * Only the narrow `enqueue` capability is exposed to the orchestration.
+   */
+  outbox: Pick<EventOutboxRepository, "enqueue">;
 }
 
 export interface OrderCheckoutTransactionPort {

@@ -9,9 +9,11 @@ import {
   type OrderCheckoutTxRepos,
 } from "../orderCheckoutContracts";
 import { getStorageMode } from "../shared";
+import { memoryEventOutbox } from "../memoryEventOutbox";
 import { DrizzleOrderRepository } from "./drizzleOrderRepository";
 import { DrizzleGiftRepository } from "./drizzleGiftRepository";
 import { DrizzleCheckoutIdempotencyRepository } from "./drizzleCheckoutIdempotencyRepository";
+import { DrizzleEventOutboxRepository } from "./drizzleEventOutboxRepository";
 
 // ============================================
 // Drizzle consumer-checkout transaction port (ORDER-AGGREGATE-IDEMPOTENCY-A3).
@@ -26,6 +28,9 @@ export function buildOrderCheckoutTxRepos(tx: DrizzleDb): OrderCheckoutTxRepos {
     orders: new DrizzleOrderRepository(tx),
     gifts: new DrizzleGiftRepository(tx),
     idempotency: new DrizzleCheckoutIdempotencyRepository(tx),
+    // Same tx handle: the OrderCreated outbox INSERT commits or rolls back with
+    // the order aggregate (EVT-B2B-NP1).
+    outbox: new DrizzleEventOutboxRepository(tx),
   };
 }
 
@@ -84,6 +89,7 @@ export function passthroughOrderCheckoutTransactionPort(
     orders,
     gifts: gifts ?? UNCONFIGURED_GIFT_REPO,
     ...(idempotency ? { idempotency } : {}),
+    outbox: memoryEventOutbox,
   }));
 }
 

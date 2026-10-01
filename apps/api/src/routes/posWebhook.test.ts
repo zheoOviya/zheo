@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
-import { onEvent } from "../lib/eventBus";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
 import { getCatalogRepository, resetCatalogRepository } from "./catalog";
@@ -19,6 +18,7 @@ import {
   type PosImportTxRepos,
   type PosOrderRepository,
 } from "../repositories/posRepository";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 import { OrderingService } from "../services/ordering";
 import { PetpoojaPosService } from "../services/posPetpooja";
 
@@ -66,6 +66,7 @@ describe("Petpooja POS webhook", () => {
   beforeEach(async () => {
     resetRedisForTests();
     resetCatalogRepository();
+    memoryEventOutbox._reset();
     sharedOrderRepo._reset();
     sharedPosOrderRepo._reset();
     sharedIdentityRepo._reset();
@@ -274,12 +275,7 @@ describe("Petpooja POS webhook", () => {
     expect(await repo.getByPosOrderId(r1, "unknown-pos-id")).toBeNull();
   });
 
-  it("normal OrderingService default still emits OrderCreated", async () => {
-    const seen: string[] = [];
-    onEvent("OrderCreated", async () => {
-      seen.push("OrderCreated");
-    });
-
+  it("normal OrderingService default enqueues OrderCreated durably", async () => {
     const catalog = getCatalogRepository();
     const menu = (await catalog.getMenuAll(REST_ID)).filter(
       (m) => m.is_available,
@@ -296,15 +292,22 @@ describe("Petpooja POS webhook", () => {
     });
 
     expect(order.id).toBeTruthy();
-    expect(seen.length).toBeGreaterThanOrEqual(1);
+    const rows = memoryEventOutbox
+      ._all()
+      .filter((r) => r.event_name === "OrderCreated" && r.aggregate_id === order.id);
+    expect(rows).toHaveLength(1);
   });
 
-  it("POS path suppresses the in-transaction OrderCreated (emits it only post-commit)", async () => {
+  it("POS path enqueues OrderCreated inside the import transaction", async () => {
     let insideTransaction = false;
     let orderCreatedInsideTx = false;
-    onEvent("OrderCreated", async () => {
-      if (insideTransaction) orderCreatedInsideTx = true;
-    });
+    const originalEnqueue = memoryEventOutbox.enqueue.bind(memoryEventOutbox);
+    memoryEventOutbox.enqueue = async (event) => {
+      if (event.event_name === "OrderCreated" && insideTransaction) {
+        orderCreatedInsideTx = true;
+      }
+      return originalEnqueue(event);
+    };
 
     const fake: PosOrderRepository = {
       recordOrder: async (restaurantId, posOrderId, orderId) => ({
@@ -321,7 +324,7 @@ describe("Petpooja POS webhook", () => {
         ): Promise<T> => {
           insideTransaction = true;
           try {
-            return await fn({ orders: sharedOrderRepo, pos: fake });
+            return await fn({ orders: sharedOrderRepo, pos: fake, outbox: memoryEventOutbox });
           } finally {
             insideTransaction = false;
           }
@@ -330,20 +333,26 @@ describe("Petpooja POS webhook", () => {
       _reset: () => {},
     };
 
-    const service = new PetpoojaPosService(
-      sharedOrderRepo,
-      getCatalogRepository(),
-      sharedIdentityRepo,
-      fake,
-    );
-    const { payload, signature } = buildPayload();
-    const result = await service.processOrderWebhook(
-      JSON.stringify(payload),
-      signature,
-    );
+    try {
+      const service = new PetpoojaPosService(
+        sharedOrderRepo,
+        getCatalogRepository(),
+        sharedIdentityRepo,
+        fake,
+      );
+      const { payload, signature } = buildPayload();
+      const result = await service.processOrderWebhook(
+        JSON.stringify(payload),
+        signature,
+      );
 
-    expect(result.processed).toBe(true);
-    expect(orderCreatedInsideTx).toBe(false);
+      expect(result.processed).toBe(true);
+      // EVT-B2B-NP1: OrderCreated is enqueued on the SAME transaction boundary
+      // as the import (no post-commit direct emit).
+      expect(orderCreatedInsideTx).toBe(true);
+    } finally {
+      memoryEventOutbox.enqueue = originalEnqueue;
+    }
   });
 
   it("treats ONLY the exact POS mapping constraint as the idempotency violation", () => {

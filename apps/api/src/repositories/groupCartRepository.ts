@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { OrderRepository } from "./orderRepository";
+import type { EventOutboxRepository } from "./eventOutboxRepository";
+import { memoryEventOutbox } from "./memoryEventOutbox";
 
 // ============================================
 // Group cart repository (ordering bounded context)
@@ -90,6 +92,8 @@ export interface GroupOrderTxRepos {
   carts: Pick<GroupCartRepository, "create" | "getByToken" | "addContribution"> & {
     lockByToken(token: string): Promise<GroupCart | null>;
   };
+  /** Tx-scoped outbox (EVT-B2B-NP1): group events commit with the cart write. */
+  outbox: Pick<EventOutboxRepository, "enqueue">;
 }
 
 export interface GroupOrderTransactionPort {
@@ -110,12 +114,13 @@ export class MemoryGroupOrderTransactionPort
       GroupCartRepository,
       "create" | "getByToken" | "addContribution" | "lockByToken"
     >,
+    private readonly outbox: Pick<EventOutboxRepository, "enqueue"> = memoryEventOutbox,
   ) {}
 
   async runInTransaction<T>(
     fn: (repos: GroupOrderTxRepos) => Promise<T>,
   ): Promise<T> {
-    return fn({ orders: this.orders, carts: this.carts });
+    return fn({ orders: this.orders, carts: this.carts, outbox: this.outbox });
   }
 }
 

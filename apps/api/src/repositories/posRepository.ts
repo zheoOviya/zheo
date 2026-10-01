@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { OrderRepository } from "./orderRepository";
+import type { EventOutboxRepository } from "./eventOutboxRepository";
+import { memoryEventOutbox } from "./memoryEventOutbox";
 
 // ============================================
 // POS integration repository (pos bounded context)
@@ -38,6 +40,8 @@ export interface PosOrderMapping {
 export interface PosImportTxRepos {
   orders: Pick<OrderRepository, "create" | "getById" | "updateStatus">;
   pos: Pick<PosOrderRepository, "recordOrder" | "getByPosOrderId">;
+  /** Tx-scoped outbox (EVT-B2B-NP1): import events commit with the mapping. */
+  outbox: Pick<EventOutboxRepository, "enqueue">;
 }
 
 export interface PosImportTransactionPort {
@@ -60,12 +64,13 @@ export class MemoryPosImportTransactionPort implements PosImportTransactionPort 
       PosOrderRepository,
       "recordOrder" | "getByPosOrderId"
     >,
+    private readonly outbox: Pick<EventOutboxRepository, "enqueue"> = memoryEventOutbox,
   ) {}
 
   async runInTransaction<T>(
     fn: (repos: PosImportTxRepos) => Promise<T>,
   ): Promise<T> {
-    return fn({ orders: this.orders, pos: this.pos });
+    return fn({ orders: this.orders, pos: this.pos, outbox: this.outbox });
   }
 }
 

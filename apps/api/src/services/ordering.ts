@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { CatalogRepository } from "../repositories/catalogRepository";
 import type { GiftRepository } from "../repositories/giftRepository";
 import type { CheckoutIdempotencyRepository } from "../repositories/checkoutIdempotencyRepository";
-import { createEventEnvelope, emit } from "../lib/eventBus";
+import { createEventEnvelope } from "../lib/eventBus";
 import { AppError } from "../middleware/envelope";
 import {
   type OrderRepository,
@@ -346,7 +346,7 @@ export class OrderingService {
     let result: { order: OrderDTO; replayed: boolean };
     try {
       result = await checkoutPort.runInTransaction(
-        async ({ orders, gifts, idempotency }) => {
+        async ({ orders, gifts, idempotency, outbox }) => {
           if (idempotencyKey) {
             if (!idempotency) {
               throw new AppError(
@@ -435,6 +435,22 @@ export class OrderingService {
             await idempotency.attachOrder(claimedClaimId, created.id);
           }
 
+          // EVT-B2B-NP1: the OrderCreated row is written on the SAME commit
+          // boundary as the order aggregate. A rollback persists no event, and a
+          // replayed checkout returns above without ever reaching this insert.
+          // `emitOrderCreated:false` (the POS importer) suppresses it here
+          // because that importer enqueues its own OrderCreated on its own tx.
+          if (options.emitOrderCreated !== false) {
+            await outbox.enqueue(
+              createEventEnvelope(
+                "OrderCreated",
+                created.id,
+                { order: created },
+                { correlation_id: randomUUID() },
+              ),
+            );
+          }
+
           return { order: created, replayed: false };
         },
       );
@@ -453,20 +469,12 @@ export class OrderingService {
       throw err;
     }
 
-    // `emitOrderCreated` defaults to true so normal checkout/reorder keep the
-    // baseline behaviour. Internal importers that must emit AFTER their own
-    // commit boundary (the POS importer) pass false and emit post-commit
-    // themselves, so a rolled-back order can never publish a phantom event.
-    // A replayed checkout MUST NOT re-emit: the event belongs to the original
-    // creation only.
-    if (options.emitOrderCreated !== false && !result.replayed) {
-      await emit(
-        createEventEnvelope("OrderCreated", result.order.id, { order: result.order }, {
-          correlation_id: randomUUID(),
-        }),
-      );
-    }
-
+    // EVT-B2B-NP1: the OrderCreated row is enqueued INSIDE the checkout
+    // transaction (see the callback above), so there is no post-commit emit
+    // here. A replayed checkout never enqueues a second row because it returns
+    // before the insert; a rolled-back checkout rolls the row back. Internal
+    // importers (the POS importer) pass `emitOrderCreated:false` and enqueue on
+    // their own transaction instead.
     return result;
   }
 

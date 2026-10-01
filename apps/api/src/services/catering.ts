@@ -1,5 +1,7 @@
 import type { CatalogRepository } from "../repositories/catalogRepository";
-import { createEventEnvelope, emit } from "../lib/eventBus";
+import type { CateringTransactionPort } from "../repositories/cateringTransactionContracts";
+import { passthroughCateringTransactionPort } from "../repositories/drizzle/cateringTransactionPort";
+import { createEventEnvelope } from "../lib/eventBus";
 import { AppError } from "../middleware/envelope";
 import {
   type CreateOrderInput,
@@ -48,7 +50,16 @@ export class CateringService {
   constructor(
     private readonly orderRepo: OrderRepository,
     private readonly catalogRepo: CatalogRepository,
+    /**
+     * Optional atomic create+confirm port. When omitted the service falls back
+     * to the memory passthrough over its own order repo (legacy callers/tests).
+     */
+    private readonly txPort?: CateringTransactionPort,
   ) {}
+
+  private getTransactionPort(): CateringTransactionPort {
+    return this.txPort ?? passthroughCateringTransactionPort(this.orderRepo);
+  }
 
   async placeCateringOrder(
     request: CateringOrderRequest,
@@ -149,40 +160,45 @@ export class CateringService {
       headcount: request.headcount,
     };
 
-    const order = await this.orderRepo.create(input);
+    // Simulated separate catering-confirmation flow: the B2B desk approves the
+    // quote, moving DRAFT -> CONFIRMED outside the consumer fulfillment state
+    // machine (which deliberately has no DRAFT transition). The confirm is a
+    // from-state CAS, so it can never blind-overwrite a terminal state
+    // (CANCELLED/PICKED_UP/...). EVT-B2B-NP1 closes the historical two-commit
+    // create/confirm gap: create + CAS + CateringOrderCreated now share ONE
+    // transaction, so a failed confirmation rolls the order back (no orphan
+    // DRAFT) and the event row persists only with the confirmed order.
+    const port = this.getTransactionPort();
+    const confirmed = await port.runInTransaction(async ({ orders, outbox }) => {
+      const order = await orders.create(input);
 
-    // Simulated separate catering-confirmation flow: the B2B desk approves
-    // the quote, so the order moves DRAFT -> CONFIRMED outside the consumer
-    // fulfillment state machine (which deliberately has no DRAFT transition).
-    // The confirm is a from-state CAS: it only commits while the row is still
-    // DRAFT, so it can never blind-overwrite a terminal state (CANCELLED/
-    // PICKED_UP/...). Create and confirm stay SEPARATE commits in this stream,
-    // so the DRAFT crash window between them is unchanged and explicitly
-    // deferred (no atomicity is claimed here).
-    const confirmed = await this.orderRepo.transitionStatus(
-      order.id,
-      "DRAFT",
-      "CONFIRMED",
-    );
-    if (!confirmed) {
-      throw new AppError(
-        "CATERING_CONFIRM_FAILED",
-        "Failed to confirm catering order",
-        500,
+      const confirmedOrder = await orders.transitionStatus(
+        order.id,
+        "DRAFT",
+        "CONFIRMED",
       );
-    }
+      if (!confirmedOrder) {
+        throw new AppError(
+          "CATERING_CONFIRM_FAILED",
+          "Failed to confirm catering order",
+          500,
+        );
+      }
 
-    await emit(
-      createEventEnvelope("CateringOrderCreated", order.id, {
-        order_id: order.id,
-        restaurant_id: order.restaurant_id,
-        user_id: order.user_id,
-        headcount: request.headcount,
-        event_date: request.event_date,
-        total_amount: confirmed.total_amount,
-        line_count: request.items.length,
-      }),
-    );
+      await outbox.enqueue(
+        createEventEnvelope("CateringOrderCreated", order.id, {
+          order_id: order.id,
+          restaurant_id: order.restaurant_id,
+          user_id: order.user_id,
+          headcount: request.headcount,
+          event_date: request.event_date,
+          total_amount: confirmedOrder.total_amount,
+          line_count: request.items.length,
+        }),
+      );
+
+      return confirmedOrder;
+    });
 
     return confirmed;
   }

@@ -4,6 +4,7 @@ import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
 import { getCatalogRepository } from "./catalog";
 import { sharedAuditRepo, sharedOrderRepo } from "../repositories/shared";
+import { selectCateringTransactionPort } from "../repositories/drizzle/cateringTransactionPort";
 import {
   CateringService,
   CATERING_MAX_LINE_QUANTITY,
@@ -41,6 +42,7 @@ const CateringOrderSchema = z.object({
 const cateringService = new CateringService(
   sharedOrderRepo,
   getCatalogRepository(),
+  selectCateringTransactionPort(sharedOrderRepo),
 );
 
 export const cateringRouter: Router = Router();

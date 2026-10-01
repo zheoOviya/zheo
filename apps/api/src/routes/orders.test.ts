@@ -6,6 +6,7 @@ import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
 import type { OrderDTO } from "../repositories/orderRepository";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 import { SEED_RESTAURANTS } from "../seed/catalogData";
 import { orderRepo } from "./orders";
 
@@ -78,6 +79,7 @@ describe("Ordering routes", () => {
 
   beforeEach(() => {
     resetRedisForTests();
+    memoryEventOutbox._reset();
     orderRepo._reset();
     app = createApp();
   });
@@ -228,14 +230,8 @@ describe("Ordering routes", () => {
     expect(res.body.error.code).toBe("ORDER_NOT_FOUND");
   });
 
-  it("emits OrderCreated event when order is placed", async () => {
-    const { onEvent } = await import("../lib/eventBus");
-    const captured: unknown[] = [];
-    onEvent("OrderCreated", async (evt) => {
-      captured.push(evt);
-    });
-
-    await request(app)
+  it("enqueues a durable OrderCreated event when order is placed", async () => {
+    const res = await request(app)
       .post("/api/v1/orders")
       .set(authHeaders())
       .send({
@@ -244,10 +240,15 @@ describe("Ordering routes", () => {
       })
       .expect(201);
 
-    expect(captured).toHaveLength(1);
-    const event = captured[0] as Record<string, unknown>;
-    expect(event.event_name).toBe("OrderCreated");
-    expect(event.payload).toBeTruthy();
+    // EVT-B2B-NP1: the checkout transaction enqueues the event; the relay is
+    // the only dispatch path (no direct emit).
+    const rows = memoryEventOutbox
+      ._all()
+      .filter(
+        (r) => r.event_name === "OrderCreated" && r.aggregate_id === res.body.data.id,
+      );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.payload).toBeTruthy();
   });
 
   it("low-value order omits commission fields and keeps total under threshold", async () => {

@@ -11,7 +11,7 @@ import type {
   OrderItemDTO,
   OrderRepository,
 } from "../repositories/orderRepository";
-import { createEventEnvelope, emit } from "../lib/eventBus";
+import { createEventEnvelope } from "../lib/eventBus";
 import { AppError } from "../middleware/envelope";
 import {
   calculatePriceBreakdown,
@@ -153,7 +153,7 @@ export class GroupOrderService {
     for (let attempt = 0; attempt < GROUP_CART_TOKEN_ATTEMPTS; attempt += 1) {
       const token = this.tokenFactory();
       try {
-        created = await port.runInTransaction(async ({ orders, carts }) => {
+        created = await port.runInTransaction(async ({ orders, carts, outbox }) => {
           const order = await orders.create({
             user_id: request.user_id,
             restaurant_id: request.restaurant_id,
@@ -166,6 +166,17 @@ export class GroupOrderService {
             restaurant_id: request.restaurant_id,
             created_by: request.user_id,
           });
+          // EVT-B2B-NP1: the event row shares the create commit boundary. A
+          // token-collision retry aborts the whole transaction, so only the
+          // winning attempt ever persists a GroupOrderCreated row.
+          await outbox.enqueue(
+            createEventEnvelope("GroupOrderCreated", order.id, {
+              order_id: order.id,
+              group_cart_token: token,
+              created_by: request.user_id,
+              restaurant_id: request.restaurant_id,
+            }),
+          );
           return { token, order, cartCreatedAt: cart.created_at };
         });
         break;
@@ -189,16 +200,8 @@ export class GroupOrderService {
 
     const { token, order, cartCreatedAt } = created;
 
-    // Post-commit, best-effort side effects.
-    await emit(
-      createEventEnvelope("GroupOrderCreated", order.id, {
-        order_id: order.id,
-        group_cart_token: token,
-        created_by: request.user_id,
-        restaurant_id: request.restaurant_id,
-      }),
-    );
-
+    // EVT-B2B-NP1: GroupOrderCreated is enqueued inside the create transaction
+    // (no post-commit emit).
     logger.info({
       message: "group_order_created",
       order_id: order.id,
@@ -225,7 +228,7 @@ export class GroupOrderService {
       const port = this.getTransactionPort();
 
       // ONE transaction: row lock -> validate -> order lines -> attribution.
-      const result = await port.runInTransaction(async ({ orders, carts }) => {
+      const result = await port.runInTransaction(async ({ orders, carts, outbox }) => {
         const cart = await carts.lockByToken(request.token);
         if (!cart) {
           throw new AppError(
@@ -334,6 +337,21 @@ export class GroupOrderService {
           })),
         });
 
+        // EVT-B2B-NP1: one event row per committed logical item addition, all on
+        // the SAME commit boundary as the cart write. Any throw/rollback leaves
+        // zero rows for this transaction.
+        for (const item of validated) {
+          await outbox.enqueue(
+            createEventEnvelope("GroupOrderItemAdded", updatedOrder.id, {
+              order_id: updatedOrder.id,
+              group_cart_token: request.token,
+              added_by: request.user_id,
+              menu_item_id: item.menu_item_id,
+              quantity: item.quantity,
+            }),
+          );
+        }
+
         const finalCart = await carts.getByToken(request.token);
 
         return { updatedOrder, finalCart, validated };
@@ -341,19 +359,8 @@ export class GroupOrderService {
 
       const { updatedOrder, finalCart, validated } = result;
 
-      // Post-commit, best-effort side effects.
-      for (const item of validated) {
-        await emit(
-          createEventEnvelope("GroupOrderItemAdded", updatedOrder.id, {
-            order_id: updatedOrder.id,
-            group_cart_token: request.token,
-            added_by: request.user_id,
-            menu_item_id: item.menu_item_id,
-            quantity: item.quantity,
-          }),
-        );
-      }
-
+      // EVT-B2B-NP1: GroupOrderItemAdded rows are enqueued inside the cart
+      // transaction (no post-commit emit); `validated.length` is only logged.
       logger.info({
         message: "group_order_item_added",
         order_id: updatedOrder.id,
