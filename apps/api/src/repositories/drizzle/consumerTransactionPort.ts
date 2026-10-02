@@ -17,6 +17,8 @@ import { DrizzleLoyaltyRepository } from "./drizzleLoyaltyRepository";
 import { DrizzleOrderRepository } from "./drizzleOrderRepository";
 import { DrizzlePromotionRepository } from "./drizzlePromotionRepository";
 import { DrizzleNotificationRepository } from "../notificationRepository";
+import { DrizzleEventOutboxRepository } from "./drizzleEventOutboxRepository";
+import { memoryEventOutbox } from "../memoryEventOutbox";
 import { tryMarkProcessedInTx } from "./drizzleEventConsumerDedupRepository";
 
 // ============================================
@@ -42,6 +44,9 @@ export function buildConsumerTxScope(tx: DrizzleDb): ConsumerTxScope {
     orders: new DrizzleOrderRepository(tx),
     promotions: new DrizzlePromotionRepository(tx),
     notifications: new DrizzleNotificationRepository(tx),
+    // EVT-B2B-NP3-A: the outbox enqueue runs on the SAME `tx`, so a nested
+    // event row commits or rolls back with the marker and the business effect.
+    outbox: new DrizzleEventOutboxRepository(tx),
   };
 }
 
@@ -79,6 +84,7 @@ export function getConsumerTransactionPort(): ConsumerTransactionPort {
         orders: sharedOrderRepo,
         promotions: sharedPromotionRepo,
         notifications: sharedNotificationRepo,
+        outbox: memoryEventOutbox,
       }),
       memoryEventConsumerDedup,
     );

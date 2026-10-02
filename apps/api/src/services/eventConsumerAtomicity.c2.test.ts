@@ -12,9 +12,10 @@ import {
   sharedOrderRepo,
   sharedPromotionRepo,
 } from "../repositories/shared";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 import type { OrderDTO } from "../repositories/orderRepository";
 import { registerRetentionEventHandlers } from "./retention";
-import { registerLoyaltyEventHandlers } from "./loyalty";
+import { registerLoyaltyEventHandlers, STAMP_CARD_SIZE } from "./loyalty";
 import { registerVendorNotificationHandlers } from "./notifications";
 
 // ============================================
@@ -67,6 +68,7 @@ beforeEach(() => {
   sharedPromotionRepo._reset();
   sharedNotificationRepo._reset();
   sharedAuditRepo._reset();
+  memoryEventOutbox._reset();
   __resetConsumerTransactionPortForTests();
 });
 
@@ -208,6 +210,7 @@ describe("EVT-C2 consumer transaction port", () => {
         expect(scope.orders).toBeDefined();
         expect(scope.promotions).toBeDefined();
         expect(scope.notifications).toBeDefined();
+        expect(typeof scope.outbox.enqueue).toBe("function");
         return 42;
       },
     );
@@ -232,5 +235,76 @@ describe("EVT-C2 consumer transaction port", () => {
         throw new Error("c2.tx3-boom");
       }),
     ).rejects.toThrow("c2.tx3-boom");
+  });
+});
+
+describe("EVT-B2B-NP3-A nested C2 events use the winning consumer transaction", () => {
+  it("NP3A-MEM-CASHBACK: one WalletCashbackCredited for the winner, none for the duplicate", async () => {
+    const order = await seedOrder(500);
+    const event = orderPickedUpEvent(order.id);
+
+    await emit(event);
+    await emit(event);
+
+    const rows = memoryEventOutbox
+      ._all()
+      .filter((r) => r.event_name === "WalletCashbackCredited");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.aggregate_id).toBe(USER_ID);
+    // The child carries its OWN identity, never the parent event_id.
+    expect(rows[0]?.event_id).not.toBe(event.event_id);
+  });
+
+  it("NP3A-MEM-ORDER-STAMP: reward unlock enqueues exactly one child on the winner", async () => {
+    for (let i = 0; i < STAMP_CARD_SIZE - 1; i += 1) {
+      await sharedLoyaltyRepo.incrementStamp(USER_ID, REST_ID);
+    }
+    const order = await seedOrder(100);
+    const event = orderPickedUpEvent(order.id);
+
+    await emit(event);
+    await emit(event);
+
+    const rows = memoryEventOutbox
+      ._all()
+      .filter((r) => r.event_name === "StampCardRewardUnlocked");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.aggregate_id).toBe(USER_ID);
+    expect(rows[0]?.event_id).not.toBe(event.event_id);
+  });
+
+  it("NP3A-MEM-STREAK: badge unlock enqueues exactly one child on the winner", async () => {
+    const base = new Date();
+    const dayKey = (daysAgo: number) =>
+      new Date(base.getTime() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+    for (let i = 6; i >= 1; i -= 1) {
+      await sharedLoyaltyRepo.recordPickup(USER_ID, dayKey(i));
+    }
+    const order = await seedOrder(100);
+    const event = orderPickedUpEvent(order.id);
+
+    await emit(event);
+    await emit(event);
+
+    const rows = memoryEventOutbox
+      ._all()
+      .filter((r) => r.event_name === "StreakBadgeUnlocked");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.aggregate_id).toBe(USER_ID);
+    expect(rows[0]?.event_id).not.toBe(event.event_id);
+  });
+
+  it("NP3A-MEM-NO-CHILD: no derived row is enqueued when no reward unlocks", async () => {
+    const order = await seedOrder(100);
+    await emit(orderPickedUpEvent(order.id));
+
+    const rows = memoryEventOutbox
+      ._all()
+      .filter(
+        (r) =>
+          r.event_name === "StampCardRewardUnlocked" ||
+          r.event_name === "StreakBadgeUnlocked",
+      );
+    expect(rows).toHaveLength(0);
   });
 });

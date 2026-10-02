@@ -374,10 +374,27 @@ export function registerLoyaltyEventHandlers(): void {
       async (scope) => {
         const won = await scope.claim(CONSUMER_ORDER_STAMP, event.event_id);
         if (!won) return null;
-        return loyaltyService.applyOrderStamp(payload.order_id, {
+        const applied = await loyaltyService.applyOrderStamp(payload.order_id, {
           loyalty: scope.loyalty,
           orders: scope.orders,
         });
+        if (!applied) return null;
+        // EVT-B2B-NP3-A: the nested StampCardRewardUnlocked row is enqueued on
+        // the SAME transaction as the dedup marker and the stamp increment, so
+        // a rollback drops it and a duplicate delivery enqueues nothing.
+        if (applied.reward_unlocked) {
+          await scope.outbox.enqueue(
+            createEventEnvelope("StampCardRewardUnlocked", applied.user_id, {
+              user_id: applied.user_id,
+              restaurant_id: applied.restaurant_id,
+              reward_type: "FREE_ITEM",
+              stamp_count_before:
+                applied.before?.stamp_count ?? STAMP_CARD_SIZE,
+              rewards_earned: applied.card.rewards_earned,
+            }),
+          );
+        }
+        return applied;
       },
     );
     if (!result) return;
@@ -398,15 +415,6 @@ export function registerLoyaltyEventHandlers(): void {
         stamp_count_before: result.before?.stamp_count ?? STAMP_CARD_SIZE,
         rewards_earned: result.card.rewards_earned,
       });
-      await emit(
-        createEventEnvelope("StampCardRewardUnlocked", result.user_id, {
-          user_id: result.user_id,
-          restaurant_id: result.restaurant_id,
-          reward_type: "FREE_ITEM",
-          stamp_count_before: result.before?.stamp_count ?? STAMP_CARD_SIZE,
-          rewards_earned: result.card.rewards_earned,
-        }),
-      );
     }
   });
 
@@ -421,7 +429,25 @@ export function registerLoyaltyEventHandlers(): void {
       async (scope) => {
         const won = await scope.claim(CONSUMER_GIFT_STAMP, event.event_id);
         if (!won) return null;
-        return loyaltyService.applyGiftStamp(payload, scope.loyalty);
+        const applied = await loyaltyService.applyGiftStamp(
+          payload,
+          scope.loyalty,
+        );
+        // EVT-B2B-NP3-A: nested StampCardRewardUnlocked enqueued on the SAME
+        // transaction as the dedup marker and the gift-stamp increment.
+        if (applied.reward_unlocked) {
+          await scope.outbox.enqueue(
+            createEventEnvelope("StampCardRewardUnlocked", payload.sender_id, {
+              user_id: payload.sender_id,
+              restaurant_id: payload.restaurant_id,
+              reward_type: "FREE_ITEM",
+              stamp_count_before:
+                applied.before?.stamp_count ?? STAMP_CARD_SIZE,
+              rewards_earned: applied.card.rewards_earned,
+            }),
+          );
+        }
+        return applied;
       },
     );
     if (!result) return;
@@ -433,17 +459,5 @@ export function registerLoyaltyEventHandlers(): void {
       total_orders: result.card.total_orders,
       reward_unlocked: result.reward_unlocked,
     });
-
-    if (result.reward_unlocked) {
-      await emit(
-        createEventEnvelope("StampCardRewardUnlocked", payload.sender_id, {
-          user_id: payload.sender_id,
-          restaurant_id: payload.restaurant_id,
-          reward_type: "FREE_ITEM",
-          stamp_count_before: result.before?.stamp_count ?? STAMP_CARD_SIZE,
-          rewards_earned: result.card.rewards_earned,
-        }),
-      );
-    }
   });
 }

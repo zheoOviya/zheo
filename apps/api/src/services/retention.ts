@@ -272,11 +272,24 @@ export function registerRetentionEventHandlers(): void {
       async (scope) => {
         const won = await scope.claim(CONSUMER_CASHBACK, event.event_id);
         if (!won) return null;
-        return retentionService.applyCashback(payload.order_id, {
+        const applied = await retentionService.applyCashback(payload.order_id, {
           loyalty: scope.loyalty,
           orders: scope.orders,
           promotions: scope.promotions,
         });
+        if (!applied) return null;
+        // EVT-B2B-NP3-A: the nested WalletCashbackCredited row is enqueued on
+        // the SAME transaction as the dedup marker and the wallet credit +
+        // ledger append, so a rollback drops it and a duplicate enqueues none.
+        await scope.outbox.enqueue(
+          createEventEnvelope("WalletCashbackCredited", applied.user_id, {
+            user_id: applied.user_id,
+            order_id: applied.order_id,
+            amount: applied.cashback,
+            balance_after: applied.balance,
+          }),
+        );
+        return applied;
       },
     );
     if (!result) return;
@@ -288,14 +301,6 @@ export function registerRetentionEventHandlers(): void {
       cashback: result.cashback,
       balance: result.balance,
     });
-    await emit(
-      createEventEnvelope("WalletCashbackCredited", result.user_id, {
-        user_id: result.user_id,
-        order_id: result.order_id,
-        amount: result.cashback,
-        balance_after: result.balance,
-      }),
-    );
   });
 
   // Atomic, idempotent streak consumer (EVT-C2): marker claim + recordPickup +
@@ -307,11 +312,29 @@ export function registerRetentionEventHandlers(): void {
       async (scope) => {
         const won = await scope.claim(CONSUMER_STREAK, event.event_id);
         if (!won) return null;
-        return retentionService.applyStreak(payload.order_id, {
+        const applied = await retentionService.applyStreak(payload.order_id, {
           loyalty: scope.loyalty,
           orders: scope.orders,
           promotions: scope.promotions,
         });
+        // EVT-B2B-NP3-A: the nested StreakBadgeUnlocked row is enqueued on the
+        // SAME transaction as the dedup marker, the streak advance and any
+        // minted badge promotion.
+        if (applied.order_found && applied.badge_unlocked) {
+          await scope.outbox.enqueue(
+            createEventEnvelope(
+              "StreakBadgeUnlocked",
+              applied.user_id as string,
+              {
+                user_id: applied.user_id,
+                streak: applied.streak,
+                coupon_code: applied.coupon_code,
+                discount_rate: STREAK_COUPON_DISCOUNT,
+              },
+            ),
+          );
+        }
+        return applied;
       },
     );
     if (!result || !result.order_found) return;
@@ -324,16 +347,5 @@ export function registerRetentionEventHandlers(): void {
       advanced: result.advanced,
       badge_unlocked: result.badge_unlocked,
     });
-
-    if (result.badge_unlocked) {
-      await emit(
-        createEventEnvelope("StreakBadgeUnlocked", result.user_id as string, {
-          user_id: result.user_id,
-          streak: result.streak,
-          coupon_code: result.coupon_code,
-          discount_rate: STREAK_COUPON_DISCOUNT,
-        }),
-      );
-    }
   });
 }

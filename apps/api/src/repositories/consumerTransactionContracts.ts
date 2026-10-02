@@ -2,6 +2,7 @@ import type { LoyaltyRepository } from "./loyaltyRepository";
 import type { NotificationRepository } from "./notificationRepository";
 import type { OrderRepository } from "./orderRepository";
 import type { PromotionRepository } from "./promotionRepository";
+import type { EventOutboxRepository } from "./eventOutboxRepository";
 import {
   MemoryEventConsumerDedupRepository,
   type EventConsumerDedupRepository,
@@ -22,9 +23,19 @@ import {
 // races and would allow a double effect.
 //
 // The scope exposes only the repositories a consumer needs, each bound to one
-// transaction handle. It is deliberately narrow: no producer/outbox writes and
-// no relay/transport concerns live here.
+// transaction handle. It is deliberately narrow: no relay/transport concerns
+// live here.
+//
+// EVT-B2B-NP3-A: the scope carries the outbox enqueue seam so a DURABLE
+// CONSUMER can persist any nested/derived event row on the SAME transaction as
+// its dedup marker and its business effect. This is an extension of the winning
+// transaction, not a second transaction: the marker claim semantics, the
+// consumer names and the retry model are unchanged. `enqueue` is the same
+// producer primitive used by EVT-B1/B2 producers.
 // ============================================
+
+/** Narrow outbox write seam: enqueue only, on the caller's transaction. */
+export type ConsumerOutboxEnqueuer = Pick<EventOutboxRepository, "enqueue">;
 
 export interface ConsumerTxScope {
   /** Atomic marker claim. `true` iff THIS transaction inserted the marker. */
@@ -33,6 +44,11 @@ export interface ConsumerTxScope {
   orders: OrderRepository;
   promotions: PromotionRepository;
   notifications: NotificationRepository;
+  /**
+   * Enqueue a nested/derived event on the SAME transaction as the dedup claim
+   * and the business effect. A rollback drops the enqueued row with them.
+   */
+  outbox: ConsumerOutboxEnqueuer;
 }
 
 export interface ConsumerTransactionPort {
