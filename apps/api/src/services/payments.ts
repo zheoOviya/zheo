@@ -1,8 +1,10 @@
-import { createEventEnvelope, emit } from "../lib/eventBus";
+import { createEventEnvelope } from "../lib/eventBus";
 import { AppError } from "../middleware/envelope";
 import type { GiftRepository } from "../repositories/giftRepository";
 import type { OrderRepository } from "../repositories/orderRepository";
 import type { PaymentDTO, PaymentRepository } from "../repositories/paymentRepository";
+import type { PaymentTransactionPort } from "../repositories/paymentAtomicityContracts";
+import { getPaymentTransactionPort } from "../repositories/drizzle/paymentTransactionPort";
 import { razorpayService, type RazorpayWebhookPayload } from "./razorpay";
 import { isCaptureQuarantined as isCaptureQuarantinedShared } from "./paymentIntegrity";
 
@@ -52,7 +54,25 @@ export class PaymentService {
     private readonly paymentRepo: PaymentRepository,
     private readonly orderRepo: OrderRepository,
     private readonly giftRepo?: GiftRepository,
+    // EVT-B2B-PAY-A: local mutation + durable enqueue share one transaction.
+    // Injected by tests/harnesses; otherwise resolved lazily (memory passthrough
+    // in test mode, Drizzle port in Postgres mode) so route-module import never
+    // locks in the storage backend.
+    private readonly injectedTxPort?: PaymentTransactionPort,
   ) {}
+
+  private getTxPort(): PaymentTransactionPort {
+    return (
+      this.injectedTxPort ??
+      getPaymentTransactionPort(
+        this.paymentRepo,
+        this.orderRepo,
+        // Gift methods are only reached under an explicit `if (this.giftRepo)`
+        // guard, so the narrowing cast is safe at every call site.
+        this.giftRepo as GiftRepository,
+      )
+    );
+  }
 
   async createPaymentOrder(
     orderId: string,
@@ -86,23 +106,28 @@ export class PaymentService {
     }
 
     if (method === "cod") {
-      const payment = await this.paymentRepo.create({
-        order_id: order.id,
-        razorpay_order_id: `cod_${order.id.slice(0, 8)}`,
-        amount: order.total_amount,
-        method: "cod",
-      });
-
-      // Cash is collected at the counter on pickup, so the order goes
-      // straight to CONFIRMED and the fulfillment flow proceeds.
-      await this.orderRepo.updateStatus(order.id, "CONFIRMED");
-      await emit(
-        createEventEnvelope("CashOnPickupSelected", order.id, {
+      // Cash is collected at the counter on pickup, so the order goes straight
+      // to CONFIRMED and the fulfillment flow proceeds. The payment insert, the
+      // order confirmation and the CashOnPickupSelected outbox row share ONE
+      // transaction (EVT-B2B-PAY-A): a committed COD selection persists exactly
+      // one event, a rollback persists neither.
+      await this.getTxPort().runInTransaction(async ({ payments, orders, outbox }) => {
+        const payment = await payments.create({
           order_id: order.id,
-          payment_id: payment.id,
+          razorpay_order_id: `cod_${order.id.slice(0, 8)}`,
           amount: order.total_amount,
-        }),
-      );
+          method: "cod",
+        });
+
+        await orders.updateStatus(order.id, "CONFIRMED");
+        await outbox.enqueue(
+          createEventEnvelope("CashOnPickupSelected", order.id, {
+            order_id: order.id,
+            payment_id: payment.id,
+            amount: order.total_amount,
+          }),
+        );
+      });
 
       return {
         payment_method: "cod",
@@ -288,33 +313,43 @@ export class PaymentService {
     }
 
     if (payment.gift_id) {
-      const updated = await this.paymentRepo.updateWebhookResult(payment.id, {
-        razorpay_payment_id: entity.id,
-        status: isCaptured ? "CAPTURED" : "FAILED",
-        method: entity.method ?? "unknown",
-        webhook_event: payload.event,
-        webhook_raw: payload,
-      });
-      if (!updated) {
-        throw new AppError("PAYMENT_UPDATE_FAILED", "Failed to update payment record", 500);
-      }
-      if (isCaptured && this.giftRepo) {
-        // markPaid is CAS (PENDING -> ACTIVE) so a concurrent cancel can never
-        // be clobbered into ACTIVE; if it fails the gift was cancelled and the
-        // capture will need a manual refund instead.
-        const gift = await this.giftRepo.markPaid(payment.gift_id);
-        if (gift) {
-          await emit(
-            createEventEnvelope("GiftPaid", payment.gift_id, {
-              gift_id: payment.gift_id,
-              payment_id: payment.id,
-              amount: payment.amount,
-            }),
-          );
-        }
-        return { processed: true, idempotent: false, giftStatus: gift?.status ?? "PENDING" };
-      }
-      return { processed: true, idempotent: false, giftStatus: "PENDING" };
+      const giftId = payment.gift_id;
+      // GiftPaid producer: the webhook result write and the gift CAS share one
+      // transaction with the durable GiftPaid row (EVT-B2B-PAY-A). A CAS miss
+      // (gift already cancelled) commits the payment write but enqueues nothing;
+      // a tx failure rolls both the payment write and the event row back.
+      const giftStatus = await this.getTxPort().runInTransaction(
+        async ({ payments, gifts, outbox }) => {
+          const updated = await payments.updateWebhookResult(payment.id, {
+            razorpay_payment_id: entity.id,
+            status: isCaptured ? "CAPTURED" : "FAILED",
+            method: entity.method ?? "unknown",
+            webhook_event: payload.event,
+            webhook_raw: payload,
+          });
+          if (!updated) {
+            throw new AppError("PAYMENT_UPDATE_FAILED", "Failed to update payment record", 500);
+          }
+          if (isCaptured && this.giftRepo) {
+            // markPaid is CAS (PENDING -> ACTIVE) so a concurrent cancel can
+            // never be clobbered into ACTIVE; if it fails the gift was
+            // cancelled and the capture will need a manual refund instead.
+            const gift = await gifts.markPaid(giftId);
+            if (gift) {
+              await outbox.enqueue(
+                createEventEnvelope("GiftPaid", giftId, {
+                  gift_id: giftId,
+                  payment_id: payment.id,
+                  amount: payment.amount,
+                }),
+              );
+            }
+            return gift?.status ?? "PENDING";
+          }
+          return "PENDING";
+        },
+      );
+      return { processed: true, idempotent: false, giftStatus };
     }
 
     if (!payment.order_id) {
@@ -325,39 +360,71 @@ export class PaymentService {
       );
     }
 
-    const updated = await this.paymentRepo.updateWebhookResult(payment.id, {
-      razorpay_payment_id: entity.id,
-      status: isCaptured ? "CAPTURED" : "FAILED",
-      method: entity.method ?? "unknown",
-      webhook_event: payload.event,
-      webhook_raw: payload,
-    });
+    const orderId = payment.order_id;
 
-    if (!updated) {
-      throw new AppError("PAYMENT_UPDATE_FAILED", "Failed to update payment record", 500);
-    }
+    // Order capture/failure producers (EVT-B2B-PAY-A): the webhook result write
+    // and the order CAS share one transaction with their durable event row. A
+    // CAS miss commits the payment write but enqueues nothing; a tx failure
+    // rolls both the payment write and the event row back.
+    const txOutcome = await this.getTxPort().runInTransaction(
+      async ({ payments, orders, outbox }) => {
+        const updated = await payments.updateWebhookResult(payment.id, {
+          razorpay_payment_id: entity.id,
+          status: isCaptured ? "CAPTURED" : "FAILED",
+          method: entity.method ?? "unknown",
+          webhook_event: payload.event,
+          webhook_raw: payload,
+        });
 
-    if (isCaptured) {
-      // CAS only from PAYMENT_PENDING: a capture must never blindly resurrect a
-      // cancelled (or otherwise incompatible) order. This closes the
-      // late-capture resurrection race (RISK_PAY_2).
-      const confirmed = await this.orderRepo.transitionStatus(
-        payment.order_id,
-        "PAYMENT_PENDING",
-        "CONFIRMED",
-      );
-      if (confirmed) {
-        await emit(
-          createEventEnvelope("PaymentSucceeded", payment.order_id, {
-            order_id: payment.order_id,
-            payment_id: payment.id,
-            amount: payment.amount,
-          }),
+        if (!updated) {
+          throw new AppError("PAYMENT_UPDATE_FAILED", "Failed to update payment record", 500);
+        }
+
+        if (isCaptured) {
+          // CAS only from PAYMENT_PENDING: a capture must never blindly
+          // resurrect a cancelled (or otherwise incompatible) order. This closes
+          // the late-capture resurrection race (RISK_PAY_2).
+          const confirmed = await orders.transitionStatus(
+            orderId,
+            "PAYMENT_PENDING",
+            "CONFIRMED",
+          );
+          if (confirmed) {
+            await outbox.enqueue(
+              createEventEnvelope("PaymentSucceeded", orderId, {
+                order_id: orderId,
+                payment_id: payment.id,
+                amount: payment.amount,
+              }),
+            );
+          }
+          return { kind: "capture" as const, moved: confirmed !== null };
+        }
+
+        const failed = await orders.transitionStatus(
+          orderId,
+          "PAYMENT_PENDING",
+          "PAYMENT_FAILED",
         );
+        if (failed) {
+          await outbox.enqueue(
+            createEventEnvelope("PaymentFailed", orderId, {
+              order_id: orderId,
+              payment_id: payment.id,
+              reason: entity.description ?? "Payment failed",
+            }),
+          );
+        }
+        return { kind: "failure" as const, moved: failed !== null };
+      },
+    );
+
+    if (txOutcome.kind === "capture") {
+      if (txOutcome.moved) {
         return { processed: true, idempotent: false, orderStatus: "CONFIRMED" };
       }
 
-      const current = await this.orderRepo.getById(payment.order_id);
+      const current = await this.orderRepo.getById(orderId);
       if (current && ORDER_POST_CAPTURE_OK.has(current.status)) {
         // Capture converged already (idempotent): no event, no rewrite.
         return { processed: false, idempotent: true, orderStatus: current.status };
@@ -375,23 +442,11 @@ export class PaymentService {
       return { processed: true, idempotent: false, orderStatus: current?.status };
     }
 
-    const failed = await this.orderRepo.transitionStatus(
-      payment.order_id,
-      "PAYMENT_PENDING",
-      "PAYMENT_FAILED",
-    );
-    if (failed) {
-      await emit(
-        createEventEnvelope("PaymentFailed", payment.order_id, {
-          order_id: payment.order_id,
-          payment_id: payment.id,
-          reason: entity.description ?? "Payment failed",
-        }),
-      );
+    if (txOutcome.moved) {
       return { processed: true, idempotent: false, orderStatus: "PAYMENT_FAILED" };
     }
 
-    const currentFailedOrder = await this.orderRepo.getById(payment.order_id);
+    const currentFailedOrder = await this.orderRepo.getById(orderId);
     if (currentFailedOrder && currentFailedOrder.status === "PAYMENT_FAILED") {
       return { processed: false, idempotent: true, orderStatus: "PAYMENT_FAILED" };
     }
@@ -440,29 +495,37 @@ export class PaymentService {
       return { processed: false, idempotent: false };
     }
 
-    await this.paymentRepo.updateWebhookResult(payment.id, {
-      razorpay_payment_id: razorpayPaymentId,
-      status: "REFUNDED",
-      method: payment.method ?? "unknown",
-      webhook_event: payload.event,
-      webhook_raw: payload,
-    });
+    // GiftRefunded producer (EVT-B2B-PAY-A): the refund write and the gift CAS
+    // share one transaction with the durable GiftRefunded row. The order-refund
+    // branch below emits no event, so only its status write is transactional.
+    const giftId = payment.gift_id;
+    await this.getTxPort().runInTransaction(async ({ payments, gifts, outbox }) => {
+      await payments.updateWebhookResult(payment.id, {
+        razorpay_payment_id: razorpayPaymentId,
+        status: "REFUNDED",
+        method: payment.method ?? "unknown",
+        webhook_event: payload.event,
+        webhook_raw: payload,
+      });
 
-    if (payment.gift_id) {
-      if (this.giftRepo) {
-        // markRefunded is CAS (only REFUNDING/EXPIRED/ACTIVE): a gift that was
-        // already fulfilled or cancelled is never regressed by a stale refund.
-        const gift = await this.giftRepo.markRefunded(payment.gift_id);
+      if (giftId && this.giftRepo) {
+        // markRefunded is CAS (only from the refund lifecycle: REFUNDING /
+        // EXPIRED): a gift that was already fulfilled or cancelled is never
+        // regressed by a stale refund.
+        const gift = await gifts.markRefunded(giftId);
         if (gift) {
-          await emit(
-            createEventEnvelope("GiftRefunded", payment.gift_id, {
-              gift_id: payment.gift_id,
+          await outbox.enqueue(
+            createEventEnvelope("GiftRefunded", giftId, {
+              gift_id: giftId,
               sender_id: gift.sender_id,
               amount: payment.amount,
             }),
           );
         }
       }
+    });
+
+    if (payment.gift_id) {
       return { processed: true, idempotent: false, giftStatus: "REFUNDED" };
     }
 
