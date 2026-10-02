@@ -145,6 +145,7 @@ export function resetDineInState(): void {
   reset(_memoryRepos.serviceRequests);
   reset(_memoryRepos.sessionBills);
   reset(_memoryRepos.restaurantEligibility);
+  reset(_memoryRepos.outbox);
   reset(_vendorTableBoardRepo);
 }
 

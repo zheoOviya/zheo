@@ -6,6 +6,7 @@ import type {
   StaffAssignmentStatus,
 } from "@snakzap/types";
 import { AppError } from "../middleware/envelope";
+import { memoryEventOutbox } from "./memoryEventOutbox";
 import {
   BRING_BILL_QUEUE_STATUSES,
   BRING_BILL_VISIBLE_STATUSES,
@@ -968,6 +969,9 @@ export function buildMemoryDineInRepos(): DineInTransactionRepos {
     serviceRequests: new MemoryServiceRequestRepository(diningSessions, restaurantTables),
     sessionBills: makeTxBoundSessionBill(new MemorySessionBillRepository()),
     restaurantEligibility: new MemoryRestaurantEligibilityReader(),
+    // EVT-B2B-NP3-B: memory mode shares the process-wide outbox recorder so
+    // tests can observe enqueue placement. NOT a durability/atomicity proof.
+    outbox: memoryEventOutbox,
   };
 }
 

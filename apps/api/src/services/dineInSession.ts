@@ -10,10 +10,9 @@ import type {
 } from "../repositories/dineInContracts";
 import type { ServiceRequestStatus, ServiceRequestType } from "@snakzap/types";
 import { AppError } from "../middleware/envelope";
-import { logger } from "../lib/logger";
 import { calculateBillDraft } from "./dineInBillArithmetic";
 import {
-  emitDineInEventFactsBestEffort,
+  enqueueDineInEventFacts,
   type DineInEventFactEmitter,
 } from "./dineInEventEmitter";
 
@@ -256,11 +255,13 @@ function isLiveSessionUniqueViolation(err: unknown): boolean {
 export class DiningSessionService {
   constructor(
     private readonly txPort: DineInTransactionPort,
-    // Post-commit best-effort emission. MUST NOT be called inside
-    // runInTransaction — the service invokes it only after the transaction
-    // has resolved successfully (D2.5C9.2). Failure to emit never changes
-    // the committed domain result (helper never throws).
-    private readonly emitFacts: DineInEventFactEmitter = emitDineInEventFactsBestEffort,
+    // Transactional event persistence (EVT-B2B-NP3-B). Invoked ONLY from
+    // inside runInTransaction, on the SAME tx-bound `repos.outbox`, so the
+    // scoped facts commit or roll back with the authoritative mutation. An
+    // enqueue rejection is NOT isolated — it propagates and rolls the tx back
+    // (no silently lost event). Defaults to the durable enqueue helper; tests
+    // may inject a spy/no-op.
+    private readonly enqueueFacts: DineInEventFactEmitter = enqueueDineInEventFacts,
     // Read-only public table resolver (frozen UI1-A-R1/R2). Informational
     // only — NO transaction, NO lock, NO mutation, NO occupancy promise. The
     // authoritative open/resume decision remains POST /sessions. Optional so
@@ -306,7 +307,7 @@ export class DiningSessionService {
           owner_user_id: input.caller_user_id,
         });
 
-        return {
+        const created: MutationOutcome<OpenSessionResult, DineInEventFact> = {
           kind: "NEW_MUTATION",
           value: { kind: "CREATED", session },
           eventFacts: [
@@ -319,6 +320,14 @@ export class DiningSessionService {
             },
           ],
         };
+        // Same-tx durable enqueue: the SESSION_OPENED row commits or rolls
+        // back with the session insert above.
+        await this.enqueueFacts(
+          created.eventFacts,
+          input.correlation_id,
+          repos.outbox,
+        );
+        return created;
       });
     } catch (err) {
       // Concurrent-open race recovery (D2.5C4). The first transaction already
@@ -328,11 +337,8 @@ export class DiningSessionService {
       if (!isLiveSessionUniqueViolation(err)) throw err;
       outcome = await this.recoverFromConcurrentOpen(input);
     }
-    // Post-commit boundary: only a committed NEW_MUTATION with explicit
-    // semantic facts may be emitted. Resume/repeat outcomes emit nothing.
-    if (outcome.kind === "NEW_MUTATION" && outcome.eventFacts.length > 0) {
-      await this.emitFacts(outcome.eventFacts, input.correlation_id);
-    }
+    // Idempotent resume/repeat outcomes enqueue nothing (facts were emitted
+    // inside the winning transaction only).
     return outcome;
   }
 
@@ -501,7 +507,7 @@ export class DiningSessionService {
             request_type: "BRING_BILL",
           });
 
-          return {
+          const created: MutationOutcome<RequestBillResult, DineInEventFact> = {
             kind: "NEW_MUTATION",
             value: {
               // Authoritative committed results: the updated BILL_REQUESTED
@@ -530,6 +536,14 @@ export class DiningSessionService {
               },
             ],
           };
+          // Same-tx durable enqueue: BILL_REQUESTED + SERVICE_REQUEST_CREATED
+          // commit or roll back with the frozen bill above.
+          await this.enqueueFacts(
+            created.eventFacts,
+            input.correlation_id,
+            repos.outbox,
+          );
+          return created;
         }
 
         case "BILL_REQUESTED": {
@@ -600,13 +614,8 @@ export class DiningSessionService {
       }
     });
 
-    // Post-commit boundary: requestBill's repeat branches (BILL_REQUESTED /
-    // PAYMENT_PENDING) return IDEMPOTENT_NO_MUTATION with zero facts and emit
-    // nothing. Only the committed first-freeze NEW_MUTATION (exactly two
-    // facts) reaches emission. No emit happens inside the callback above.
-    if (outcome.kind === "NEW_MUTATION" && outcome.eventFacts.length > 0) {
-      await this.emitFacts(outcome.eventFacts, input.correlation_id);
-    }
+    // Idempotent repeat branches (BILL_REQUESTED / PAYMENT_PENDING) return
+    // zero facts; their enqueue never ran inside the callback.
     return outcome;
   }
 
@@ -677,7 +686,10 @@ export class DiningSessionService {
           request_type: input.request_type,
           note,
         });
-        return {
+        const created: MutationOutcome<
+          CreateServiceRequestResult,
+          DineInEventFact
+        > = {
           kind: "NEW_MUTATION",
           value: { request },
           eventFacts: [
@@ -691,28 +703,17 @@ export class DiningSessionService {
             },
           ],
         };
+        // Same-tx durable enqueue: the SERVICE_REQUEST_CREATED row commits or
+        // rolls back with the PENDING request insert above.
+        await this.enqueueFacts(
+          created.eventFacts,
+          input.correlation_id,
+          repos.outbox,
+        );
+        return created;
       },
     );
 
-    // Post-commit boundary: emit only for the committed NEW_MUTATION, never
-    // inside the transaction callback. Best-effort — an emission failure must
-    // NOT fail the already committed create (frozen C9.2 isolation rule):
-    // the committed operation still returns success. Log identity fields only.
-    if (outcome.kind === "NEW_MUTATION" && outcome.eventFacts.length > 0) {
-      try {
-        await this.emitFacts(outcome.eventFacts, input.correlation_id);
-      } catch (err) {
-        logger.error({
-          message: "dinein_create_request_emit_failed",
-          correlation_id: input.correlation_id,
-          request_id:
-            outcome.kind === "NEW_MUTATION" && outcome.value.request
-              ? outcome.value.request.id
-              : undefined,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
     return outcome;
   }
 
@@ -787,7 +788,10 @@ export class DiningSessionService {
       if (transition.kind === "UPDATED") {
         // The committed transition yields exactly one SERVICE_REQUEST_ACKNOWLEDGED
         // fact, derived from the authoritative transition DTO (D2.5G2).
-        return {
+        const created: MutationOutcome<
+          AcknowledgeServiceRequestResult,
+          DineInEventFact
+        > = {
           kind: "NEW_MUTATION",
           value: { request: transition.value },
           eventFacts: [
@@ -801,6 +805,14 @@ export class DiningSessionService {
             },
           ],
         };
+        // Same-tx durable enqueue: commits or rolls back with the conditional
+        // acknowledge update above.
+        await this.enqueueFacts(
+          created.eventFacts,
+          input.correlation_id,
+          repos.outbox,
+        );
+        return created;
       }
       if (transition.kind === "NOT_FOUND") {
         throw new AppError("SERVICE_REQUEST_NOT_FOUND", "Service request not found", 404);
@@ -814,25 +826,8 @@ export class DiningSessionService {
       );
     });
 
-    // Post-commit boundary: emit only for the committed NEW_MUTATION, never
-    // inside the transaction callback. Best-effort — an emission failure must
-    // NOT fail the already committed acknowledge (frozen C9.2 isolation rule).
-    // An ACKNOWLEDGED idempotent retry returns zero facts and emits nothing.
-    if (outcome.kind === "NEW_MUTATION" && outcome.eventFacts.length > 0) {
-      try {
-        await this.emitFacts(outcome.eventFacts, input.correlation_id);
-      } catch (err) {
-        logger.error({
-          message: "dinein_acknowledge_request_emit_failed",
-          correlation_id: input.correlation_id,
-          request_id:
-            outcome.kind === "NEW_MUTATION" && outcome.value.request
-              ? outcome.value.request.id
-              : undefined,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
+    // An ACKNOWLEDGED idempotent retry returns zero facts; its enqueue never
+    // ran inside the callback.
     return outcome;
   }
 
@@ -909,7 +904,10 @@ export class DiningSessionService {
       if (transition.kind === "UPDATED") {
         // The committed transition yields exactly one SERVICE_REQUEST_COMPLETED
         // fact, derived from the authoritative transition DTO (D2.5G3).
-        return {
+        const created: MutationOutcome<
+          CompleteServiceRequestResult,
+          DineInEventFact
+        > = {
           kind: "NEW_MUTATION",
           value: { request: transition.value },
           eventFacts: [
@@ -923,6 +921,14 @@ export class DiningSessionService {
             },
           ],
         };
+        // Same-tx durable enqueue: commits or rolls back with the conditional
+        // complete update above.
+        await this.enqueueFacts(
+          created.eventFacts,
+          input.correlation_id,
+          repos.outbox,
+        );
+        return created;
       }
       if (transition.kind === "NOT_FOUND") {
         throw new AppError("SERVICE_REQUEST_NOT_FOUND", "Service request not found", 404);
@@ -936,25 +942,8 @@ export class DiningSessionService {
       );
     });
 
-    // Post-commit boundary: emit only for the committed NEW_MUTATION, never
-    // inside the transaction callback. Best-effort — an emission failure must
-    // NOT fail the already committed completion (frozen C9.2 isolation rule).
-    // A COMPLETED idempotent retry returns zero facts and emits nothing.
-    if (outcome.kind === "NEW_MUTATION" && outcome.eventFacts.length > 0) {
-      try {
-        await this.emitFacts(outcome.eventFacts, input.correlation_id);
-      } catch (err) {
-        logger.error({
-          message: "dinein_complete_request_emit_failed",
-          correlation_id: input.correlation_id,
-          request_id:
-            outcome.kind === "NEW_MUTATION" && outcome.value.request
-              ? outcome.value.request.id
-              : undefined,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
+    // A COMPLETED idempotent retry returns zero facts; its enqueue never ran
+    // inside the callback.
     return outcome;
   }
 
@@ -1047,7 +1036,10 @@ export class DiningSessionService {
         // fact, derived from the authoritative transition DTO (D2.5G4). The
         // BRING_BILL boundary above guarantees this fact never carries a
         // BRING_BILL request.
-        return {
+        const created: MutationOutcome<
+          CancelServiceRequestResult,
+          DineInEventFact
+        > = {
           kind: "NEW_MUTATION",
           value: { request: transition.value },
           eventFacts: [
@@ -1061,6 +1053,14 @@ export class DiningSessionService {
             },
           ],
         };
+        // Same-tx durable enqueue: commits or rolls back with the conditional
+        // cancel update above.
+        await this.enqueueFacts(
+          created.eventFacts,
+          input.correlation_id,
+          repos.outbox,
+        );
+        return created;
       }
       if (transition.kind === "NOT_FOUND") {
         throw new AppError("SERVICE_REQUEST_NOT_FOUND", "Service request not found", 404);
@@ -1075,26 +1075,8 @@ export class DiningSessionService {
       );
     });
 
-    // Post-commit boundary: emit only for the committed NEW_MUTATION, never
-    // inside the transaction callback. Best-effort — an emission failure must
-    // NOT fail the already committed cancellation (frozen C9.2 isolation rule).
-    // A CANCELLED idempotent retry returns zero facts and emits nothing; the
-    // BRING_BILL 409 boundary throws before this point and emits nothing.
-    if (outcome.kind === "NEW_MUTATION" && outcome.eventFacts.length > 0) {
-      try {
-        await this.emitFacts(outcome.eventFacts, input.correlation_id);
-      } catch (err) {
-        logger.error({
-          message: "dinein_cancel_request_emit_failed",
-          correlation_id: input.correlation_id,
-          request_id:
-            outcome.kind === "NEW_MUTATION" && outcome.value.request
-              ? outcome.value.request.id
-              : undefined,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
+    // A CANCELLED idempotent retry returns zero facts; its enqueue never ran
+    // inside the callback. The BRING_BILL 409 boundary throws before enqueue.
     return outcome;
   }
 }

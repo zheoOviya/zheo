@@ -3,7 +3,7 @@ import type { DrizzleDb } from "../lib/dbType";
 import { DineInOrderService } from "../services/dineInOrder";
 import { DiningSessionService } from "../services/dineInSession";
 import {
-  emitDineInEventFactsBestEffort,
+  enqueueDineInEventFacts,
   type DineInEventFactEmitter,
 } from "../services/dineInEventEmitter";
 import type { CatalogRepository, MenuItemDTO } from "./catalogRepository";
@@ -139,13 +139,13 @@ describe("Dine-In runtime composition (H2.1)", () => {
       expect(orderService).toBeInstanceOf(DineInOrderService);
     });
 
-    it("defaults the event emitter to the accepted best-effort wiring", () => {
+    it("defaults the event emitter to the durable transactional enqueue wiring", () => {
       const port = buildDineInTransactionPort("memory");
       const service = new DiningSessionService(port);
       const wired = (
-        service as unknown as { emitFacts: DineInEventFactEmitter }
-      ).emitFacts;
-      expect(wired).toBe(emitDineInEventFactsBestEffort);
+        service as unknown as { enqueueFacts: DineInEventFactEmitter }
+      ).enqueueFacts;
+      expect(wired).toBe(enqueueDineInEventFacts);
     });
   });
 

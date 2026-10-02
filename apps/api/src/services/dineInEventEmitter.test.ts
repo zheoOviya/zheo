@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { TypedEventEnvelope } from "@snakzap/types";
-import * as eventBus from "../lib/eventBus";
-import { logger } from "../lib/logger";
+import type { EventName, TypedEventEnvelope } from "@snakzap/types";
+import type { DineInOutboxEnqueuer } from "../repositories/dineInContracts";
 import { mapDineInEventFacts } from "./dineInEventMapper";
-import { emitDineInEventFactsBestEffort } from "./dineInEventEmitter";
+import { enqueueDineInEventFacts } from "./dineInEventEmitter";
 import type { DineInEventFact } from "./dineInSession";
 
 // ------------------------------------------------------------
-// D2.5C9.2 helper-level tests. The real best-effort emitter runs against a
-// spied eventBus.emit — no Redis, no DB, no handlers.
+// EVT-B2B-NP3-B helper-level tests. The real enqueue helper runs against a
+// fake tx-bound outbox — no Redis, no DB, no handlers, no eventBus.emit.
+//
+// The helper is the durable successor to D2.5C9.2 best-effort emission: each
+// scoped fact becomes exactly one outbox row on the CALLER'S transaction.
 // ------------------------------------------------------------
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
@@ -44,40 +46,46 @@ const requestFact: DineInEventFact = {
   request_status: "PENDING",
 };
 
+function fakeOutbox(): {
+  outbox: DineInOutboxEnqueuer;
+  enqueue: ReturnType<typeof vi.fn>;
+} {
+  const enqueue = vi.fn(async (_envelope: TypedEventEnvelope<EventName>) => {});
+  return { outbox: { enqueue } as unknown as DineInOutboxEnqueuer, enqueue };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("emitDineInEventFactsBestEffort (D2.5C9.2)", () => {
-  it("D: requestBill pair shares the supplied correlation_id", async () => {
-    const emitSpy = vi.spyOn(eventBus, "emit").mockResolvedValue(undefined);
-    await emitDineInEventFactsBestEffort([billFact, requestFact], "corr-rb");
-    expect(emitSpy).toHaveBeenCalledTimes(2);
-    const env0 = emitSpy.mock.calls[0]![0]!;
-    const env1 = emitSpy.mock.calls[1]![0]!;
+describe("enqueueDineInEventFacts (EVT-B2B-NP3-B)", () => {
+  it("D: enqueues exactly one row per fact on the supplied outbox", async () => {
+    const { outbox, enqueue } = fakeOutbox();
+    await enqueueDineInEventFacts([billFact, requestFact], "corr-rb", outbox);
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    const env0 = enqueue.mock.calls[0]![0] as TypedEventEnvelope<EventName>;
+    const env1 = enqueue.mock.calls[1]![0] as TypedEventEnvelope<EventName>;
     expect(env0.metadata).toMatchObject({ correlation_id: "corr-rb" });
     expect(env1.metadata).toMatchObject({ correlation_id: "corr-rb" });
   });
 
   it("E: two requestBill envelopes have distinct event_id values", async () => {
-    const emitSpy = vi.spyOn(eventBus, "emit").mockResolvedValue(undefined);
-    await emitDineInEventFactsBestEffort([billFact, requestFact], "corr-rb");
-    const env0 = emitSpy.mock.calls[0]![0]!;
-    const env1 = emitSpy.mock.calls[1]![0]!;
+    const { outbox, enqueue } = fakeOutbox();
+    await enqueueDineInEventFacts([billFact, requestFact], "corr-rb", outbox);
+    const env0 = enqueue.mock.calls[0]![0] as TypedEventEnvelope<EventName>;
+    const env1 = enqueue.mock.calls[1]![0] as TypedEventEnvelope<EventName>;
     expect(env0.event_id).toBeDefined();
     expect(env1.event_id).toBeDefined();
     expect(env0.event_id).not.toBe(env1.event_id);
   });
 
-  it("F: envelope timestamp is post-commit observation time, not a domain timestamp", async () => {
-    const emitSpy = vi.spyOn(eventBus, "emit").mockResolvedValue(undefined);
+  it("F: envelope timestamp is created at enqueue time, not a domain timestamp", async () => {
+    const { outbox, enqueue } = fakeOutbox();
     const before = Date.now();
-    await emitDineInEventFactsBestEffort([billFact, requestFact], "corr-rb");
+    await enqueueDineInEventFacts([billFact, requestFact], "corr-rb", outbox);
     const after = Date.now();
-    const env0 = emitSpy.mock.calls[0]![0]!;
+    const env0 = enqueue.mock.calls[0]![0] as TypedEventEnvelope<EventName>;
     expect(env0.timestamp).toBeInstanceOf(Date);
-    // Timestamp is created at emission time (post-commit), NOT a frozen
-    // domain timestamp like bill_requested_at / created_at.
     const ts = env0.timestamp.getTime();
     expect(ts).toBeGreaterThanOrEqual(before - 1000);
     expect(ts).toBeLessThanOrEqual(after + 1000);
@@ -88,77 +96,45 @@ describe("emitDineInEventFactsBestEffort (D2.5C9.2)", () => {
     expect(serialized).not.toContain("requested_at");
   });
 
-  it("N: emitted names/payloads/aggregate ids match the C9.1 descriptors exactly", async () => {
-    const emitSpy = vi.spyOn(eventBus, "emit").mockResolvedValue(undefined);
+  it("N: enqueued names/payloads/aggregate ids match the C9.1 descriptors exactly", async () => {
+    const { outbox, enqueue } = fakeOutbox();
     const facts = [billFact, requestFact];
-    await emitDineInEventFactsBestEffort(facts, "corr-rb");
+    await enqueueDineInEventFacts(facts, "corr-rb", outbox);
     const descriptors = mapDineInEventFacts(facts, "corr-rb");
-    expect(emitSpy).toHaveBeenCalledTimes(descriptors.length);
-    emitSpy.mock.calls.forEach(
-      ([envelope]: [TypedEventEnvelope, ...unknown[]], i: number) => {
-        const d = descriptors[i]!;
-        expect(envelope.event_name).toBe(d.event_name);
-        expect(envelope.aggregate_id).toBe(d.aggregate_id);
-        expect(envelope.payload).toEqual(d.payload);
-        expect(envelope.metadata).toEqual(d.metadata);
-      },
-    );
-  });
-
-  it("I: first emit failure -> second event is still attempted", async () => {
-    const emitSpy = vi.spyOn(eventBus, "emit").mockImplementation(async () => {
-      throw new Error("redis down");
+    expect(enqueue).toHaveBeenCalledTimes(descriptors.length);
+    enqueue.mock.calls.forEach((call, i: number) => {
+      const envelope = call[0] as TypedEventEnvelope<EventName>;
+      const d = descriptors[i]!;
+      expect(envelope.event_name).toBe(d.event_name);
+      expect(envelope.aggregate_id).toBe(d.aggregate_id);
+      expect(envelope.payload).toEqual(d.payload);
+      expect(envelope.metadata).toEqual(d.metadata);
     });
-    vi.spyOn(logger, "error").mockImplementation(() => logger);
-    emitSpy.mockRejectedValueOnce(new Error("first fails")).mockResolvedValueOnce(undefined);
-
-    await expect(
-      emitDineInEventFactsBestEffort([billFact, requestFact], "corr-rb"),
-    ).resolves.toBeUndefined();
-    // BOTH events attempted independently.
-    expect(emitSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("J: second emit failure -> helper still succeeds, first emit already done", async () => {
-    const emitSpy = vi.spyOn(eventBus, "emit").mockImplementation(async () => {
-      throw new Error("boom");
-    });
-    vi.spyOn(logger, "error").mockImplementation(() => logger);
-    emitSpy.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("second fails"));
-
-    await expect(
-      emitDineInEventFactsBestEffort([billFact, requestFact], "corr-rb"),
-    ).resolves.toBeUndefined();
-    expect(emitSpy).toHaveBeenCalledTimes(2);
+  it("P: zero facts -> no outbox interaction", async () => {
+    const { outbox, enqueue } = fakeOutbox();
+    await enqueueDineInEventFacts([], "corr-empty", outbox);
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
-  it("K: single SessionOpened emit failure -> helper still succeeds", async () => {
-    const emitSpy = vi.spyOn(eventBus, "emit").mockRejectedValue(new Error("redis down"));
-    vi.spyOn(logger, "error").mockImplementation(() => logger);
+  it("Q: enqueue rejection propagates (NOT best-effort) so the tx can roll back", async () => {
+    const { outbox, enqueue } = fakeOutbox();
+    enqueue
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("outbox write failed"));
     await expect(
-      emitDineInEventFactsBestEffort([openedFact], "corr-1"),
-    ).resolves.toBeUndefined();
-    expect(emitSpy).toHaveBeenCalledTimes(1);
+      enqueueDineInEventFacts([billFact, requestFact], "corr-rb", outbox),
+    ).rejects.toThrow("outbox write failed");
+    expect(enqueue).toHaveBeenCalledTimes(2);
   });
 
-  it("O: failure log carries identity fields but no sensitive payload", async () => {
-    vi.spyOn(eventBus, "emit").mockRejectedValue(new Error("redis down"));
-    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => logger);
-
-    await emitDineInEventFactsBestEffort([billFact, requestFact], "corr-rb");
-
-    expect(errorSpy).toHaveBeenCalledTimes(2);
-    const firstLog = errorSpy.mock.calls[0]![0] as Record<string, unknown>;
-    expect(firstLog.message).toBe("dinein_event_emit_failed");
-    expect(firstLog.event_name).toBe("BillRequested");
-    expect(firstLog.aggregate_id).toBe(SESSION_ID);
-    expect(firstLog.correlation_id).toBe("corr-rb");
-    expect(firstLog.error).toBe("redis down");
-    const serialized = JSON.stringify(firstLog);
-    expect(serialized).not.toContain("table_token");
-    expect(serialized).not.toContain("payment");
-    expect(serialized).not.toContain("phone");
-    expect(serialized).not.toContain("email");
-    expect(serialized).not.toContain("total_amount");
+  it("R: single SessionOpened enqueue rejection propagates to the caller", async () => {
+    const { outbox, enqueue } = fakeOutbox();
+    enqueue.mockRejectedValue(new Error("outbox write failed"));
+    await expect(
+      enqueueDineInEventFacts([openedFact], "corr-1", outbox),
+    ).rejects.toThrow("outbox write failed");
+    expect(enqueue).toHaveBeenCalledTimes(1);
   });
 });

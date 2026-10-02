@@ -1,65 +1,56 @@
-import { createEventEnvelope, emit } from "../lib/eventBus";
-import { logger } from "../lib/logger";
+import { createEventEnvelope } from "../lib/eventBus";
+import type { DineInOutboxEnqueuer } from "../repositories/dineInContracts";
 import { mapDineInEventFacts } from "./dineInEventMapper";
 import type { DineInEventFact } from "./dineInSession";
 
 // ============================================
-// Dine-In post-commit best-effort event emission (D2.5C9.2).
+// Dine-In transactional event persistence (EVT-B2B-NP3-B).
 //
-// This helper is invoked ONLY after runInTransaction has resolved
-// successfully (post-commit boundary). It maps committed semantic facts
-// to envelopes and emits them one-by-one.
+// Supersedes the D2.5C9.2 post-commit best-effort emit. The scoped dine-in
+// facts are now enqueued into the transactional outbox on the SAME transaction
+// handle (`outbox`) that carries the authoritative business mutation, so:
 //
-// NO_DURABLE_TRANSACTIONAL_EVENT_DELIVERY:
-//   A DB commit may succeed while an event is lost. There is NO outbox,
-//   NO replay, NO exactly-once. Client retry is NOT event redelivery.
+//   - success mutation -> exactly one durable child row per fact
+//   - duplicate / retry -> zero (business path short-circuits first)
+//   - rollback          -> zero (enqueue is on the rolled-back tx)
 //
-// Failure isolation (frozen rule): domain commit succeeds + emission fails
-// => the domain operation STILL returns success. Each event is attempted
-// independently; one rejected emit does NOT prevent the others.
+// The mapper remains authoritative for event_name/aggregate_id/payload/
+// metadata; envelope construction (event_id + timestamp) happens here at
+// enqueue time. No event_name, schema, or migration change.
 //
-// Safety:
-//   - no DB access
-//   - no mutation of domain state
-//   - no automatic retry (a single best-effort pass)
-//   - only existing EventBus API is consumed (no behavior change)
+// Failure is NOT isolated any more: an enqueue rejection propagates into the
+// owning transaction so the caller observes a rollback instead of a silent
+// lost event. No automatic retry — the relay owns delivery.
 // ============================================
 
 export type DineInEventFactEmitter = (
   facts: readonly DineInEventFact[],
   correlationId: string,
+  outbox: DineInOutboxEnqueuer,
 ) => Promise<void>;
 
-export async function emitDineInEventFactsBestEffort(
+export function buildDineInEventEnvelopes(
   facts: readonly DineInEventFact[],
   correlationId: string,
+): ReturnType<typeof createEventEnvelope>[] {
+  const descriptors = mapDineInEventFacts(facts, correlationId);
+  return descriptors.map((descriptor) =>
+    createEventEnvelope(
+      descriptor.event_name,
+      descriptor.aggregate_id,
+      descriptor.payload,
+      { ...descriptor.metadata },
+    ),
+  );
+}
+
+export async function enqueueDineInEventFacts(
+  facts: readonly DineInEventFact[],
+  correlationId: string,
+  outbox: DineInOutboxEnqueuer,
 ): Promise<void> {
   if (facts.length === 0) return;
-
-  // Mapper is authoritative for event_name/aggregate_id/payload/metadata.
-  // Envelope construction (event_id + timestamp) happens here, post-commit,
-  // via the existing constructor. Timestamp = post-commit observation time.
-  const descriptors = mapDineInEventFacts(facts, correlationId);
-
-  for (const descriptor of descriptors) {
-    try {
-      const envelope = createEventEnvelope(
-        descriptor.event_name,
-        descriptor.aggregate_id,
-        descriptor.payload,
-        { ...descriptor.metadata },
-      );
-      await emit(envelope);
-    } catch (err) {
-      // Best-effort: never rethrow. Log identity fields ONLY — no payload,
-      // no table_token, no PII, no payment data.
-      logger.error({
-        message: "dinein_event_emit_failed",
-        event_name: descriptor.event_name,
-        aggregate_id: descriptor.aggregate_id,
-        correlation_id: descriptor.metadata.correlation_id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+  for (const envelope of buildDineInEventEnvelopes(facts, correlationId)) {
+    await outbox.enqueue(envelope);
   }
 }

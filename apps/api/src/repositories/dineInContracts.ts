@@ -6,6 +6,7 @@ import type {
   StaffAssignmentStatus,
 } from "@snakzap/types";
 import type { DrizzleDb } from "../lib/dbType";
+import type { EventOutboxRepository } from "./eventOutboxRepository";
 
 // ============================================
 // Dine-In / Smart Table Ordering persistence contracts.
@@ -662,6 +663,12 @@ export function makeTxBoundSessionBill(
   return repo as TxBoundSessionBillRepository;
 }
 
+// Narrow durable outbox enqueue seam (EVT-B2B-NP3-B). Bound to the SAME
+// transaction handle as every other member, so a scoped dine-in event is
+// persisted on the same transaction as its authoritative business mutation.
+// Enqueue-only: no claim/relay surface is exposed to the domain service.
+export type DineInOutboxEnqueuer = Pick<EventOutboxRepository, "enqueue">;
+
 export interface DineInTransactionRepos {
   restaurantTables: TransactionalRestaurantTableRepository;
   diningSessions: TransactionalDiningSessionRepository;
@@ -670,6 +677,7 @@ export interface DineInTransactionRepos {
   serviceRequests: TransactionalServiceRequestRepository;
   sessionBills: TxBoundSessionBillRepository;
   restaurantEligibility: TransactionalRestaurantReader;
+  outbox: DineInOutboxEnqueuer;
 }
 
 export type DineInTransactionReposFactory = (tx: DrizzleDb) => DineInTransactionRepos;

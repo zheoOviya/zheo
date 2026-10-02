@@ -13,6 +13,7 @@ import {
   DrizzleSessionBillRepository,
   DrizzleStaffAssignmentRepository,
 } from "./dineInRepositories";
+import { DrizzleEventOutboxRepository } from "./drizzleEventOutboxRepository";
 
 // ============================================
 // Dine-In transaction port (frozen D2.4B/D2.4G).
@@ -31,6 +32,9 @@ export function buildDineInTransactionRepos(tx: DrizzleDb): DineInTransactionRep
     serviceRequests: new DrizzleServiceRequestRepository(tx),
     sessionBills: makeTxBoundSessionBill(new DrizzleSessionBillRepository(tx)),
     restaurantEligibility: new DrizzleRestaurantEligibilityReader(tx),
+    // EVT-B2B-NP3-B: enqueue runs on the SAME `tx`, so a scoped dine-in event
+    // commits or rolls back with its authoritative business mutation.
+    outbox: new DrizzleEventOutboxRepository(tx),
   };
 }
 

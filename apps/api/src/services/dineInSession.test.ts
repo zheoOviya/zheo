@@ -19,7 +19,7 @@ import {
   PUBLIC_SERVICE_REQUEST_CREATE_TYPES,
   OTHER_NOTE_MAX_LENGTH,
 } from "./dineInSession";
-import { emitDineInEventFactsBestEffort } from "./dineInEventEmitter";
+import { enqueueDineInEventFacts } from "./dineInEventEmitter";
 import { mapDineInEventFact } from "./dineInEventMapper";
 import type {
   ArtifactLookup,
@@ -1506,31 +1506,31 @@ describe("DiningSessionService.requestBill atomic freeze (D2.5C7)", () => {
   });
 });
 
-describe("DiningSessionService post-commit emission (D2.5C9.2)", () => {
+describe("DiningSessionService transactional emission (EVT-B2B-NP3-B)", () => {
   beforeEach(() => {
-    vi.mocked(emitDineInEventFactsBestEffort).mockClear();
+    vi.mocked(enqueueDineInEventFacts).mockReset();
   });
 
-  it("A: openSession NEW_MUTATION emits SessionOpened once AFTER tx resolves", async () => {
+  it("A: openSession NEW_MUTATION enqueues SessionOpened once with the tx-bound outbox", async () => {
     const { tables, eligibility, sessions } = happyRepos();
     const service = new DiningSessionService(
       fakeTxPort(tables, eligibility, sessions),
     );
     const outcome = await service.openSession(input);
     expect(outcome.kind).toBe("NEW_MUTATION");
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledWith(
-      [
-        {
-          kind: "SESSION_OPENED",
-          session_id: "session-1",
-          restaurant_id: "rest-1",
-          table_id: "table-1",
-          customer_user_id: "user-1",
-        },
-      ],
-      "corr-1",
-    );
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
+    const [facts, correlationId] = vi.mocked(enqueueDineInEventFacts)
+      .mock.calls[0]!;
+    expect(facts).toEqual([
+      {
+        kind: "SESSION_OPENED",
+        session_id: "session-1",
+        restaurant_id: "rest-1",
+        table_id: "table-1",
+        customer_user_id: "user-1",
+      },
+    ]);
+    expect(correlationId).toBe("corr-1");
   });
 
   it("B: same-owner resume (IDEMPOTENT_NO_MUTATION) emits zero", async () => {
@@ -1549,7 +1549,7 @@ describe("DiningSessionService post-commit emission (D2.5C9.2)", () => {
     );
     const outcome = await service.openSession(input);
     expect(outcome.kind).toBe("IDEMPOTENT_NO_MUTATION");
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("C: requestBill first freeze emits exactly two events with correlation_id", async () => {
@@ -1561,8 +1561,8 @@ describe("DiningSessionService post-commit emission (D2.5C9.2)", () => {
     const service = new DiningSessionService(port);
     const outcome = await service.requestBill(rbInput);
     expect(outcome.kind).toBe("NEW_MUTATION");
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
-    const [facts, correlationId] = vi.mocked(emitDineInEventFactsBestEffort)
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
+    const [facts, correlationId] = vi.mocked(enqueueDineInEventFacts)
       .mock.calls[0]!;
     expect(facts).toHaveLength(2);
     expect(facts[0]!.kind).toBe("BILL_REQUESTED");
@@ -1570,7 +1570,7 @@ describe("DiningSessionService post-commit emission (D2.5C9.2)", () => {
     expect(correlationId).toBe("corr-rb");
   });
 
-  it("G: emission is never invoked inside the transaction callback", async () => {
+  it("G: emission is invoked INSIDE the transaction callback, before it resolves", async () => {
     const order: string[] = [];
     const { tables, eligibility, sessions } = happyRepos();
     const repos = {
@@ -1588,13 +1588,21 @@ describe("DiningSessionService post-commit emission (D2.5C9.2)", () => {
         return result;
       },
     };
-    vi.mocked(emitDineInEventFactsBestEffort).mockImplementation(async () => {
+    vi.mocked(enqueueDineInEventFacts).mockImplementation(async () => {
       order.push("emit");
     });
     const service = new DiningSessionService(port);
     await service.openSession(input);
-    // tx callback fully resolves BEFORE any emission.
-    expect(order.indexOf("tx-callback-end")).toBeLessThan(order.indexOf("emit"));
+    // In-tx durable enqueue: the fact is written BEFORE the tx callback
+    // resolves, so it shares the business mutation's transaction.
+    expect(order.indexOf("emit")).toBeLessThan(order.indexOf("tx-callback-end"));
+    order.forEach((e) => {
+      if (e === "emit") {
+        expect(order.indexOf("tx-callback-start")).toBeLessThan(
+          order.indexOf("emit"),
+        );
+      }
+    });
     expect(order.filter((e) => e === "emit")).toHaveLength(1);
   });
 
@@ -1604,7 +1612,7 @@ describe("DiningSessionService post-commit emission (D2.5C9.2)", () => {
     await expect(service.requestBill(rbInput)).rejects.toMatchObject({
       code: "SESSION_NOT_FOUND",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("L: BILL_REQUESTED repeat emits zero", async () => {
@@ -1617,7 +1625,7 @@ describe("DiningSessionService post-commit emission (D2.5C9.2)", () => {
     const outcome = await service.requestBill(rbInput);
     expect(outcome.kind).toBe("IDEMPOTENT_NO_MUTATION");
     expect(outcome.eventFacts).toEqual([]);
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("M: PAYMENT_PENDING repeat emits zero", async () => {
@@ -1629,7 +1637,7 @@ describe("DiningSessionService post-commit emission (D2.5C9.2)", () => {
     const outcome = await service.requestBill(rbInput);
     expect(outcome.kind).toBe("IDEMPOTENT_NO_MUTATION");
     expect(outcome.eventFacts).toEqual([]);
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 });
 
@@ -3234,24 +3242,25 @@ describe("DiningSessionService.cancelServiceRequest boundary (D2.5E4)", () => {
 });
 
 // ------------------------------------------------------------
-// D2.5G1 focused tests: SERVICE_REQUEST_CREATED event emission for generic
+// D2.5G1 focused tests: SERVICE_REQUEST_CREATED emission for generic
 // createServiceRequest. The committed NEW_MUTATION carries exactly one
-// SERVICE_REQUEST_CREATED fact; emission is strictly post-commit and
-// best-effort (a failure never fails the committed create). ACK/COMPLETE/
-// CANCEL events are NOT implemented here. Rejection paths emit nothing.
+// SERVICE_REQUEST_CREATED fact; EVT-B2B-NP3-B persists it on the SAME
+// transaction as the request insert (in-tx durable enqueue). An enqueue
+// failure propagates and rolls the tx back. ACK/COMPLETE/CANCEL events are
+// NOT implemented here. Rejection paths enqueue nothing.
 // ------------------------------------------------------------
 
 describe("DiningSessionService SERVICE_REQUEST_CREATED emission (D2.5G1)", () => {
   beforeEach(() => {
-    vi.mocked(emitDineInEventFactsBestEffort).mockClear();
+    vi.mocked(enqueueDineInEventFacts).mockReset();
   });
 
   it("A. successful WATER create emits exactly one SERVICE_REQUEST_CREATED event", async () => {
     const { port } = makeCsrPort(csrSession({ status: "OPEN" }));
     const service = new DiningSessionService(port);
     await service.createServiceRequest(csrInput());
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts).toHaveLength(1);
     expect(facts[0]!.kind).toBe("SERVICE_REQUEST_CREATED");
   });
@@ -3262,8 +3271,8 @@ describe("DiningSessionService SERVICE_REQUEST_CREATED emission (D2.5G1)", () =>
     await service.createServiceRequest(
       csrInput({ request_type: "OTHER", note: "extra plates please" }),
     );
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts).toHaveLength(1);
     expect(facts[0]!.kind).toBe("SERVICE_REQUEST_CREATED");
   });
@@ -3275,7 +3284,7 @@ describe("DiningSessionService SERVICE_REQUEST_CREATED emission (D2.5G1)", () =>
     const outcome = (await service.createServiceRequest(
       csrInput({ request_type: "CALL_STAFF" }),
     )) as MutationOutcome<CreateServiceRequestResult, DineInEventFact>;
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts[0]).toMatchObject({ request_id: "req-aggregate" });
     expect(outcome.value.request.id).toBe("req-aggregate");
   });
@@ -3284,7 +3293,7 @@ describe("DiningSessionService SERVICE_REQUEST_CREATED emission (D2.5G1)", () =>
     const { port } = makeCsrPort(csrSession({ status: "OPEN" }));
     const service = new DiningSessionService(port);
     await service.createServiceRequest(csrInput({ correlation_id: "corr-g1" }));
-    const [, correlationId] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [, correlationId] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(correlationId).toBe("corr-g1");
   });
 
@@ -3294,7 +3303,7 @@ describe("DiningSessionService SERVICE_REQUEST_CREATED emission (D2.5G1)", () =>
     await service.createServiceRequest(
       csrInput({ request_type: "OTHER", note: "sensitive customer note" }),
     );
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     // The fact derives from the authoritative created DTO (WATER in the port
     // fixture); the OTHER/note input is deliberately NOT echoed into the fact.
     expect(facts[0]).toEqual({
@@ -3307,7 +3316,7 @@ describe("DiningSessionService SERVICE_REQUEST_CREATED emission (D2.5G1)", () =>
     });
   });
 
-  it("F. emission happens only AFTER the transaction callback resolves", async () => {
+  it("F. emission happens INSIDE the transaction callback, before it resolves", async () => {
     const order: string[] = [];
     const created = csrRequest({ id: "req-g1" });
     const repos = {
@@ -3328,29 +3337,29 @@ describe("DiningSessionService SERVICE_REQUEST_CREATED emission (D2.5G1)", () =>
         return result;
       },
     };
-    vi.mocked(emitDineInEventFactsBestEffort).mockImplementation(async () => {
+    vi.mocked(enqueueDineInEventFacts).mockImplementation(async () => {
       order.push("emit");
     });
     const service = new DiningSessionService(port);
     await service.createServiceRequest(csrInput());
-    expect(order.indexOf("tx-callback-end")).toBeLessThan(order.indexOf("emit"));
+    expect(order.indexOf("emit")).toBeLessThan(order.indexOf("tx-callback-end"));
+    expect(order.indexOf("tx-callback-start")).toBeLessThan(
+      order.indexOf("emit"),
+    );
     expect(order.filter((e) => e === "emit")).toHaveLength(1);
   });
 
-  it("G. emission failure does NOT fail the committed create result", async () => {
+  it("G. emission failure propagates and fails the create (same-tx rollback)", async () => {
     const { port, mocks } = makeCsrPort(csrSession({ status: "OPEN" }));
-    vi.mocked(emitDineInEventFactsBestEffort).mockRejectedValue(
+    vi.mocked(enqueueDineInEventFacts).mockRejectedValue(
       new Error("bus down"),
     );
     const service = new DiningSessionService(port);
-    const outcome = (await service.createServiceRequest(csrInput())) as MutationOutcome<
-      CreateServiceRequestResult,
-      DineInEventFact
-    >;
-    expect(outcome.kind).toBe("NEW_MUTATION");
-    expect(outcome.value.request.status).toBe("PENDING");
+    await expect(service.createServiceRequest(csrInput())).rejects.toThrow(
+      "bus down",
+    );
     expect(mocks.createRequest).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
   });
 
   it("H. CLOSED-session rejection emits nothing", async () => {
@@ -3359,7 +3368,7 @@ describe("DiningSessionService SERVICE_REQUEST_CREATED emission (D2.5G1)", () =>
     await expect(service.createServiceRequest(csrInput())).rejects.toMatchObject({
       code: "SESSION_CLOSED_FOR_REQUEST",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("I. BRING_BILL rejection emits nothing", async () => {
@@ -3370,7 +3379,7 @@ describe("DiningSessionService SERVICE_REQUEST_CREATED emission (D2.5G1)", () =>
     ).rejects.toMatchObject({
       code: "BRING_BILL_MANAGED_BY_BILL_FLOW",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("J. invalid-type rejection emits nothing", async () => {
@@ -3381,7 +3390,7 @@ describe("DiningSessionService SERVICE_REQUEST_CREATED emission (D2.5G1)", () =>
         csrInput({ request_type: "FLAMINGO" as unknown as CreateServiceRequestInput["request_type"] }),
       ),
     ).rejects.toMatchObject({ code: "INVALID_REQUEST_TYPE" });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("K. OTHER validation rejection emits nothing", async () => {
@@ -3390,15 +3399,15 @@ describe("DiningSessionService SERVICE_REQUEST_CREATED emission (D2.5G1)", () =>
     await expect(
       service.createServiceRequest(csrInput({ request_type: "OTHER" })),
     ).rejects.toMatchObject({ code: "OTHER_NOTE_REQUIRED" });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("L. exactly one event per successful create", async () => {
     const { port } = makeCsrPort(csrSession({ status: "OPEN" }));
     const service = new DiningSessionService(port);
     await service.createServiceRequest(csrInput());
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts).toHaveLength(1);
   });
 
@@ -3436,11 +3445,12 @@ describe("DiningSessionService SERVICE_REQUEST_CREATED emission (D2.5G1)", () =>
 // ------------------------------------------------------------
 // D2.5G2 focused tests: SERVICE_REQUEST_ACKNOWLEDGED event emission for
 // acknowledgeServiceRequest. The committed PENDING->ACKNOWLEDGED NEW_MUTATION
-// carries exactly one SERVICE_REQUEST_ACKNOWLEDGED fact; emission is strictly
-// post-commit and best-effort (a failure never fails the committed ack). An
-// ACKNOWLEDGED idempotent retry emits NOTHING (IDEMPOTENT_NO_MUTATION +
-// eventFacts []). COMPLETED/CANCELLED events are NOT implemented here and no
-// ack path ever emits one. Rejection paths emit nothing.
+// carries exactly one SERVICE_REQUEST_ACKNOWLEDGED fact; EVT-B2B-NP3-B
+// persists it on the SAME transaction as the CAS update (in-tx durable
+// enqueue; a failure propagates and rolls back). An ACKNOWLEDGED idempotent
+// retry emits NOTHING (IDEMPOTENT_NO_MUTATION + eventFacts []).
+// COMPLETED/CANCELLED events are NOT implemented here and no ack path ever
+// emits one. Rejection paths emit nothing.
 // ------------------------------------------------------------
 
 describe("DiningSessionService SERVICE_REQUEST_ACKNOWLEDGED emission (D2.5G2)", () => {
@@ -3448,15 +3458,15 @@ describe("DiningSessionService SERVICE_REQUEST_ACKNOWLEDGED emission (D2.5G2)", 
     // mockReset clears call history AND any mockImplementation/mockRejectedValue
     // leaked from the G1 emission-failure test, keeping the default mock
     // resolve-undefined semantics for every G2 test.
-    vi.mocked(emitDineInEventFactsBestEffort).mockReset();
+    vi.mocked(enqueueDineInEventFacts).mockReset();
   });
 
   it("A. successful PENDING -> ACKNOWLEDGED emits exactly one SERVICE_REQUEST_ACKNOWLEDGED event", async () => {
     const { port } = makeAsrPort({});
     const service = new DiningSessionService(port);
     await service.acknowledgeServiceRequest(asrInput());
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts).toHaveLength(1);
     expect(facts[0]!.kind).toBe("SERVICE_REQUEST_ACKNOWLEDGED");
   });
@@ -3480,7 +3490,7 @@ describe("DiningSessionService SERVICE_REQUEST_ACKNOWLEDGED emission (D2.5G2)", 
       AcknowledgeServiceRequestResult,
       DineInEventFact
     >;
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts[0]).toMatchObject({ request_id: "req-e2" });
     expect(outcome.value.request.id).toBe("req-e2");
   });
@@ -3489,7 +3499,7 @@ describe("DiningSessionService SERVICE_REQUEST_ACKNOWLEDGED emission (D2.5G2)", 
     const { port } = makeAsrPort({});
     const service = new DiningSessionService(port);
     await service.acknowledgeServiceRequest(asrInput({ correlation_id: "corr-g2" }));
-    const [, correlationId] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [, correlationId] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(correlationId).toBe("corr-g2");
   });
 
@@ -3497,7 +3507,7 @@ describe("DiningSessionService SERVICE_REQUEST_ACKNOWLEDGED emission (D2.5G2)", 
     const { port } = makeAsrPort({});
     const service = new DiningSessionService(port);
     await service.acknowledgeServiceRequest(asrInput({ request_id: "ignored-by-fact" }));
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     // The fact derives from the authoritative committed transition DTO, never
     // from the input. The fixture's DTO is WATER/ACKNOWLEDGED/req-e2 regardless
     // of the request_id in the input.
@@ -3511,7 +3521,7 @@ describe("DiningSessionService SERVICE_REQUEST_ACKNOWLEDGED emission (D2.5G2)", 
     });
   });
 
-  it("F. emission happens only AFTER the transaction callback resolves", async () => {
+  it("F. emission happens INSIDE the transaction callback, before it resolves", async () => {
     const order: string[] = [];
     const repos = {
       diningSessions: {
@@ -3536,28 +3546,28 @@ describe("DiningSessionService SERVICE_REQUEST_ACKNOWLEDGED emission (D2.5G2)", 
         return result;
       },
     };
-    vi.mocked(emitDineInEventFactsBestEffort).mockImplementation(async () => {
+    vi.mocked(enqueueDineInEventFacts).mockImplementation(async () => {
       order.push("emit");
     });
     const service = new DiningSessionService(port);
     await service.acknowledgeServiceRequest(asrInput());
-    expect(order.indexOf("tx-callback-end")).toBeLessThan(order.indexOf("emit"));
+    expect(order.indexOf("emit")).toBeLessThan(order.indexOf("tx-callback-end"));
+    expect(order.indexOf("tx-callback-start")).toBeLessThan(
+      order.indexOf("emit"),
+    );
     expect(order.filter((e) => e === "emit")).toHaveLength(1);
   });
 
-  it("G. emission failure does NOT fail the committed acknowledge result", async () => {
+  it("G. emission failure propagates and fails the acknowledge (same-tx rollback)", async () => {
     const { port } = makeAsrPort({});
-    vi.mocked(emitDineInEventFactsBestEffort).mockRejectedValue(
+    vi.mocked(enqueueDineInEventFacts).mockRejectedValue(
       new Error("bus down"),
     );
     const service = new DiningSessionService(port);
-    const outcome = (await service.acknowledgeServiceRequest(asrInput())) as MutationOutcome<
-      AcknowledgeServiceRequestResult,
-      DineInEventFact
-    >;
-    expect(outcome.kind).toBe("NEW_MUTATION");
-    expect(outcome.value.request.status).toBe("ACKNOWLEDGED");
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
+    await expect(service.acknowledgeServiceRequest(asrInput())).rejects.toThrow(
+      "bus down",
+    );
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
   });
 
   it("H. ACKNOWLEDGED idempotent retry emits NOTHING", async () => {
@@ -3569,7 +3579,7 @@ describe("DiningSessionService SERVICE_REQUEST_ACKNOWLEDGED emission (D2.5G2)", 
     >;
     expect(outcome.kind).toBe("IDEMPOTENT_NO_MUTATION");
     expect(outcome.eventFacts).toEqual([]);
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("I. COMPLETED/CANCELLED 409 rejection emits nothing", async () => {
@@ -3578,7 +3588,7 @@ describe("DiningSessionService SERVICE_REQUEST_ACKNOWLEDGED emission (D2.5G2)", 
     await expect(service.acknowledgeServiceRequest(asrInput())).rejects.toMatchObject({
       code: "INVALID_SERVICE_REQUEST_TRANSITION",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("J. NOT_FOUND rejection emits nothing", async () => {
@@ -3587,7 +3597,7 @@ describe("DiningSessionService SERVICE_REQUEST_ACKNOWLEDGED emission (D2.5G2)", 
     await expect(service.acknowledgeServiceRequest(asrInput())).rejects.toMatchObject({
       code: "SERVICE_REQUEST_NOT_FOUND",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("K. STATE_MISMATCH rejection emits nothing", async () => {
@@ -3598,7 +3608,7 @@ describe("DiningSessionService SERVICE_REQUEST_ACKNOWLEDGED emission (D2.5G2)", 
     await expect(service.acknowledgeServiceRequest(asrInput())).rejects.toMatchObject({
       code: "INVALID_SERVICE_REQUEST_TRANSITION",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("L. no COMPLETED/CANCELLED event is ever emitted by ack", async () => {
@@ -3645,7 +3655,7 @@ describe("DiningSessionService SERVICE_REQUEST_ACKNOWLEDGED emission (D2.5G2)", 
     });
     const service = new DiningSessionService(port);
     await service.acknowledgeServiceRequest(asrInput({ request_id: "req-input" }));
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts[0]).toEqual({
       kind: "SERVICE_REQUEST_ACKNOWLEDGED",
       request_id: "req-authoritative",
@@ -3660,12 +3670,13 @@ describe("DiningSessionService SERVICE_REQUEST_ACKNOWLEDGED emission (D2.5G2)", 
 // ------------------------------------------------------------
 // D2.5G3 focused tests: SERVICE_REQUEST_COMPLETED event emission for
 // completeServiceRequest. The committed ACKNOWLEDGED->COMPLETED NEW_MUTATION
-// carries exactly one SERVICE_REQUEST_COMPLETED fact; emission is strictly
-// post-commit and best-effort (a failure never fails the committed completion).
-// A COMPLETED idempotent retry emits NOTHING (IDEMPOTENT_NO_MUTATION +
-// eventFacts []). CANCELLED events are NOT implemented here and no complete
-// path ever emits one. Rejection paths emit nothing. BRING_BILL completes via
-// the normal lifecycle and emits the same COMPLETED event.
+// carries exactly one SERVICE_REQUEST_COMPLETED fact; EVT-B2B-NP3-B persists
+// it on the SAME transaction as the CAS update (in-tx durable enqueue; a
+// failure propagates and rolls back). A COMPLETED idempotent retry emits
+// NOTHING (IDEMPOTENT_NO_MUTATION + eventFacts []). CANCELLED events are NOT
+// implemented here and no complete path ever emits one. Rejection paths emit
+// nothing. BRING_BILL completes via the normal lifecycle and emits the same
+// COMPLETED event.
 // ------------------------------------------------------------
 
 describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () => {
@@ -3673,15 +3684,15 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
     // mockReset clears call history AND any mockImplementation/mockRejectedValue
     // leaked from earlier emission-failure tests, keeping the default mock
     // resolve-undefined semantics for every G3 test.
-    vi.mocked(emitDineInEventFactsBestEffort).mockReset();
+    vi.mocked(enqueueDineInEventFacts).mockReset();
   });
 
   it("A. ACKNOWLEDGED -> COMPLETED emits exactly one SERVICE_REQUEST_COMPLETED event", async () => {
     const { port } = makeCmrPort({});
     const service = new DiningSessionService(port);
     await service.completeServiceRequest(cmrInput());
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts).toHaveLength(1);
     expect(facts[0]!.kind).toBe("SERVICE_REQUEST_COMPLETED");
   });
@@ -3705,7 +3716,7 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
       CompleteServiceRequestResult,
       DineInEventFact
     >;
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts[0]).toMatchObject({ request_id: "req-e3" });
     expect(outcome.value.request.id).toBe("req-e3");
   });
@@ -3714,7 +3725,7 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
     const { port } = makeCmrPort({});
     const service = new DiningSessionService(port);
     await service.completeServiceRequest(cmrInput({ correlation_id: "corr-g3" }));
-    const [, correlationId] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [, correlationId] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(correlationId).toBe("corr-g3");
   });
 
@@ -3722,7 +3733,7 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
     const { port } = makeCmrPort({});
     const service = new DiningSessionService(port);
     await service.completeServiceRequest(cmrInput({ request_id: "ignored-by-fact" }));
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     // The fact derives from the authoritative committed transition DTO, never
     // from the input. The fixture's DTO is WATER/COMPLETED/req-e3 regardless of
     // the request_id in the input. No completed_by/completed_at, no note.
@@ -3736,7 +3747,7 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
     });
   });
 
-  it("F. emission happens only AFTER the transaction callback resolves", async () => {
+  it("F. emission happens INSIDE the transaction callback, before it resolves", async () => {
     const order: string[] = [];
     const repos = {
       diningSessions: {
@@ -3761,28 +3772,28 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
         return result;
       },
     };
-    vi.mocked(emitDineInEventFactsBestEffort).mockImplementation(async () => {
+    vi.mocked(enqueueDineInEventFacts).mockImplementation(async () => {
       order.push("emit");
     });
     const service = new DiningSessionService(port);
     await service.completeServiceRequest(cmrInput());
-    expect(order.indexOf("tx-callback-end")).toBeLessThan(order.indexOf("emit"));
+    expect(order.indexOf("emit")).toBeLessThan(order.indexOf("tx-callback-end"));
+    expect(order.indexOf("tx-callback-start")).toBeLessThan(
+      order.indexOf("emit"),
+    );
     expect(order.filter((e) => e === "emit")).toHaveLength(1);
   });
 
-  it("G. emission failure does NOT fail the committed completion result", async () => {
+  it("G. emission failure propagates and fails the completion (same-tx rollback)", async () => {
     const { port } = makeCmrPort({});
-    vi.mocked(emitDineInEventFactsBestEffort).mockRejectedValue(
+    vi.mocked(enqueueDineInEventFacts).mockRejectedValue(
       new Error("bus down"),
     );
     const service = new DiningSessionService(port);
-    const outcome = (await service.completeServiceRequest(cmrInput())) as MutationOutcome<
-      CompleteServiceRequestResult,
-      DineInEventFact
-    >;
-    expect(outcome.kind).toBe("NEW_MUTATION");
-    expect(outcome.value.request.status).toBe("COMPLETED");
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
+    await expect(service.completeServiceRequest(cmrInput())).rejects.toThrow(
+      "bus down",
+    );
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
   });
 
   it("H. COMPLETED idempotent retry emits NOTHING", async () => {
@@ -3794,7 +3805,7 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
     >;
     expect(outcome.kind).toBe("IDEMPOTENT_NO_MUTATION");
     expect(outcome.eventFacts).toEqual([]);
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("I. PENDING 409 rejection emits nothing", async () => {
@@ -3803,7 +3814,7 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
     await expect(service.completeServiceRequest(cmrInput())).rejects.toMatchObject({
       code: "INVALID_SERVICE_REQUEST_TRANSITION",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("J. CANCELLED 409 rejection emits nothing", async () => {
@@ -3812,7 +3823,7 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
     await expect(service.completeServiceRequest(cmrInput())).rejects.toMatchObject({
       code: "INVALID_SERVICE_REQUEST_TRANSITION",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("K. CAS NOT_FOUND rejection emits nothing", async () => {
@@ -3821,7 +3832,7 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
     await expect(service.completeServiceRequest(cmrInput())).rejects.toMatchObject({
       code: "SERVICE_REQUEST_NOT_FOUND",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("L. CAS STATE_MISMATCH rejection emits nothing", async () => {
@@ -3832,7 +3843,7 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
     await expect(service.completeServiceRequest(cmrInput())).rejects.toMatchObject({
       code: "INVALID_SERVICE_REQUEST_TRANSITION",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("M. BRING_BILL ACKNOWLEDGED -> COMPLETED emits the same COMPLETED event", async () => {
@@ -3841,8 +3852,8 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
     });
     const service = new DiningSessionService(port);
     await service.completeServiceRequest(cmrInput());
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts[0]).toEqual({
       kind: "SERVICE_REQUEST_COMPLETED",
       request_id: "req-e3",
@@ -3857,15 +3868,15 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
     const { port: csrPort } = makeCsrPort(csrSession({ status: "OPEN" }));
     const service = new DiningSessionService(csrPort);
     await service.createServiceRequest(csrInput());
-    const [createFacts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [createFacts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(createFacts[0]!.kind).toBe("SERVICE_REQUEST_CREATED");
     expect(createFacts).toHaveLength(1);
 
-    vi.mocked(emitDineInEventFactsBestEffort).mockReset();
+    vi.mocked(enqueueDineInEventFacts).mockReset();
     const { port: asrPort } = makeAsrPort({});
     const ackService = new DiningSessionService(asrPort);
     await ackService.acknowledgeServiceRequest(asrInput());
-    const [ackFacts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [ackFacts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(ackFacts[0]!.kind).toBe("SERVICE_REQUEST_ACKNOWLEDGED");
     expect(ackFacts).toHaveLength(1);
   });
@@ -3887,12 +3898,12 @@ describe("DiningSessionService SERVICE_REQUEST_COMPLETED emission (D2.5G3)", () 
 // ------------------------------------------------------------
 // D2.5G4 focused tests: SERVICE_REQUEST_CANCELLED event emission for generic
 // cancelServiceRequest. A committed PENDING->CANCELLED or ACKNOWLEDGED->CANCELLED
-// NEW_MUTATION carries exactly one SERVICE_REQUEST_CANCELLED fact; emission is
-// strictly post-commit and best-effort (a failure never fails the committed
-// cancellation). A CANCELLED idempotent retry emits NOTHING. The BRING_BILL 409
-// boundary wins over EVERY lifecycle state, so BRING_BILL cancellation NEVER
-// emits a CANCELLED event. COMPLETED 409 / NOT_FOUND / STATE_MISMATCH / failure
-// paths emit nothing.
+// NEW_MUTATION carries exactly one SERVICE_REQUEST_CANCELLED fact; EVT-B2B-NP3-B
+// persists it on the SAME transaction as the CAS update (in-tx durable enqueue;
+// a failure propagates and rolls back). A CANCELLED idempotent retry emits
+// NOTHING. The BRING_BILL 409 boundary wins over EVERY lifecycle state, so
+// BRING_BILL cancellation NEVER emits a CANCELLED event. COMPLETED 409 /
+// NOT_FOUND / STATE_MISMATCH / failure paths emit nothing.
 // ------------------------------------------------------------
 
 describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () => {
@@ -3900,15 +3911,15 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
     // mockReset clears call history AND any mockImplementation/mockRejectedValue
     // leaked from earlier emission-failure tests, keeping the default mock
     // resolve-undefined semantics for every G4 test.
-    vi.mocked(emitDineInEventFactsBestEffort).mockReset();
+    vi.mocked(enqueueDineInEventFacts).mockReset();
   });
 
   it("A. PENDING -> CANCELLED emits exactly one SERVICE_REQUEST_CANCELLED event", async () => {
     const { port } = makeCnrPort({ lockedRequest: cnrRequest({ status: "PENDING" }) });
     const service = new DiningSessionService(port);
     await service.cancelServiceRequest(cnrInput());
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts).toHaveLength(1);
     expect(facts[0]!.kind).toBe("SERVICE_REQUEST_CANCELLED");
   });
@@ -3917,8 +3928,8 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
     const { port } = makeCnrPort({ lockedRequest: cnrRequest({ status: "ACKNOWLEDGED" }) });
     const service = new DiningSessionService(port);
     await service.cancelServiceRequest(cnrInput());
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts).toHaveLength(1);
     expect(facts[0]!.kind).toBe("SERVICE_REQUEST_CANCELLED");
   });
@@ -3934,7 +3945,7 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
     });
     const service = new DiningSessionService(port);
     await service.cancelServiceRequest(cnrInput({ request_id: "req-input" }));
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts[0]).toEqual({
       kind: "SERVICE_REQUEST_CANCELLED",
       request_id: "req-authoritative",
@@ -3952,7 +3963,7 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
       CancelServiceRequestResult,
       DineInEventFact
     >;
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts[0]).toMatchObject({ request_id: "req-e4" });
     expect(outcome.value.request.id).toBe("req-e4");
   });
@@ -3961,7 +3972,7 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
     const { port } = makeCnrPort({});
     const service = new DiningSessionService(port);
     await service.cancelServiceRequest(cnrInput({ correlation_id: "corr-g4" }));
-    const [, correlationId] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [, correlationId] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(correlationId).toBe("corr-g4");
   });
 
@@ -3969,7 +3980,7 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
     const { port } = makeCnrPort({});
     const service = new DiningSessionService(port);
     await service.cancelServiceRequest(cnrInput({ request_id: "ignored-by-fact" }));
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     // The fixture DTO is WATER/CANCELLED/req-e4 regardless of input. No
     // cancelled_at/cancelled_by, no note.
     expect(facts[0]).toEqual({
@@ -3982,7 +3993,7 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
     });
   });
 
-  it("G. emission happens only AFTER the transaction callback resolves", async () => {
+  it("G. emission happens INSIDE the transaction callback, before it resolves", async () => {
     const order: string[] = [];
     const repos = {
       diningSessions: {
@@ -4007,28 +4018,28 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
         return result;
       },
     };
-    vi.mocked(emitDineInEventFactsBestEffort).mockImplementation(async () => {
+    vi.mocked(enqueueDineInEventFacts).mockImplementation(async () => {
       order.push("emit");
     });
     const service = new DiningSessionService(port);
     await service.cancelServiceRequest(cnrInput());
-    expect(order.indexOf("tx-callback-end")).toBeLessThan(order.indexOf("emit"));
+    expect(order.indexOf("emit")).toBeLessThan(order.indexOf("tx-callback-end"));
+    expect(order.indexOf("tx-callback-start")).toBeLessThan(
+      order.indexOf("emit"),
+    );
     expect(order.filter((e) => e === "emit")).toHaveLength(1);
   });
 
-  it("H. emission failure does NOT fail the committed cancellation result", async () => {
+  it("H. emission failure propagates and fails the cancellation (same-tx rollback)", async () => {
     const { port } = makeCnrPort({});
-    vi.mocked(emitDineInEventFactsBestEffort).mockRejectedValue(
+    vi.mocked(enqueueDineInEventFacts).mockRejectedValue(
       new Error("bus down"),
     );
     const service = new DiningSessionService(port);
-    const outcome = (await service.cancelServiceRequest(cnrInput())) as MutationOutcome<
-      CancelServiceRequestResult,
-      DineInEventFact
-    >;
-    expect(outcome.kind).toBe("NEW_MUTATION");
-    expect(outcome.value.request.status).toBe("CANCELLED");
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
+    await expect(service.cancelServiceRequest(cnrInput())).rejects.toThrow(
+      "bus down",
+    );
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
   });
 
   it("I. CANCELLED idempotent retry emits NOTHING", async () => {
@@ -4040,7 +4051,7 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
     >;
     expect(outcome.kind).toBe("IDEMPOTENT_NO_MUTATION");
     expect(outcome.eventFacts).toEqual([]);
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("J. COMPLETED 409 rejection emits nothing", async () => {
@@ -4049,7 +4060,7 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
     await expect(service.cancelServiceRequest(cnrInput())).rejects.toMatchObject({
       code: "INVALID_SERVICE_REQUEST_TRANSITION",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("K. BRING_BILL PENDING 409 rejection emits nothing", async () => {
@@ -4060,7 +4071,7 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
     await expect(service.cancelServiceRequest(cnrInput())).rejects.toMatchObject({
       code: "BRING_BILL_MANAGED_BY_BILL_FLOW",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("L. BRING_BILL ACKNOWLEDGED 409 rejection emits nothing", async () => {
@@ -4071,7 +4082,7 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
     await expect(service.cancelServiceRequest(cnrInput())).rejects.toMatchObject({
       code: "BRING_BILL_MANAGED_BY_BILL_FLOW",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("M. BRING_BILL CANCELLED 409 rejection emits nothing", async () => {
@@ -4082,7 +4093,7 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
     await expect(service.cancelServiceRequest(cnrInput())).rejects.toMatchObject({
       code: "BRING_BILL_MANAGED_BY_BILL_FLOW",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("N. CAS NOT_FOUND rejection emits nothing", async () => {
@@ -4091,7 +4102,7 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
     await expect(service.cancelServiceRequest(cnrInput())).rejects.toMatchObject({
       code: "SERVICE_REQUEST_NOT_FOUND",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("O. CAS STATE_MISMATCH rejection emits nothing", async () => {
@@ -4102,30 +4113,30 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
     await expect(service.cancelServiceRequest(cnrInput())).rejects.toMatchObject({
       code: "INVALID_SERVICE_REQUEST_TRANSITION",
     });
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueDineInEventFacts)).not.toHaveBeenCalled();
   });
 
   it("P. CREATED/ACKNOWLEDGED/COMPLETED event behavior is unchanged", async () => {
     const { port: csrPort } = makeCsrPort(csrSession({ status: "OPEN" }));
     const createService = new DiningSessionService(csrPort);
     await createService.createServiceRequest(csrInput());
-    const [createFacts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [createFacts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(createFacts[0]!.kind).toBe("SERVICE_REQUEST_CREATED");
     expect(createFacts).toHaveLength(1);
 
-    vi.mocked(emitDineInEventFactsBestEffort).mockReset();
+    vi.mocked(enqueueDineInEventFacts).mockReset();
     const { port: asrPort } = makeAsrPort({});
     const ackService = new DiningSessionService(asrPort);
     await ackService.acknowledgeServiceRequest(asrInput());
-    const [ackFacts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [ackFacts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(ackFacts[0]!.kind).toBe("SERVICE_REQUEST_ACKNOWLEDGED");
     expect(ackFacts).toHaveLength(1);
 
-    vi.mocked(emitDineInEventFactsBestEffort).mockReset();
+    vi.mocked(enqueueDineInEventFacts).mockReset();
     const { port: cmrPort } = makeCmrPort({});
     const completeService = new DiningSessionService(cmrPort);
     await completeService.completeServiceRequest(cmrInput());
-    const [completeFacts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    const [completeFacts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(completeFacts[0]!.kind).toBe("SERVICE_REQUEST_COMPLETED");
     expect(completeFacts).toHaveLength(1);
   });
@@ -4137,8 +4148,8 @@ describe("DiningSessionService SERVICE_REQUEST_CANCELLED emission (D2.5G4)", () 
       CancelServiceRequestResult,
       DineInEventFact
     >;
-    expect(vi.mocked(emitDineInEventFactsBestEffort)).toHaveBeenCalledTimes(1);
-    const [facts] = vi.mocked(emitDineInEventFactsBestEffort).mock.calls[0]!;
+    expect(vi.mocked(enqueueDineInEventFacts)).toHaveBeenCalledTimes(1);
+    const [facts] = vi.mocked(enqueueDineInEventFacts).mock.calls[0]!;
     expect(facts).toHaveLength(1);
     expect(outcome.eventFacts).toHaveLength(1);
     expect(outcome.eventFacts.every((f) => f.kind === "SERVICE_REQUEST_CANCELLED")).toBe(
