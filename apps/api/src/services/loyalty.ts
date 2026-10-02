@@ -10,7 +10,9 @@ import type {
   StampCard,
 } from "../repositories/loyaltyRepository";
 import type { OrderRepository } from "../repositories/orderRepository";
+import type { ReferralTransactionPort } from "../repositories/producerRemainingAtomicityContracts";
 import { getConsumerTransactionPort } from "../repositories/drizzle/consumerTransactionPort";
+import { getReferralTransactionPort } from "../repositories/drizzle/producerRemainingTransactionPort";
 import { logger } from "../lib/logger";
 
 // ============================================
@@ -54,7 +56,17 @@ export class LoyaltyService {
   constructor(
     private readonly repo: LoyaltyRepository,
     private readonly orderRepo: OrderRepository,
+    private readonly referralPort?: ReferralTransactionPort,
   ) {}
+
+  /**
+   * Transaction port for the referral claim. Injected port is preferred (tests);
+   * otherwise the storage-mode-aware selector binds the service's own loyalty
+   * repo so memory/test passthrough observes the same store.
+   */
+  private getReferralPort(): ReferralTransactionPort {
+    return this.referralPort ?? getReferralTransactionPort(this.repo);
+  }
 
   async getReferralProfile(userId: string) {
     const referral_code = await this.repo.getReferralCode(userId);
@@ -132,39 +144,50 @@ export class LoyaltyService {
       );
     }
 
-    await this.repo.recordClaim({
-      claimant_user_id: claimantUserId,
-      referrer_user_id: referrerUserId,
-      referral_code: referralCode.trim().toUpperCase(),
-      bonus_amount: REFERRAL_BONUS,
-      ip_address: ipAddress,
-      device_fingerprint: deviceFingerprint,
-    });
+    // Claim record, referrer credit, claimant credit, the durable
+    // `referral_applied` audit row and the ReferralClaimed event row all share
+    // ONE transaction (EVT-B2B-NP2), so a failure can never leave a partial
+    // credit or a credited-but-unrecorded claim. The old post-commit emit is
+    // gone.
+    const claimantWallet = await this.getReferralPort().runInTransaction(
+      async ({ loyalty, audit, outbox }) => {
+        await loyalty.recordClaim({
+          claimant_user_id: claimantUserId,
+          referrer_user_id: referrerUserId,
+          referral_code: referralCode.trim().toUpperCase(),
+          bonus_amount: REFERRAL_BONUS,
+          ip_address: ipAddress,
+          device_fingerprint: deviceFingerprint,
+        });
 
-    // Rs 50 for the referrer AND Rs 50 for the claimant.
-    await this.repo.creditWallet(referrerUserId, REFERRAL_BONUS, "referral_bonus");
-    const claimantWallet = await this.repo.creditWallet(
-      claimantUserId,
-      REFERRAL_BONUS,
-      "referral_bonus",
-    );
+        // Rs 50 for the referrer AND Rs 50 for the claimant.
+        await loyalty.creditWallet(referrerUserId, REFERRAL_BONUS, "referral_bonus");
+        const wallet = await loyalty.creditWallet(
+          claimantUserId,
+          REFERRAL_BONUS,
+          "referral_bonus",
+        );
 
-    await sharedAuditRepo.log(claimantUserId, "referral_applied", {
-      referral_code: referralCode.trim().toUpperCase(),
-      referrer_user_id: referrerUserId,
-      bonus_amount: REFERRAL_BONUS,
-      ip_address: ipAddress,
-    });
+        await audit.log(claimantUserId, "referral_applied", {
+          referral_code: referralCode.trim().toUpperCase(),
+          referrer_user_id: referrerUserId,
+          bonus_amount: REFERRAL_BONUS,
+          ip_address: ipAddress,
+        });
 
-    await emit(
-      createEventEnvelope("ReferralClaimed", claimantUserId, {
-        referrer_user_id: referrerUserId,
-        claimant_user_id: claimantUserId,
-        referral_code: referralCode.trim().toUpperCase(),
-        bonus_amount: REFERRAL_BONUS,
-        ip_address: ipAddress ?? undefined,
-        device_fingerprint: deviceFingerprint ?? undefined,
-      }),
+        await outbox.enqueue(
+          createEventEnvelope("ReferralClaimed", claimantUserId, {
+            referrer_user_id: referrerUserId,
+            claimant_user_id: claimantUserId,
+            referral_code: referralCode.trim().toUpperCase(),
+            bonus_amount: REFERRAL_BONUS,
+            ip_address: ipAddress ?? undefined,
+            device_fingerprint: deviceFingerprint ?? undefined,
+          }),
+        );
+
+        return wallet;
+      },
     );
 
     logger.info({

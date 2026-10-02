@@ -1,5 +1,5 @@
 import { randomInt, timingSafeEqual } from "node:crypto";
-import { createEventEnvelope, emit } from "../lib/eventBus";
+import { createEventEnvelope } from "../lib/eventBus";
 import { publishStatusUpdate } from "../lib/websocket";
 import { AppError } from "../middleware/envelope";
 import type { OrderDTO, OrderRepository } from "../repositories/orderRepository";
@@ -94,65 +94,81 @@ export class FulfillmentService {
 
     // WRITE AUTHORITY = CAS against the observed from-status. PREPARING carries
     // its OTP in the same single statement (checkout: status + OTP atomically).
+    // The CAS and the durable OrderPreparationStarted / OrderReadyForPickup /
+    // EarlyReadyAlert rows share ONE PG transaction (EVT-B2B-NP2), so a CAS
+    // loser or a rollback persists no event row and the old post-commit emit is
+    // gone. WebSocket fan-out stays post-commit.
     const observedStatus = order.status;
-    let refreshed: OrderDTO | null;
-    if (nextStatus === "PREPARING") {
-      const otp = randomInt(1000, 10000).toString().padStart(4, "0");
-      refreshed = await this.orderRepo.claimPreparingWithOtp(orderId, observedStatus, otp);
-    } else {
-      refreshed = await this.orderRepo.transitionStatus(orderId, observedStatus, nextStatus);
-    }
-    if (!refreshed) {
+    const txResult = await this.getTransactionPort().runInTransaction(
+      async ({ orders, outbox }) => {
+        let refreshed: OrderDTO | null;
+        if (nextStatus === "PREPARING") {
+          const otp = randomInt(1000, 10000).toString().padStart(4, "0");
+          refreshed = await orders.claimPreparingWithOtp(orderId, observedStatus, otp);
+        } else {
+          refreshed = await orders.transitionStatus(orderId, observedStatus, nextStatus);
+        }
+        if (!refreshed) return null;
+
+        if (nextStatus === "PREPARING") {
+          await outbox.enqueue(
+            createEventEnvelope("OrderPreparationStarted", refreshed.id, {
+              order_id: refreshed.id,
+              restaurant_id: refreshed.restaurant_id,
+            }),
+          );
+        }
+
+        let earlyReadyAlerted = false;
+        if (nextStatus === "READY_FOR_PICKUP") {
+          await outbox.enqueue(
+            createEventEnvelope("OrderReadyForPickup", refreshed.id, {
+              order_id: refreshed.id,
+              restaurant_id: refreshed.restaurant_id,
+            }),
+          );
+
+          // P13 Early Ready Alert: the order became ready BEFORE its scheduled
+          // pickup time, so the notification layer should nudge the customer
+          // (Push Notification / SMS) - they can pick up sooner than planned.
+          // It shares the READY transition's transaction, so it can never
+          // commit on its own or land in a second post-commit window.
+          if (refreshed.scheduled_pickup_time) {
+            const scheduled = Date.parse(refreshed.scheduled_pickup_time);
+            if (Number.isFinite(scheduled) && scheduled > Date.now()) {
+              earlyReadyAlerted = true;
+              await outbox.enqueue(
+                createEventEnvelope("EarlyReadyAlert", refreshed.id, {
+                  order_id: refreshed.id,
+                  restaurant_id: refreshed.restaurant_id,
+                  scheduled_pickup_time: refreshed.scheduled_pickup_time,
+                  ready_time: new Date().toISOString(),
+                }),
+              );
+            }
+          }
+        }
+
+        return { refreshed, earlyReadyAlerted };
+      },
+    );
+    if (!txResult) {
       // CAS loser: no OTP persisted, no status change, no events.
       throw await this.advanceConflict(orderId, observedStatus, nextStatus);
     }
 
-    // Post-commit only (the CAS statement above is the commit boundary).
+    // Post-commit only (the transaction above is the commit boundary).
     await publishStatusUpdate({
-      order_id: refreshed.id,
-      restaurant_id: refreshed.restaurant_id,
+      order_id: txResult.refreshed.id,
+      restaurant_id: txResult.refreshed.restaurant_id,
       status: nextStatus,
     });
 
-    // Emit domain events
-    if (nextStatus === "PREPARING") {
-      await emit(
-        createEventEnvelope("OrderPreparationStarted", refreshed.id, {
-          order_id: refreshed.id,
-          restaurant_id: refreshed.restaurant_id,
-        }),
-      );
-    }
-
-    let earlyReadyAlerted = false;
-    if (nextStatus === "READY_FOR_PICKUP") {
-      await emit(
-        createEventEnvelope("OrderReadyForPickup", refreshed.id, {
-          order_id: refreshed.id,
-          restaurant_id: refreshed.restaurant_id,
-        }),
-      );
-
-      // P13 Early Ready Alert: the order became ready BEFORE its scheduled
-      // pickup time, so the notification layer should nudge the customer
-      // (Push Notification / SMS) - they can pick up sooner than planned.
-      if (refreshed.scheduled_pickup_time) {
-        const scheduled = Date.parse(refreshed.scheduled_pickup_time);
-        if (Number.isFinite(scheduled) && scheduled > Date.now()) {
-          earlyReadyAlerted = true;
-          await emit(
-            createEventEnvelope("EarlyReadyAlert", refreshed.id, {
-              order_id: refreshed.id,
-              restaurant_id: refreshed.restaurant_id,
-              scheduled_pickup_time: refreshed.scheduled_pickup_time,
-              ready_time: new Date().toISOString(),
-            }),
-          );
-        }
-      }
-    }
-
-    return { order: refreshed, nextStatus, earlyReadyAlerted };
+    return {
+      order: txResult.refreshed,
+      nextStatus,
+      earlyReadyAlerted: txResult.earlyReadyAlerted,
+    };
   }
 
   /** Maps an advance CAS miss to the truthful existing contract where possible. */

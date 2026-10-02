@@ -1,12 +1,15 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { MemoryGiftRepository } from "../repositories/giftRepository";
 import { MemoryPaymentRepository } from "../repositories/paymentRepository";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 import { runGiftExpirySweep } from "./giftExpirySweep";
 import { razorpayService } from "./razorpay";
-import * as eventBus from "../lib/eventBus";
 import type { GiftDTO } from "../repositories/giftRepository";
 
 const PAST = -1;
+
+const giftExpiredRows = () =>
+  memoryEventOutbox._all().filter((r) => r.event_name === "GiftExpired");
 
 async function seedGift(
   repo: MemoryGiftRepository,
@@ -64,6 +67,7 @@ describe("runGiftExpirySweep", () => {
   beforeEach(() => {
     giftRepo = new MemoryGiftRepository();
     paymentRepo = new MemoryPaymentRepository();
+    memoryEventOutbox._reset();
     vi.restoreAllMocks();
   });
 
@@ -159,7 +163,6 @@ describe("runGiftExpirySweep", () => {
     await capturePayment(paymentRepo, gift.id, "order_mock_bound");
     await giftRepo.bindToOrder(gift.id, "order-in-flight");
 
-    const emitSpy = vi.spyOn(eventBus, "emit").mockResolvedValue(undefined);
     const refundSpy = vi
       .spyOn(razorpayService, "refund")
       .mockResolvedValue({ id: "rfnd_test", status: "processed" });
@@ -171,19 +174,19 @@ describe("runGiftExpirySweep", () => {
     expect(result.refunded).toBe(0);
     expect((await giftRepo.getById(gift.id))?.status).toBe("CLAIMED");
     expect((await giftRepo.getById(gift.id))?.redeemed_order_id).toBe("order-in-flight");
-    // T8: no GiftExpired on a CAS miss.
-    expect(emitSpy).not.toHaveBeenCalled();
+    // T8: no GiftExpired row on a CAS miss.
+    expect(giftExpiredRows()).toHaveLength(0);
     // T9: no gateway refund submission on a CAS miss.
     expect(refundSpy).not.toHaveBeenCalled();
   });
 
-  it("emits GiftExpired exactly once for a successful expiry", async () => {
+  it("enqueues GiftExpired exactly once for a successful expiry", async () => {
     await seedGift(giftRepo, PAST, "ACTIVE");
-    const emitSpy = vi.spyOn(eventBus, "emit").mockResolvedValue(undefined);
     const result = await runGiftExpirySweep(giftRepo, paymentRepo, new Date());
     expect(result.expired).toBe(1);
-    const expiryEvents = emitSpy.mock.calls.filter((c) => c[0]?.event_name === "GiftExpired");
+    const expiryEvents = giftExpiredRows();
     expect(expiryEvents).toHaveLength(1);
+    expect(expiryEvents[0]?.payload).toEqual({ gift_id: expiryEvents[0]?.aggregate_id });
   });
 
   it("leaves unexpired gifts alone", async () => {

@@ -4,7 +4,9 @@ import {
   OPS_AGENT_ASSIGNEE,
   type TicketPriority,
 } from "../repositories/supportRepository";
-import { createEventEnvelope, emit } from "../lib/eventBus";
+import type { VipTicketTransactionPort } from "../repositories/producerRemainingAtomicityContracts";
+import { getVipTicketTransactionPort } from "../repositories/drizzle/producerRemainingTransactionPort";
+import { createEventEnvelope } from "../lib/eventBus";
 
 // ============================================
 // VIP tier calculation + ticket routing (L15, Phase 4)
@@ -53,7 +55,13 @@ export class VipSupportService {
   constructor(
     private readonly orderRepo: OrderRepository,
     private readonly supportRepo: SupportRepository,
+    private readonly txPort?: VipTicketTransactionPort,
   ) {}
+
+  /** Transaction port for the ticket create + VipTicketCreated row (EVT-B2B-NP2). */
+  private getTransactionPort(): VipTicketTransactionPort {
+    return this.txPort ?? getVipTicketTransactionPort(this.supportRepo);
+  }
 
   computeVip(orders: OrderDTO[]): VipStatus {
     const eligible = orders.filter((o) => !NON_ELIGIBLE_VIP_STATUSES.has(o.status));
@@ -87,22 +95,28 @@ export class VipSupportService {
     const priority: TicketPriority = vip.is_vip ? "HIGH" : "MEDIUM";
     const assignee = vip.is_vip ? OPS_AGENT_ASSIGNEE : null;
 
-    const ticket = await this.supportRepo.create({
-      user_id: userId,
-      subject,
-      description,
-      priority,
-      assignee,
-    });
+    const ticket = await this.getTransactionPort().runInTransaction(
+      async ({ support, outbox }) => {
+        const created = await support.create({
+          user_id: userId,
+          subject,
+          description,
+          priority,
+          assignee,
+        });
 
-    await emit(
-      createEventEnvelope("VipTicketCreated", ticket.id, {
-        ticket_id: ticket.id,
-        user_id: userId,
-        priority,
-        assignee,
-        is_vip: vip.is_vip,
-      }),
+        await outbox.enqueue(
+          createEventEnvelope("VipTicketCreated", created.id, {
+            ticket_id: created.id,
+            user_id: userId,
+            priority,
+            assignee,
+            is_vip: vip.is_vip,
+          }),
+        );
+
+        return created;
+      },
     );
 
     return {

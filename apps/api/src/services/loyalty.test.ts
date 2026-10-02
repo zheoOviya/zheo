@@ -5,6 +5,7 @@ import {
   REFERRAL_BONUS,
   STAMP_CARD_SIZE,
 } from "./loyalty";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 import { MemoryLoyaltyRepository } from "../repositories/loyaltyRepository";
 import { MemoryOrderRepository } from "../repositories/orderRepository";
 import type { OrderDTO, OrderItemDTO } from "../repositories/orderRepository";
@@ -21,7 +22,6 @@ const REST_ID = "a0000000-0000-4000-8000-000000000001";
 let repo: MemoryLoyaltyRepository;
 let orderRepo: MemoryOrderRepository;
 let service: LoyaltyService;
-let referralEvents: Array<{ referrer_user_id: string; claimant_user_id: string }>;
 let stampRewardEvents: Array<{ stamp_count_before: number; rewards_earned: number }>;
 
 function seedOrder(id: string): OrderDTO {
@@ -58,7 +58,7 @@ describe("LoyaltyService", () => {
     repo = new MemoryLoyaltyRepository();
     orderRepo = new MemoryOrderRepository();
     service = new LoyaltyService(repo, orderRepo);
-    referralEvents = [];
+    memoryEventOutbox._reset();
     stampRewardEvents = [];
   });
 
@@ -183,15 +183,7 @@ describe("LoyaltyService", () => {
       ).rejects.toMatchObject({ code: "FRAUD_DETECTED", status: 403 });
     });
 
-    it("emits ReferralClaimed on success", async () => {
-      onEvent("ReferralClaimed", async (event) => {
-        const payload = event.payload as {
-          referrer_user_id: string;
-          claimant_user_id: string;
-        };
-        referralEvents.push(payload);
-      });
-
+    it("enqueues ReferralClaimed on success (transactional outbox)", async () => {
       const code = (await service.getReferralProfile(REFERRER_ID)).referral_code;
       await service.applyReferral({
         claimantUserId: CLAIMANT_A,
@@ -200,8 +192,12 @@ describe("LoyaltyService", () => {
         deviceFingerprint: "fp_emit",
       });
 
-      expect(referralEvents).toHaveLength(1);
-      expect(referralEvents[0]).toMatchObject({
+      const rows = memoryEventOutbox
+        ._all()
+        .filter((r) => r.event_name === "ReferralClaimed");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.aggregate_id).toBe(CLAIMANT_A);
+      expect(rows[0]?.payload).toMatchObject({
         referrer_user_id: REFERRER_ID,
         claimant_user_id: CLAIMANT_A,
       });

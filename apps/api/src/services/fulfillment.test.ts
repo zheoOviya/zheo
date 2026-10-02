@@ -437,13 +437,17 @@ describe("FulfillmentService CAS + atomicity semantics", () => {
   // ---------------- event ordering ----------------
 
   describe("post-commit event ordering", () => {
-    it("E1 advance publishes before emitting OrderPreparationStarted", async () => {
+    it("E1 advance enqueues OrderPreparationStarted inside the tx, then publishes", async () => {
       h.seed(OID, "CONFIRMED");
       await h.service.advanceOrderStatus(OID);
+      const claim = state.log.indexOf("orders.claimPreparingWithOtp");
+      const enqueue = state.log.indexOf("outbox.enqueue:OrderPreparationStarted");
+      const commit = state.log.indexOf("tx.end");
       const publish = state.log.indexOf("publish");
-      const event = state.log.indexOf("emit:OrderPreparationStarted");
-      expect(publish).toBeGreaterThanOrEqual(0);
-      expect(event).toBeGreaterThan(publish);
+      expect(claim).toBeGreaterThanOrEqual(0);
+      expect(enqueue).toBeGreaterThan(claim);
+      expect(commit).toBeGreaterThan(enqueue);
+      expect(publish).toBeGreaterThan(commit);
     });
 
     it("E2 pickup commits (with durable events enqueued inside the tx) before publishing", async () => {

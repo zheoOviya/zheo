@@ -1,7 +1,9 @@
-import { createEventEnvelope, emit } from "../lib/eventBus";
+import { createEventEnvelope } from "../lib/eventBus";
 import { logger } from "../lib/logger";
 import type { GiftRepository, GiftDTO } from "../repositories/giftRepository";
 import type { PaymentRepository } from "../repositories/paymentRepository";
+import type { GiftExpiryTransactionPort } from "../repositories/producerRemainingAtomicityContracts";
+import { getGiftExpiryTransactionPort } from "../repositories/drizzle/producerRemainingTransactionPort";
 import { submitGiftRefund } from "./gift";
 import { sharedGiftRepo, sharedPaymentRepo } from "../repositories/shared";
 
@@ -25,6 +27,7 @@ export async function runGiftExpirySweep(
   giftRepo: GiftRepository,
   paymentRepo: PaymentRepository,
   now: Date = new Date(),
+  txPort: GiftExpiryTransactionPort = getGiftExpiryTransactionPort(giftRepo),
 ): Promise<SweepResult> {
   const result: SweepResult = { expired: 0, refunded: 0, failed: 0 };
   const due = await giftRepo.listDueForExpiry(now.toISOString());
@@ -36,15 +39,22 @@ export async function runGiftExpirySweep(
       // is STILL due, unbound, and in a fresh-expiry state at the moment of the
       // write becomes EXPIRED. A gift bound between listDueForExpiry() and this
       // call therefore survives — no EXPIRED write, no GiftExpired event, no
-      // refund from the stale DTO.
+      // refund from the stale DTO. The CAS and the GiftExpired row share ONE
+      // transaction (EVT-B2B-NP2): a CAS miss enqueues nothing and an expiry
+      // rollback enqueues nothing.
       let expired: GiftDTO | null = null;
       if (gift.status === "PENDING" || gift.status === "ACTIVE" || gift.status === "CLAIMED") {
-        expired = await giftRepo.expireIfDueAndUnbound(gift.id, nowIso);
+        expired = await txPort.runInTransaction(async ({ gifts, outbox }) => {
+          const row = await gifts.expireIfDueAndUnbound(gift.id, nowIso);
+          if (row) {
+            await outbox.enqueue(
+              createEventEnvelope("GiftExpired", row.id, { gift_id: row.id }),
+            );
+          }
+          return row;
+        });
         if (expired) {
           result.expired += 1;
-          await emit(
-            createEventEnvelope("GiftExpired", gift.id, { gift_id: gift.id }),
-          );
         }
       }
 

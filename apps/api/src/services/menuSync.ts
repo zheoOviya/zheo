@@ -1,4 +1,4 @@
-import { createEventEnvelope, emit } from "../lib/eventBus";
+import { createEventEnvelope } from "../lib/eventBus";
 import { logger } from "../lib/logger";
 import { AppError } from "../middleware/envelope";
 import type {
@@ -6,6 +6,8 @@ import type {
   MenuItemDTO,
   PosMenuInput,
 } from "../repositories/catalogRepository";
+import type { MenuSyncTransactionPort } from "../repositories/producerRemainingAtomicityContracts";
+import { getMenuSyncTransactionPort } from "../repositories/drizzle/producerRemainingTransactionPort";
 
 // ============================================
 // Petpooja Menu Sync (PRD Phase 2, V01)
@@ -75,7 +77,13 @@ export class MenuSyncService {
   constructor(
     private readonly catalogRepo: CatalogRepository,
     private readonly posMenuClient: PosMenuClient,
+    private readonly txPort?: MenuSyncTransactionPort,
   ) {}
+
+  /** Transaction port for the menu upsert + PosMenuSynced row (EVT-B2B-NP2). */
+  private getTransactionPort(): MenuSyncTransactionPort {
+    return this.txPort ?? getMenuSyncTransactionPort(this.catalogRepo);
+  }
 
   async syncMenu(restaurantId: string): Promise<{
     synced: number;
@@ -91,16 +99,21 @@ export class MenuSyncService {
     }
 
     const posMenu = await this.posMenuClient.getMenu(restaurantId);
-    const items = await this.catalogRepo.upsertPosMenuItems(
-      restaurantId,
-      posMenu,
-    );
-
-    await emit(
-      createEventEnvelope("PosMenuSynced", restaurantId, {
-        restaurant_id: restaurantId,
-        synced_count: items.length,
-      }),
+    // The upsert and its PosMenuSynced row share ONE transaction (EVT-B2B-NP2):
+    // a mid-sync failure rolls the menu back and enqueues nothing, so no event
+    // ever describes a menu state that was not committed. The old post-commit
+    // emit is gone.
+    const items = await this.getTransactionPort().runInTransaction(
+      async ({ catalog, outbox }) => {
+        const synced = await catalog.upsertPosMenuItems(restaurantId, posMenu);
+        await outbox.enqueue(
+          createEventEnvelope("PosMenuSynced", restaurantId, {
+            restaurant_id: restaurantId,
+            synced_count: synced.length,
+          }),
+        );
+        return synced;
+      },
     );
 
     logger.info({

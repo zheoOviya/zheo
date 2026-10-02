@@ -3,7 +3,8 @@ import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { requireConsumerOrAdmin } from "../middleware/requireRoles";
 import { sharedIdentityRepo } from "../repositories/shared";
-import { createEventEnvelope, emit } from "../lib/eventBus";
+import { getSpiceProfileTransactionPort } from "../repositories/drizzle/producerRemainingTransactionPort";
+import { createEventEnvelope } from "../lib/eventBus";
 import { logger } from "../lib/logger";
 
 // ============================================
@@ -33,20 +34,28 @@ usersRouter.put(
     }
 
     const userId = res.locals.userId as string;
-    const updated = await sharedIdentityRepo.updateSpiceTolerance(
-      userId,
-      body.data.spice_tolerance,
-    );
+    // The spice-tolerance write and its SpiceProfileUpdated row share ONE
+    // transaction (EVT-B2B-NP2), so a missing user enqueues nothing and a
+    // rollback cannot publish a profile change that was not committed.
+    const updated = await getSpiceProfileTransactionPort(
+      sharedIdentityRepo,
+    ).runInTransaction(async ({ identity, outbox }) => {
+      const row = await identity.updateSpiceTolerance(
+        userId,
+        body.data.spice_tolerance,
+      );
+      if (!row) return null;
+      await outbox.enqueue(
+        createEventEnvelope("SpiceProfileUpdated", userId, {
+          user_id: userId,
+          spice_tolerance: body.data.spice_tolerance,
+        }),
+      );
+      return row;
+    });
     if (!updated) {
       throw new AppError("USER_NOT_FOUND", "User profile not found", 404);
     }
-
-    await emit(
-      createEventEnvelope("SpiceProfileUpdated", userId, {
-        user_id: userId,
-        spice_tolerance: body.data.spice_tolerance,
-      }),
-    );
 
     logger.info({
       message: "spice_profile_updated",
