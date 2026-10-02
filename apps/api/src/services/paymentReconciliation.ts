@@ -1,5 +1,5 @@
 import type { OrderStatus } from "@snakzap/types";
-import { createEventEnvelope, emit } from "../lib/eventBus";
+import { createEventEnvelope } from "../lib/eventBus";
 import { logger } from "../lib/logger";
 import type { GiftDTO, GiftRepository, GiftStatus } from "../repositories/giftRepository";
 import type { OrderRepository } from "../repositories/orderRepository";
@@ -7,8 +7,11 @@ import type {
   PaymentDTO,
   PaymentReconciliationStatus,
   PaymentRepository,
+  ReconciliationResultUpdate,
 } from "../repositories/paymentRepository";
 import { normalizeCandidateLimit } from "../repositories/paymentRepository";
+import type { PaymentTransactionPort } from "../repositories/paymentAtomicityContracts";
+import { getPaymentTransactionPort } from "../repositories/drizzle/paymentTransactionPort";
 import { sharedGiftRepo, sharedOrderRepo, sharedPaymentRepo } from "../repositories/shared";
 import { isCaptureQuarantined, validateCapturedAgainstGateway, PAY4_CURRENCY } from "./paymentIntegrity";
 import {
@@ -45,6 +48,13 @@ export interface ReconciliationDeps {
   orderRepo: OrderRepository;
   giftRepo?: GiftRepository;
   gateway: ReconciliationGateway;
+  /**
+   * EVT-B2B-PAY-B1: optional injected transaction port. When provided (tests /
+   * harnesses) the convergence local tails run through it; otherwise the port is
+   * resolved lazily per call from the storage mode so route-module import never
+   * locks in a backend.
+   */
+  txPort?: PaymentTransactionPort;
 }
 
 export type ReconciliationOutcome =
@@ -124,18 +134,43 @@ interface RecordArgs {
   emitted?: boolean;
 }
 
-async function record(
-  payment: PaymentDTO,
-  deps: ReconciliationDeps,
-  args: RecordArgs,
-): Promise<ReconcileResult> {
-  await deps.paymentRepo.markReconciliationResult(payment.id, {
+/**
+ * EVT-B2B-PAY-B1: build the durable reconciliation-result marker. Shared by the
+ * out-of-transaction `record()` and the in-transaction convergent tails so the
+ * persisted shape cannot drift between the two paths.
+ */
+function reconciliationUpdate(args: RecordArgs): ReconciliationResultUpdate {
+  return {
     reconciliation_status: toStoredStatus(args.outcome),
     reconciliation_reason: args.reason,
     last_reconciled_at: new Date().toISOString(),
     ...(args.gatewayStatus !== undefined ? { gateway_status: args.gatewayStatus } : {}),
     manual_review: args.manualReview ?? false,
-  });
+  };
+}
+
+/**
+ * EVT-B2B-PAY-B1: resolve the transaction port for a reconciliation tail. Gift
+ * methods are only reached under an explicit `if (deps.giftRepo)` guard, so the
+ * narrowing cast is safe at every call site that needs the gift capability.
+ */
+function reconciliationTxPort(deps: ReconciliationDeps): PaymentTransactionPort {
+  return (
+    deps.txPort ??
+    getPaymentTransactionPort(
+      deps.paymentRepo,
+      deps.orderRepo,
+      deps.giftRepo as GiftRepository,
+    )
+  );
+}
+
+async function record(
+  payment: PaymentDTO,
+  deps: ReconciliationDeps,
+  args: RecordArgs,
+): Promise<ReconcileResult> {
+  await deps.paymentRepo.markReconciliationResult(payment.id, reconciliationUpdate(args));
   return { outcome: args.outcome, reason: args.reason, emitted: args.emitted ?? false };
 }
 
@@ -204,21 +239,26 @@ async function convergeCapturedEntity(
       });
     }
     if (gift.status === "PENDING") {
-      const paid = await deps.giftRepo.markPaid(gift.id);
+      const paid = await reconciliationTxPort(deps).runInTransaction(
+        async ({ payments, gifts, outbox }) => {
+          const moved = await gifts.markPaid(gift.id);
+          if (!moved) return false;
+          await outbox.enqueue(
+            createEventEnvelope("GiftPaid", gift.id, {
+              gift_id: gift.id,
+              payment_id: payment.id,
+              amount: payment.amount,
+            }),
+          );
+          await payments.markReconciliationResult(
+            payment.id,
+            reconciliationUpdate({ outcome: "CONVERGED", reason, gatewayStatus, emitted: true }),
+          );
+          return true;
+        },
+      );
       if (paid) {
-        await emit(
-          createEventEnvelope("GiftPaid", gift.id, {
-            gift_id: gift.id,
-            payment_id: payment.id,
-            amount: payment.amount,
-          }),
-        );
-        return record(payment, deps, {
-          outcome: "CONVERGED",
-          reason,
-          gatewayStatus,
-          emitted: true,
-        });
+        return { outcome: "CONVERGED", reason, emitted: true };
       }
       const after = await deps.giftRepo.getById(gift.id);
       if (after && (after.status === "ACTIVE" || after.status === "CLAIMED")) {
@@ -268,20 +308,26 @@ async function convergeCapturedEntity(
     });
   }
   if (order.status === "PAYMENT_PENDING") {
-    const transitioned = await deps.orderRepo.transitionStatus(
-      order.id,
-      "PAYMENT_PENDING",
-      "CONFIRMED",
+    const transitioned = await reconciliationTxPort(deps).runInTransaction(
+      async ({ payments, orders, outbox }) => {
+        const moved = await orders.transitionStatus(order.id, "PAYMENT_PENDING", "CONFIRMED");
+        if (!moved) return false;
+        await outbox.enqueue(
+          createEventEnvelope("PaymentSucceeded", order.id, {
+            order_id: order.id,
+            payment_id: payment.id,
+            amount: payment.amount,
+          }),
+        );
+        await payments.markReconciliationResult(
+          payment.id,
+          reconciliationUpdate({ outcome: "CONVERGED", reason, gatewayStatus, emitted: true }),
+        );
+        return true;
+      },
     );
     if (transitioned) {
-      await emit(
-        createEventEnvelope("PaymentSucceeded", order.id, {
-          order_id: order.id,
-          payment_id: payment.id,
-          amount: payment.amount,
-        }),
-      );
-      return record(payment, deps, { outcome: "CONVERGED", reason, gatewayStatus, emitted: true });
+      return { outcome: "CONVERGED", reason, emitted: true };
     }
     const after = await deps.orderRepo.getById(order.id);
     if (after && ORDER_CONFIRMED_OR_LATER.has(after.status)) {
@@ -317,20 +363,26 @@ async function convergeCapturedEntity(
         manualReview: true,
       });
     }
-    const recovered = await deps.orderRepo.transitionStatus(
-      order.id,
-      "PAYMENT_FAILED",
-      "CONFIRMED",
+    const recovered = await reconciliationTxPort(deps).runInTransaction(
+      async ({ payments, orders, outbox }) => {
+        const moved = await orders.transitionStatus(order.id, "PAYMENT_FAILED", "CONFIRMED");
+        if (!moved) return false;
+        await outbox.enqueue(
+          createEventEnvelope("PaymentSucceeded", order.id, {
+            order_id: order.id,
+            payment_id: payment.id,
+            amount: payment.amount,
+          }),
+        );
+        await payments.markReconciliationResult(
+          payment.id,
+          reconciliationUpdate({ outcome: "CONVERGED", reason, gatewayStatus, emitted: true }),
+        );
+        return true;
+      },
     );
     if (recovered) {
-      await emit(
-        createEventEnvelope("PaymentSucceeded", order.id, {
-          order_id: order.id,
-          payment_id: payment.id,
-          amount: payment.amount,
-        }),
-      );
-      return record(payment, deps, { outcome: "CONVERGED", reason, gatewayStatus, emitted: true });
+      return { outcome: "CONVERGED", reason, emitted: true };
     }
     const afterFailed = await deps.orderRepo.getById(order.id);
     if (afterFailed && ORDER_CONFIRMED_OR_LATER.has(afterFailed.status)) {
@@ -436,6 +488,7 @@ type GiftRefundConvergence = { status: "refunded"; gift: GiftDTO } | { status: "
 async function convergeGiftRefund(
   deps: ReconciliationDeps,
   giftId: string,
+  gifts: Pick<GiftRepository, "markRefunding" | "markRefunded"> = deps.giftRepo as GiftRepository,
 ): Promise<GiftRefundConvergence> {
   const giftRepo = deps.giftRepo;
   if (!giftRepo) return null;
@@ -445,14 +498,14 @@ async function convergeGiftRefund(
   if (!GIFT_REFUND_ALLOWED_STATES.has(gift.status)) return null;
 
   if (GIFT_REFUND_ENTRY_STATES.includes(gift.status)) {
-    const moved = await giftRepo.markRefunding(gift.id, [...GIFT_REFUND_ENTRY_STATES]);
+    const moved = await gifts.markRefunding(gift.id, [...GIFT_REFUND_ENTRY_STATES]);
     if (!moved) {
       const after = await giftRepo.getById(gift.id);
       return after && after.status === "REFUNDED" ? { status: "already" } : null;
     }
   }
 
-  const refunded = await giftRepo.markRefunded(gift.id);
+  const refunded = await gifts.markRefunded(gift.id);
   if (refunded) return { status: "refunded", gift: refunded };
   const after = await giftRepo.getById(gift.id);
   return after && after.status === "REFUNDED" ? { status: "already" } : null;
@@ -497,36 +550,51 @@ async function observeGatewayRefund(
         manualReview: true,
       });
     }
-    const cas = await deps.paymentRepo.compareAndSetStatus(payment.id, "CAPTURED", "REFUNDED", {
-      gateway_status: full.status,
-    });
-    if (cas.outcome !== "UPDATED") return casConflict(cas, deps);
-    const convergence = await convergeGiftRefund(deps, gift.id);
-    if (!convergence) {
-      return record(cas.payment, deps, {
+    const settled = await reconciliationTxPort(deps).runInTransaction(
+      async ({ payments, gifts, outbox }) => {
+        const cas = await payments.compareAndSetStatus(payment.id, "CAPTURED", "REFUNDED", {
+          gateway_status: full.status,
+        });
+        if (cas.outcome !== "UPDATED") return { kind: "cas" as const, cas };
+        const convergence = await convergeGiftRefund(deps, gift.id, gifts);
+        if (!convergence) return { kind: "conflict" as const, cas };
+        let emitted = false;
+        if (convergence.status === "refunded") {
+          await outbox.enqueue(
+            createEventEnvelope("GiftRefunded", gift.id, {
+              gift_id: gift.id,
+              sender_id: gift.sender_id,
+              amount: payment.amount,
+            }),
+          );
+          emitted = true;
+        }
+        await payments.markReconciliationResult(
+          cas.payment.id,
+          reconciliationUpdate({
+            outcome: "CONVERGED",
+            reason: "GATEWAY_FULL_REFUND_OBSERVED",
+            gatewayStatus: full.status,
+            emitted,
+          }),
+        );
+        return { kind: "ok" as const, emitted };
+      },
+    );
+    if (settled.kind === "cas") return casConflict(settled.cas, deps);
+    if (settled.kind === "conflict") {
+      return record(settled.cas.payment, deps, {
         outcome: "MANUAL_REVIEW",
         reason: `REFUND_GIFT_${gift.status}_CONFLICT`,
         gatewayStatus: full.status,
         manualReview: true,
       });
     }
-    let emitted = false;
-    if (convergence.status === "refunded") {
-      await emit(
-        createEventEnvelope("GiftRefunded", gift.id, {
-          gift_id: gift.id,
-          sender_id: gift.sender_id,
-          amount: payment.amount,
-        }),
-      );
-      emitted = true;
-    }
-    return record(cas.payment, deps, {
+    return {
       outcome: "CONVERGED",
       reason: "GATEWAY_FULL_REFUND_OBSERVED",
-      gatewayStatus: full.status,
-      emitted,
-    });
+      emitted: settled.emitted,
+    };
   }
 
   if (!payment.order_id) return null;
@@ -563,29 +631,42 @@ async function observeGatewayRefund(
       manualReview: true,
     });
   }
-  const cas = await deps.paymentRepo.compareAndSetStatus(payment.id, "CAPTURED", "REFUNDED", {
-    gateway_status: full.status,
-  });
-  if (cas.outcome !== "UPDATED") return casConflict(cas, deps);
-  if (order.status === "CONFIRMED") {
-    const moved = await deps.orderRepo.transitionStatus(order.id, "CONFIRMED", "REFUNDED");
-    if (!moved) {
-      const after = await deps.orderRepo.getById(order.id);
-      if (!after || after.status !== "REFUNDED") {
-        return record(cas.payment, deps, {
-          outcome: "MANUAL_REVIEW",
-          reason: "REFUND_ORDER_CONVERGENCE_CONFLICT",
-          gatewayStatus: full.status,
-          manualReview: true,
-        });
+  const settled = await reconciliationTxPort(deps).runInTransaction(
+    async ({ payments, orders }) => {
+      const cas = await payments.compareAndSetStatus(payment.id, "CAPTURED", "REFUNDED", {
+        gateway_status: full.status,
+      });
+      if (cas.outcome !== "UPDATED") return { kind: "cas" as const, cas };
+      if (order.status === "CONFIRMED") {
+        const moved = await orders.transitionStatus(order.id, "CONFIRMED", "REFUNDED");
+        if (!moved) {
+          const after = await deps.orderRepo.getById(order.id);
+          if (!after || after.status !== "REFUNDED") {
+            return { kind: "conflict" as const, cas };
+          }
+        }
       }
-    }
+      await payments.markReconciliationResult(
+        cas.payment.id,
+        reconciliationUpdate({
+          outcome: "CONVERGED",
+          reason: "GATEWAY_FULL_REFUND_OBSERVED",
+          gatewayStatus: full.status,
+        }),
+      );
+      return { kind: "ok" as const };
+    },
+  );
+  if (settled.kind === "cas") return casConflict(settled.cas, deps);
+  if (settled.kind === "conflict") {
+    return record(settled.cas.payment, deps, {
+      outcome: "MANUAL_REVIEW",
+      reason: "REFUND_ORDER_CONVERGENCE_CONFLICT",
+      gatewayStatus: full.status,
+      manualReview: true,
+    });
   }
-  return record(cas.payment, deps, {
-    outcome: "CONVERGED",
-    reason: "GATEWAY_FULL_REFUND_OBSERVED",
-    gatewayStatus: full.status,
-  });
+  return { outcome: "CONVERGED", reason: "GATEWAY_FULL_REFUND_OBSERVED", emitted: false };
 }
 
 async function reconcileCreated(
@@ -753,23 +834,55 @@ async function reconcileRefunded(
     });
   }
 
-  let orderOk = true;
+  let confirmedOrderId: string | null = null;
   if (payment.order_id) {
     const order = await deps.orderRepo.getById(payment.order_id);
     if (order && order.status === "CONFIRMED") {
-      const moved = await deps.orderRepo.transitionStatus(order.id, "CONFIRMED", "REFUNDED");
-      if (!moved) {
-        const after = await deps.orderRepo.getById(order.id);
-        orderOk = !!after && after.status === "REFUNDED";
-      }
+      confirmedOrderId = order.id;
     }
   }
 
-  let giftConvergence: GiftRefundConvergence = { status: "already" };
-  if (payment.gift_id) {
-    giftConvergence = await convergeGiftRefund(deps, payment.gift_id);
-  }
-  if (!orderOk || giftConvergence === null) {
+  const settled = await reconciliationTxPort(deps).runInTransaction(
+    async ({ payments, orders, gifts, outbox }) => {
+      let orderOk = true;
+      if (confirmedOrderId) {
+        const moved = await orders.transitionStatus(confirmedOrderId, "CONFIRMED", "REFUNDED");
+        if (!moved) {
+          const after = await deps.orderRepo.getById(confirmedOrderId);
+          orderOk = !!after && after.status === "REFUNDED";
+        }
+      }
+      let giftConvergence: GiftRefundConvergence = { status: "already" };
+      if (payment.gift_id) {
+        giftConvergence = await convergeGiftRefund(deps, payment.gift_id, gifts);
+      }
+      if (!orderOk || giftConvergence === null) {
+        return { kind: "conflict" as const };
+      }
+      let emitted = false;
+      if (giftConvergence.status === "refunded") {
+        await outbox.enqueue(
+          createEventEnvelope("GiftRefunded", giftConvergence.gift.id, {
+            gift_id: giftConvergence.gift.id,
+            sender_id: giftConvergence.gift.sender_id,
+            amount: payment.amount,
+          }),
+        );
+        emitted = true;
+      }
+      await payments.markReconciliationResult(
+        payment.id,
+        reconciliationUpdate({
+          outcome: "CONVERGED",
+          reason: "GATEWAY_FULL_REFUND_CONFIRMED",
+          gatewayStatus: full.status,
+          emitted,
+        }),
+      );
+      return { kind: "ok" as const, emitted };
+    },
+  );
+  if (settled.kind === "conflict") {
     return record(payment, deps, {
       outcome: "MANUAL_REVIEW",
       reason: "REFUND_LOCAL_CONVERGENCE_CONFLICT",
@@ -777,23 +890,11 @@ async function reconcileRefunded(
       manualReview: true,
     });
   }
-  let emitted = false;
-  if (giftConvergence.status === "refunded") {
-    await emit(
-      createEventEnvelope("GiftRefunded", giftConvergence.gift.id, {
-        gift_id: giftConvergence.gift.id,
-        sender_id: giftConvergence.gift.sender_id,
-        amount: payment.amount,
-      }),
-    );
-    emitted = true;
-  }
-  return record(payment, deps, {
+  return {
     outcome: "CONVERGED",
     reason: "GATEWAY_FULL_REFUND_CONFIRMED",
-    gatewayStatus: full.status,
-    emitted,
-  });
+    emitted: settled.emitted,
+  };
 }
 
 async function handleError(

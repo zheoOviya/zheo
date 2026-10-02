@@ -4,28 +4,33 @@ import type { OrderRepository } from "./orderRepository";
 import type { PaymentRepository } from "./paymentRepository";
 
 // ============================================
-// Payment producer atomicity transaction contracts (EVT-B2B-PAY-A).
+// Payment producer atomicity transaction contracts (EVT-B2B-PAY-A + PAY-B1).
 //
 // The ordinary/local payment producers (CashOnPickupSelected, GiftPaid,
-// PaymentSucceeded, PaymentFailed, GiftRefunded) must persist their local
-// business mutation and their `event_outbox` INSERT inside the SAME PostgreSQL
-// transaction. Each repo exposed here is deliberately narrow, and every
-// repository is constructed from one transaction handle so the mutation and its
-// event row share a single commit boundary.
+// PaymentSucceeded, PaymentFailed, GiftRefunded) — including the reconciliation
+// convergence tails added in EVT-B2B-PAY-B1 — must persist their local business
+// mutation, their reconciliation-result marker (where applicable) and their
+// `event_outbox` INSERT inside the SAME PostgreSQL transaction. Each repo
+// exposed here is deliberately narrow, and every repository is constructed from
+// one transaction handle so the mutation and its event row share a single commit
+// boundary.
 //
-// Gateway calls (Razorpay create-order / refund) are OUTSIDE this scope: a
-// provider operation is never made atomic by a database outbox. This covers the
-// local tail only (reconciliation, manual review and the gift.ts mock refund
-// are PAY-B and untouched here).
+// Gateway calls (Razorpay create-order / refund / reconciliation reads) are
+// OUTSIDE this scope: a provider operation is never made atomic by a database
+// outbox. Only the local tail is transactional. Manual review (PAY-B2) and the
+// gift.ts mock refund (PAY-B3) are not yet covered here.
 // ============================================
 
 /** The only outbox capability any payment transaction scope may use. */
 export type PaymentOutboxEnqueuer = Pick<EventOutboxRepository, "enqueue">;
 
 export interface PaymentTxRepos {
-  payments: Pick<PaymentRepository, "create" | "updateWebhookResult">;
+  payments: Pick<
+    PaymentRepository,
+    "create" | "updateWebhookResult" | "compareAndSetStatus" | "markReconciliationResult"
+  >;
   orders: Pick<OrderRepository, "updateStatus" | "transitionStatus">;
-  gifts: Pick<GiftRepository, "markPaid" | "markRefunded">;
+  gifts: Pick<GiftRepository, "markPaid" | "markRefunded" | "markRefunding">;
   outbox: PaymentOutboxEnqueuer;
 }
 

@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OrderStatus } from "@snakzap/types";
-import { onEvent } from "../lib/eventBus";
+import type { EventOutboxRow } from "../repositories/eventOutboxRepository";
 import { MemoryGiftRepository, type GiftDTO } from "../repositories/giftRepository";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 import { MemoryOrderRepository, type OrderDTO } from "../repositories/orderRepository";
 import {
   MemoryPaymentRepository,
@@ -128,12 +129,10 @@ function makeOrder(overrides: Partial<OrderDTO> = {}): OrderDTO {
   };
 }
 
-function captureEvents(name: "PaymentSucceeded" | "GiftPaid" | "GiftRefunded"): unknown[] {
-  const events: unknown[] = [];
-  onEvent(name, async (event) => {
-    events.push(event);
-  });
-  return events;
+function enqueued(
+  name: "PaymentSucceeded" | "GiftPaid" | "GiftRefunded",
+): () => EventOutboxRow[] {
+  return () => memoryEventOutbox._all().filter((row) => row.event_name === name);
 }
 
 describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
@@ -143,6 +142,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
   let gateway: FakeGateway;
 
   beforeEach(() => {
+    memoryEventOutbox._reset();
     paymentRepo = new MemoryPaymentRepository();
     orderRepo = new MemoryOrderRepository();
     giftRepo = new MemoryGiftRepository();
@@ -175,7 +175,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
   it("RC1 CREATED + valid captured gateway payment -> CAPTURED + CONFIRMED + event", async () => {
     const { order, payment } = await seedOrderPayment({ status: "PAYMENT_PENDING" });
     gateway.payments.push(captured("pay_rc1", payment.razorpay_order_id, 10000));
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const result = await reconcilePayment(payment.id, deps());
 
@@ -186,7 +186,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(after!.razorpay_payment_id).toBe("pay_rc1");
     expect(after!.reconciliation_status).toBe("CONVERGED");
     expect((await orderRepo.getById(order.id))!.status).toBe("CONFIRMED");
-    expect(events).toHaveLength(1);
+    expect(events()).toHaveLength(1);
   });
 
   it("RC2 local CAPTURED + PAYMENT_PENDING -> order CONFIRMED + event (payment unchanged)", async () => {
@@ -194,7 +194,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     await paymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
       razorpay_payment_id: "pay_rc2",
     });
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const result = await reconcilePayment(payment.id, deps());
 
@@ -203,7 +203,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(after!.status).toBe("CAPTURED");
     expect(after!.razorpay_payment_id).toBe("pay_rc2");
     expect((await orderRepo.getById(order.id))!.status).toBe("CONFIRMED");
-    expect(events).toHaveLength(1);
+    expect(events()).toHaveLength(1);
   });
 
   it("RC3 ordinary FAILED + different valid captured payment -> PAY-4 revalidated -> CAPTURED + convergence", async () => {
@@ -216,7 +216,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
       webhook_raw: { id: "pay_bad_rc3" },
     });
     gateway.payments.push(captured("pay_good_rc3", payment.razorpay_order_id, 10000));
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const result = await reconcilePayment(payment.id, deps());
 
@@ -225,13 +225,13 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(after!.status).toBe("CAPTURED");
     expect(after!.razorpay_payment_id).toBe("pay_good_rc3");
     expect((await orderRepo.getById(order.id))!.status).toBe("CONFIRMED");
-    expect(events).toHaveLength(1);
+    expect(events()).toHaveLength(1);
   });
 
   it("RC4 amount mismatch -> remains quarantined; no order change, no event", async () => {
     const { order, payment } = await seedOrderPayment({ status: "PAYMENT_PENDING" });
     gateway.payments.push(captured("pay_rc4", payment.razorpay_order_id, 9000));
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const result = await reconcilePayment(payment.id, deps());
 
@@ -240,7 +240,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(after!.status).toBe("CREATED");
     expect(after!.manual_review).toBe(true);
     expect((await orderRepo.getById(order.id))!.status).toBe("PAYMENT_PENDING");
-    expect(events).toHaveLength(0);
+    expect(events()).toHaveLength(0);
   });
 
   it("RC5 wrong currency -> remains quarantined", async () => {
@@ -248,13 +248,13 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     gateway.payments.push(
       captured("pay_rc5", payment.razorpay_order_id, 10000, { currency: "USD" }),
     );
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const result = await reconcilePayment(payment.id, deps());
 
     expect(result.outcome).toBe("MANUAL_REVIEW");
     expect((await paymentRepo.getById(payment.id))!.status).toBe("CREATED");
-    expect(events).toHaveLength(0);
+    expect(events()).toHaveLength(0);
   });
 
   it("RC6 already CAPTURED + CONFIRMED -> idempotent no-op; no duplicate event", async () => {
@@ -262,7 +262,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     await paymentRepo.compareAndSetStatus(payment.id, "CREATED", "CAPTURED", {
       razorpay_payment_id: "pay_rc6",
     });
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const result = await reconcilePayment(payment.id, deps());
 
@@ -270,7 +270,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(result.emitted).toBe(false);
     expect((await paymentRepo.getById(payment.id))!.status).toBe("CAPTURED");
     expect((await orderRepo.getById(order.id))!.status).toBe("CONFIRMED");
-    expect(events).toHaveLength(0);
+    expect(events()).toHaveLength(0);
   });
 
   it("RC7a gateway definitive failed on stale CREATED -> payment FAILED, order untouched", async () => {
@@ -350,7 +350,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
   it("RC10 repeated reconciliation -> idempotent; no duplicate success event", async () => {
     const { order, payment } = await seedOrderPayment({ status: "PAYMENT_PENDING" });
     gateway.payments.push(captured("pay_rc10", payment.razorpay_order_id, 10000));
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const first = await reconcilePayment(payment.id, deps());
     const second = await reconcilePayment(payment.id, deps());
@@ -358,7 +358,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(first.outcome).toBe("CONVERGED");
     expect(second.outcome).toBe("NOOP");
     expect(second.emitted).toBe(false);
-    expect(events).toHaveLength(1);
+    expect(events()).toHaveLength(1);
     expect((await orderRepo.getById(order.id))!.status).toBe("CONFIRMED");
     expect((await paymentRepo.getById(payment.id))!.status).toBe("CAPTURED");
   });
@@ -525,7 +525,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
       razorpay_payment_id: "pay_pay1_pf1",
     });
     gateway.payments.push(captured("pay_pay1_pf1", payment.razorpay_order_id, 10000));
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const result = await reconcilePayment(payment.id, deps());
 
@@ -533,7 +533,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(result.emitted).toBe(true);
     expect((await orderRepo.getById(order.id))!.status).toBe("CONFIRMED");
     expect((await paymentRepo.getById(payment.id))!.status).toBe("CAPTURED");
-    expect(events).toHaveLength(1);
+    expect(events()).toHaveLength(1);
   });
 
   // P1-3b: captured + PAYMENT_FAILED but gateway amount disagrees -> no recovery.
@@ -608,7 +608,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     });
     // The quarantined id is itself captured at the gateway (but for the wrong amount).
     gateway.payments.push(captured("pay_quar_rc13", payment.razorpay_order_id, 9000));
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const result = await reconcilePayment(payment.id, deps());
 
@@ -616,7 +616,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(result.reason).toBe("SAME_PAY4_QUARANTINED_PAYMENT");
     expect((await paymentRepo.getById(payment.id))!.status).toBe("FAILED");
     expect((await orderRepo.getById(order.id))!.status).toBe("PAYMENT_PENDING");
-    expect(events).toHaveLength(0);
+    expect(events()).toHaveLength(0);
   });
 
   it("RC14 different valid payment_id after quarantine -> full revalidation then recovery", async () => {
@@ -632,7 +632,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
       captured("pay_quar_rc14", payment.razorpay_order_id, 9000),
       captured("pay_valid_rc14", payment.razorpay_order_id, 10000),
     );
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const result = await reconcilePayment(payment.id, deps());
 
@@ -641,7 +641,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(after!.status).toBe("CAPTURED");
     expect(after!.razorpay_payment_id).toBe("pay_valid_rc14");
     expect((await orderRepo.getById(order.id))!.status).toBe("CONFIRMED");
-    expect(events).toHaveLength(1);
+    expect(events()).toHaveLength(1);
   });
 
   it("R21 ordinary payment.failed + SAME gateway id later captured -> revalidated, recovers (not quarantine)", async () => {
@@ -654,7 +654,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
       webhook_raw: { id: "pay_r21" },
     });
     gateway.payments.push(captured("pay_r21", payment.razorpay_order_id, 10000));
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const result = await reconcilePayment(payment.id, deps());
 
@@ -664,7 +664,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(after!.status).toBe("CAPTURED");
     expect(after!.razorpay_payment_id).toBe("pay_r21");
     expect((await orderRepo.getById(order.id))!.status).toBe("CONFIRMED");
-    expect(events).toHaveLength(1);
+    expect(events()).toHaveLength(1);
   });
 
   it("R22 payment.captured quarantine + SAME id valid capture -> still blocked, never promoted", async () => {
@@ -677,7 +677,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
       webhook_raw: { id: "pay_r22" },
     });
     gateway.payments.push(captured("pay_r22", payment.razorpay_order_id, 10000));
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const result = await reconcilePayment(payment.id, deps());
 
@@ -685,14 +685,14 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(result.reason).toBe("SAME_PAY4_QUARANTINED_PAYMENT");
     expect((await paymentRepo.getById(payment.id))!.status).toBe("FAILED");
     expect((await orderRepo.getById(order.id))!.status).toBe("PAYMENT_PENDING");
-    expect(events).toHaveLength(0);
+    expect(events()).toHaveLength(0);
   });
 
   it("R23 captured candidate with foreign order_id -> no CAPTURED, MANUAL_REVIEW, no event", async () => {
     const { order, payment } = await seedOrderPayment({ status: "PAYMENT_PENDING" });
     gateway.returnAllPayments = true;
     gateway.payments.push(captured("pay_foreign_r23", "order_someone_else", 10000));
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const result = await reconcilePayment(payment.id, deps());
 
@@ -700,7 +700,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(result.reason).toBe("CAPTURE_ORDER_MISMATCH");
     expect((await paymentRepo.getById(payment.id))!.status).toBe("CREATED");
     expect((await orderRepo.getById(order.id))!.status).toBe("PAYMENT_PENDING");
-    expect(events).toHaveLength(0);
+    expect(events()).toHaveLength(0);
   });
 
   it("R24 full refund with wrong payment_id -> ignored, no REFUNDED convergence", async () => {
@@ -723,7 +723,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     gateway.payments.push(
       captured("pay_r25", payment.razorpay_order_id, 10000, { currency: UNKNOWN_CURRENCY }),
     );
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const result = await reconcilePayment(payment.id, deps());
 
@@ -731,7 +731,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     expect(result.reason).toBe("CAPTURE_INTEGRITY_VIOLATION");
     expect((await paymentRepo.getById(payment.id))!.status).toBe("CREATED");
     expect((await orderRepo.getById(order.id))!.status).toBe("PAYMENT_PENDING");
-    expect(events).toHaveLength(0);
+    expect(events()).toHaveLength(0);
   });
 
   it("R26 refund with missing currency is not full-refund evidence (no REFUNDED)", async () => {
@@ -788,7 +788,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
   it("RC17 two concurrent reconciliations -> at most one transition/event", async () => {
     const { order, payment } = await seedOrderPayment({ status: "PAYMENT_PENDING" });
     gateway.payments.push(captured("pay_rc17", payment.razorpay_order_id, 10000));
-    const events = captureEvents("PaymentSucceeded");
+    const events = enqueued("PaymentSucceeded");
 
     const [a, b] = await Promise.all([
       reconcilePayment(payment.id, deps()),
@@ -797,7 +797,7 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
 
     const emitted = [a, b].filter((r) => r.emitted);
     expect(emitted).toHaveLength(1);
-    expect(events).toHaveLength(1);
+    expect(events()).toHaveLength(1);
     expect((await orderRepo.getById(order.id))!.status).toBe("CONFIRMED");
     expect((await paymentRepo.getById(payment.id))!.status).toBe("CAPTURED");
   });
@@ -844,13 +844,13 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
       amount: 50,
     });
     gateway.payments.push(captured("pay_gift_g1", "order_gift_g1", 5000));
-    const events = captureEvents("GiftPaid");
+    const events = enqueued("GiftPaid");
 
     const result = await reconcilePayment(payment.id, deps());
 
     expect(result.outcome).toBe("CONVERGED");
     expect((await giftRepo.getById(gift.id))!.status).toBe("ACTIVE");
-    expect(events).toHaveLength(1);
+    expect(events()).toHaveLength(1);
   });
 
   it("G2 gift refund observation converges via existing gift CAS", async () => {
@@ -883,14 +883,14 @@ describe("PAYMENT_RECONCILIATION-B1 (RC1-RC20)", () => {
     });
     await giftRepo.markPaid(gift.id);
     gateway.refunds.push(gatewayRefund("refund_gift_g2", "pay_gift_g2", 5000));
-    const events = captureEvents("GiftRefunded");
+    const events = enqueued("GiftRefunded");
 
     const result = await reconcilePayment(payment.id, deps());
 
     expect(result.outcome).toBe("CONVERGED");
     expect((await paymentRepo.getById(payment.id))!.status).toBe("REFUNDED");
     expect((await giftRepo.getById(gift.id))!.status).toBe("REFUNDED");
-    expect(events).toHaveLength(1);
+    expect(events()).toHaveLength(1);
   });
 
   it("unknown local payment id -> ERROR (no throw)", async () => {
