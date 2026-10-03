@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OrderStatus } from "@snakzap/types";
-import { onEvent } from "../lib/eventBus";
+import type { EventOutboxRow } from "../repositories/eventOutboxRepository";
 import { MemoryGiftRepository } from "../repositories/giftRepository";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 import { MemoryOrderRepository, type OrderDTO } from "../repositories/orderRepository";
 import { MemoryPaymentRepository, type PaymentDTO } from "../repositories/paymentRepository";
+import { MemoryPaymentTransactionPort } from "../repositories/paymentAtomicityContracts";
 import type { RazorpayPaymentEntity } from "./razorpay";
 import {
   PaymentManualReviewService,
@@ -91,6 +93,7 @@ describe("PaymentManualReviewService (PAY1 Option C)", () => {
   let service: PaymentManualReviewService;
 
   beforeEach(() => {
+    memoryEventOutbox._reset();
     orderRepo = new MemoryOrderRepository();
     paymentRepo = new MemoryPaymentRepository();
     giftRepo = new MemoryGiftRepository();
@@ -102,6 +105,12 @@ describe("PaymentManualReviewService (PAY1 Option C)", () => {
       giftRepo,
       gateway,
       refundService: refunds,
+      txPort: new MemoryPaymentTransactionPort(() => ({
+        payments: paymentRepo,
+        orders: orderRepo,
+        gifts: giftRepo,
+        outbox: memoryEventOutbox,
+      })),
     });
   });
 
@@ -144,12 +153,8 @@ describe("PaymentManualReviewService (PAY1 Option C)", () => {
     return markManualReview(payment);
   }
 
-  function captureEvents(): unknown[] {
-    const events: unknown[] = [];
-    onEvent("PaymentSucceeded", async (event) => {
-      events.push(event);
-    });
-    return events;
+  function enqueued(name: "PaymentSucceeded"): () => EventOutboxRow[] {
+    return () => memoryEventOutbox._all().filter((row) => row.event_name === name);
   }
 
   // MR1: an eligible (manual-review) PAYMENT_FAILED order recovers to CONFIRMED.
@@ -157,7 +162,7 @@ describe("PaymentManualReviewService (PAY1 Option C)", () => {
     const order = seedOrder({ status: "PAYMENT_FAILED" });
     const payment = await seedManualReviewPayment(order);
     gateway.payments.push(entity(payment.razorpay_payment_id!, payment.razorpay_order_id, 10000));
-    const events = captureEvents();
+    const events = enqueued("PaymentSucceeded");
 
     const result = await service.resolve(order.id, {
       action: "RECOVER_TO_CONFIRMED",
@@ -169,7 +174,7 @@ describe("PaymentManualReviewService (PAY1 Option C)", () => {
     expect(result.from_status).toBe("PAYMENT_FAILED");
     expect((await orderRepo.getById(order.id))!.status).toBe("CONFIRMED");
     expect((await paymentRepo.getById(payment.id))!.status).toBe("CAPTURED");
-    expect(events).toHaveLength(1);
+    expect(events()).toHaveLength(1);
   });
 
   // MR2: mutating actions require the operator-observed from_status.
@@ -328,7 +333,7 @@ describe("PaymentManualReviewService (PAY1 Option C)", () => {
   it("MR13 KEEP_MANUAL_REVIEW -> reason recorded, no gateway/order/event mutation", async () => {
     const order = seedOrder({ status: "PAYMENT_FAILED" });
     const payment = await seedManualReviewPayment(order);
-    const events = captureEvents();
+    const events = enqueued("PaymentSucceeded");
 
     const result = await service.resolve(order.id, {
       action: "KEEP_MANUAL_REVIEW",
@@ -339,7 +344,7 @@ describe("PaymentManualReviewService (PAY1 Option C)", () => {
     expect(result.payment_status).toBe("CAPTURED");
     expect(gateway.reads).toBe(0);
     expect(refunds.calls).toHaveLength(0);
-    expect(events).toHaveLength(0);
+    expect(events()).toHaveLength(0);
     expect((await orderRepo.getById(order.id))!.status).toBe("PAYMENT_FAILED");
     const after = (await paymentRepo.getById(payment.id))!;
     expect(after.status).toBe("CAPTURED");
@@ -375,14 +380,14 @@ describe("PaymentManualReviewService (PAY1 Option C)", () => {
     const order = seedOrder({ status: "PAYMENT_FAILED" });
     const payment = await seedCapturedPayment(order);
     gateway.payments.push(entity(payment.razorpay_payment_id!, payment.razorpay_order_id, 10000));
-    const events = captureEvents();
+    const events = enqueued("PaymentSucceeded");
 
     await expect(
       service.resolve(order.id, { action: "RECOVER_TO_CONFIRMED", from_status: "PAYMENT_FAILED" }),
     ).rejects.toMatchObject({ code: "PAYMENT_NOT_IN_MANUAL_REVIEW", status: 409 });
 
     expect(gateway.reads).toBe(0);
-    expect(events).toHaveLength(0);
+    expect(events()).toHaveLength(0);
     expect((await orderRepo.getById(order.id))!.status).toBe("PAYMENT_FAILED");
   });
 

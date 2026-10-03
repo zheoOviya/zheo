@@ -1,9 +1,11 @@
 import type { OrderStatus } from "@snakzap/types";
-import { createEventEnvelope, emit } from "../lib/eventBus";
+import { createEventEnvelope } from "../lib/eventBus";
 import { AppError } from "../middleware/envelope";
 import type { GiftRepository } from "../repositories/giftRepository";
 import type { OrderRepository } from "../repositories/orderRepository";
 import type { PaymentRepository, PaymentDTO } from "../repositories/paymentRepository";
+import type { PaymentTransactionPort } from "../repositories/paymentAtomicityContracts";
+import { getPaymentTransactionPort } from "../repositories/drizzle/paymentTransactionPort";
 import { sharedGiftRepo, sharedOrderRepo, sharedPaymentRepo } from "../repositories/shared";
 import {
   validateCapturedAgainstGateway,
@@ -65,6 +67,13 @@ export interface PaymentManualReviewDeps {
   giftRepo?: GiftRepository;
   gateway: ManualReviewGateway;
   refundService: ManualReviewRefundService;
+  /**
+   * EVT-B2B-PAY-B2: optional injected transaction port. When provided (tests /
+   * harnesses) the RECOVER_TO_CONFIRMED local tail runs through it; otherwise the
+   * port is resolved lazily per call from the storage mode so route-module import
+   * never locks in a backend.
+   */
+  txPort?: PaymentTransactionPort;
 }
 
 export interface ManualReviewInput {
@@ -201,6 +210,23 @@ export class PaymentManualReviewService {
     }
   }
 
+  /**
+   * EVT-B2B-PAY-B2: resolve the transaction port for the RECOVER_TO_CONFIRMED
+   * local tail. Gift methods are never reached from this path, so the narrowing
+   * cast is safe; the Postgres branch ignores the arguments entirely and builds
+   * repositories from one transaction handle.
+   */
+  private txPort(): PaymentTransactionPort {
+    return (
+      this.deps.txPort ??
+      getPaymentTransactionPort(
+        this.deps.paymentRepo,
+        this.deps.orderRepo,
+        this.deps.giftRepo as GiftRepository,
+      )
+    );
+  }
+
   private async recoverToConfirmed(
     orderId: string,
     input: ManualReviewInput,
@@ -233,13 +259,32 @@ export class PaymentManualReviewService {
       );
     }
 
+    // Gateway truth is proven BEFORE any transaction opens; a provider read must
+    // never run inside a database transaction.
     await this.assertCaptureIntegrity(payment);
 
-    // CAS from the operator-observed status: no blind write, no retry.
-    const recovered = await this.deps.orderRepo.transitionStatus(
-      order.id,
-      order.status,
-      "CONFIRMED",
+    // EVT-B2B-PAY-B2: the local tail — order CAS + PaymentSucceeded outbox row +
+    // reconciliation-result marker — commits as one unit. A CAS loser commits
+    // nothing; a failure rolls the whole tail back.
+    const recovered = await this.txPort().runInTransaction(
+      async ({ payments, orders, outbox }) => {
+        const moved = await orders.transitionStatus(order.id, order.status, "CONFIRMED");
+        if (!moved) return null;
+        await outbox.enqueue(
+          createEventEnvelope("PaymentSucceeded", order.id, {
+            order_id: order.id,
+            payment_id: payment.id,
+            amount: payment.amount,
+          }),
+        );
+        await payments.markReconciliationResult(payment.id, {
+          reconciliation_status: "CONVERGED",
+          reconciliation_reason: "MANUAL_REVIEW_RECOVER_TO_CONFIRMED",
+          last_reconciled_at: new Date().toISOString(),
+          manual_review: false,
+        });
+        return moved;
+      },
     );
     if (!recovered) {
       throw new AppError(
@@ -248,14 +293,6 @@ export class PaymentManualReviewService {
         409,
       );
     }
-
-    await emit(
-      createEventEnvelope("PaymentSucceeded", order.id, {
-        order_id: order.id,
-        payment_id: payment.id,
-        amount: payment.amount,
-      }),
-    );
 
     return {
       action: input.action,
