@@ -108,6 +108,16 @@ async function main() {
   );
   startPaymentReconciliationSweep();
 
+  // Durable event-outbox relay (EVT-RELAY-BOOTSTRAP): publishes committed
+  // transactional-outbox rows. Always runs (no disable flag) so durable events
+  // cannot be stranded in production. Boot tick + bounded periodic ticks on an
+  // unref'd timer; stopped explicitly during shutdown before Redis/DB teardown.
+  const { startEventOutboxRelay, stopEventOutboxRelay } = await import(
+    "./services/eventOutboxRelay"
+  );
+  const { sharedEventOutboxRepo } = await import("./repositories/shared");
+  startEventOutboxRelay({ repo: sharedEventOutboxRepo });
+
   // WebSocket upgrade handling on the same HTTP server (EOS Layer 1, P05)
   initWebSocketServer(server);
 
@@ -126,8 +136,12 @@ async function main() {
     logger.info({ message: "shutdown_initiated", signal });
     stopNotificationRetrySweep();
     stopPaymentReconciliationSweep();
+    // Stop scheduling relay ticks immediately; the awaited stop inside the
+    // close callback ensures any in-flight tick settles before Redis/DB close.
+    void stopEventOutboxRelay();
     server.close(async () => {
       logger.info({ message: "http_server_closed" });
+      await stopEventOutboxRelay();
       await shutdownEventSubscriber();
       try {
         await getRedis().quit();

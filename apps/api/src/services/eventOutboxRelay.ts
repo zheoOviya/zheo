@@ -1,4 +1,5 @@
 import type { EventName, TypedEventEnvelope } from "@snakzap/types";
+import { config } from "../config";
 import { logger } from "../lib/logger";
 import { publishDurableEnvelope } from "../lib/eventBus";
 import {
@@ -140,4 +141,130 @@ export async function eventOutboxBacklog(
   repo: EventOutboxRepository,
 ): Promise<number> {
   return repo.outstandingCount();
+}
+
+// ============================================
+// Production bootstrap (EVT-RELAY-BOOTSTRAP).
+//
+// Makes the durable relay actually run as part of the API lifecycle WITHOUT
+// changing delivery semantics: DELIVERY stays AT_LEAST_ONCE, the persisted
+// event_id is preserved, and EXACTLY_ONCE is still not claimed.
+//
+// Lifecycle contract:
+//   1. idempotent start (a second start is ignored while running)
+//   2. one immediate boot tick
+//   3. bounded periodic ticks
+//   4. the timer is unref'd so it never holds the process open
+//   5. no uncontrolled overlapping ticks (an in-flight tick suppresses the next)
+//   6. stop prevents new ticks
+//   7. stop awaits any in-flight tick
+//   8. callers stop the relay BEFORE Redis quit / closeDb
+//
+// Production activation is fail-safe: there is deliberately NO enable flag, so
+// the relay cannot be silently disabled on a production deploy. Only the
+// cadence is configurable via EVENT_OUTBOX_RELAY_INTERVAL_MS (validated as a
+// positive integer at config load).
+// ============================================
+
+/** Default bounded relay cadence (ms) when the interval env knob is unset. */
+export const EVENT_OUTBOX_RELAY_INTERVAL_MS = 1_000;
+
+export interface EventOutboxRelayBootstrapOptions {
+  /** Pre-built relay (tests / real-infra harness). When omitted, `repo` is required. */
+  relay?: EventOutboxRelay;
+  /** Repository backing a relay built from these options. */
+  repo?: EventOutboxRepository;
+  publish?: DurableEnvelopePublisher;
+  now?: () => Date;
+  intervalMs?: number;
+}
+
+let relayInstance: EventOutboxRelay | null = null;
+let relayTimer: NodeJS.Timeout | null = null;
+let inFlightTick: Promise<void> | null = null;
+
+/** Resolves the configured cadence, falling back to the bounded default. */
+export function resolveEventOutboxRelayIntervalMs(): number {
+  return config.eventOutboxRelay.intervalMs ?? EVENT_OUTBOX_RELAY_INTERVAL_MS;
+}
+
+/**
+ * Runs one bounded tick, guarded against overlap. Never rejects: a tick failure
+ * is logged and swallowed so a transient error cannot stop future ticks or
+ * reject the stop-await.
+ */
+function runRelayTick(relay: EventOutboxRelay): Promise<void> {
+  if (inFlightTick) {
+    logger.warn({ message: "event_outbox_relay_tick_skipped_overlap" });
+    return inFlightTick;
+  }
+  const tick = relay
+    .tick()
+    .then(() => undefined)
+    .catch((err) => {
+      logger.error({
+        message: "event_outbox_relay_tick_failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    })
+    .finally(() => {
+      inFlightTick = null;
+    });
+  inFlightTick = tick;
+  return tick;
+}
+
+/** Starts the relay: one immediate boot tick, then bounded periodic ticks. */
+export function startEventOutboxRelay(
+  options: EventOutboxRelayBootstrapOptions = {},
+): void {
+  if (relayInstance) return; // idempotent start
+
+  if (!options.relay && !options.repo) {
+    throw new Error("startEventOutboxRelay requires a relay or a repo");
+  }
+
+  const relay =
+    options.relay ??
+    new EventOutboxRelay({
+      repo: options.repo as EventOutboxRepository,
+      ...(options.publish ? { publish: options.publish } : {}),
+      ...(options.now ? { now: options.now } : {}),
+    });
+
+  const intervalMs = options.intervalMs ?? resolveEventOutboxRelayIntervalMs();
+
+  relayInstance = relay;
+  void runRelayTick(relay); // boot tick
+  relayTimer = setInterval(() => {
+    void runRelayTick(relay);
+  }, intervalMs);
+  relayTimer.unref();
+
+  logger.info({ message: "event_outbox_relay_started", interval_ms: intervalMs });
+}
+
+/**
+ * Stops scheduling and awaits any in-flight tick. Idempotent: a second call is a
+ * no-op (and still awaits any tick that is somehow in flight). Call this BEFORE
+ * Redis quit / closeDb so a tick cannot use a torn-down connection.
+ */
+export async function stopEventOutboxRelay(): Promise<void> {
+  if (relayTimer) {
+    clearInterval(relayTimer);
+    relayTimer = null;
+  }
+  relayInstance = null;
+
+  const pending = inFlightTick;
+  if (pending) {
+    logger.info({ message: "event_outbox_relay_stop_awaiting_inflight" });
+    await pending;
+  }
+  logger.info({ message: "event_outbox_relay_stopped" });
+}
+
+/** Test seam: whether a relay is currently scheduled. */
+export function isEventOutboxRelayRunning(): boolean {
+  return relayInstance !== null;
 }

@@ -39,6 +39,24 @@ function optionalPositiveInt(name: string): number | null {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+/**
+ * Strict optional positive-integer parser for the durable relay cadence. A
+ * present but invalid value fails closed (throws at config load) instead of
+ * silently falling back, so a misconfigured deploy cannot run a bad relay timer.
+ */
+export function parseEventOutboxRelayIntervalMs(
+  value: string | undefined,
+): number | null {
+  if (value === undefined || value.trim() === "") return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(
+      `EVENT_OUTBOX_RELAY_INTERVAL_MS must be a positive integer (got "${value}")`,
+    );
+  }
+  return parsed;
+}
+
 export const config = {
   env: optional("NODE_ENV", "development"),
   port: optionalInt("PORT", 3001),
@@ -135,6 +153,16 @@ export const config = {
     accessKeyId: optional("S3_ACCESS_KEY_ID", ""),
     secretAccessKey: optional("S3_SECRET_ACCESS_KEY", ""),
     cdnBaseUrl: optional("S3_CDN_BASE_URL", ""),
+  },
+
+  // Durable event-outbox relay cadence. There is deliberately NO enable flag:
+  // the relay always runs as part of the API lifecycle so durable events cannot
+  // be stranded by a silent production disable. Only the interval is tunable,
+  // and it must be a positive integer (invalid values fail closed at load).
+  eventOutboxRelay: {
+    intervalMs: parseEventOutboxRelayIntervalMs(
+      process.env.EVENT_OUTBOX_RELAY_INTERVAL_MS,
+    ),
   },
 
   cors: {
