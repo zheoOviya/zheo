@@ -11,6 +11,11 @@ const PAST = -1;
 const giftExpiredRows = () =>
   memoryEventOutbox._all().filter((r) => r.event_name === "GiftExpired");
 
+// EVT-B2B-PAY-B3 (G1): the mock-resolution refund tail persists GiftRefunded to
+// the outbox (no direct emit).
+const giftRefundedRows = () =>
+  memoryEventOutbox._all().filter((r) => r.event_name === "GiftRefunded");
+
 async function seedGift(
   repo: MemoryGiftRepository,
   daysFromNow: number,
@@ -91,6 +96,11 @@ describe("runGiftExpirySweep", () => {
     expect(after?.status).toBe("REFUNDED");
     expect(after?.refunded_at).not.toBeNull();
     expect(after?.refund_requested_at).not.toBeNull();
+    // G1: the mock resolution persists exactly one GiftRefunded row.
+    const refundEvents = giftRefundedRows();
+    expect(refundEvents).toHaveLength(1);
+    expect(refundEvents[0]?.aggregate_id).toBe(gift.id);
+    expect(refundEvents[0]?.payload).toMatchObject({ gift_id: gift.id, amount: 30 });
   });
 
   it("never refunds the same gift twice across sweeps", async () => {
@@ -104,6 +114,8 @@ describe("runGiftExpirySweep", () => {
     const second = await runGiftExpirySweep(giftRepo, paymentRepo, new Date());
     expect(second.refunded).toBe(0);
     expect(second.expired).toBe(0);
+    // A second sweep must not enqueue a duplicate GiftRefunded row.
+    expect(giftRefundedRows()).toHaveLength(1);
   });
 
   it("skips a gift whose refund was already submitted (refund_requested_at set)", async () => {

@@ -1,9 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { AppError } from "../middleware/envelope";
-import { createEventEnvelope, emit } from "../lib/eventBus";
+import { createEventEnvelope } from "../lib/eventBus";
 import type { CatalogRepository } from "../repositories/catalogRepository";
 import type { GiftRepository, GiftDTO, GiftStatus } from "../repositories/giftRepository";
 import type { PaymentRepository } from "../repositories/paymentRepository";
+import type { PaymentTransactionPort } from "../repositories/paymentAtomicityContracts";
+import { getPaymentTransactionPort } from "../repositories/drizzle/paymentTransactionPort";
+import { sharedOrderRepo } from "../repositories/shared";
 import type { CustomizationDelta } from "./pricing";
 import { isRazorpayMockMode, razorpayService } from "./razorpay";
 
@@ -240,12 +243,21 @@ export class GiftService {
  *      sweeps skip the gift (awaiting the webhook) instead of double-refunding.
  *   5. Mock mode (no real gateway) resolves straight to REFUNDED because no
  *      refund webhook is ever emitted in preview/test environments.
+ *
+ * EVT-B2B-PAY-B3 (G1): the mock-resolution local tail — payment -> REFUNDED,
+ * the gift `markRefunded` CAS and the single `GiftRefunded` outbox INSERT —
+ * commits on ONE transaction port (PaymentTransactionPort) so a committed
+ * resolution persists exactly one event row and a local failure rolls the whole
+ * tail back. The reservation CAS and the Razorpay refund call stay OUTSIDE the
+ * transaction: the reservation is committed BEFORE the provider call and the
+ * provider is never invoked from inside a database transaction.
  */
 export async function submitGiftRefund(
   gift: GiftDTO,
   giftRepo: GiftRepository,
   paymentRepo: PaymentRepository,
   from: GiftStatus[],
+  txPort?: PaymentTransactionPort,
 ): Promise<GiftDTO> {
   const payment = await paymentRepo.getByGiftId(gift.id);
   if (!payment) {
@@ -264,6 +276,9 @@ export async function submitGiftRefund(
     const updated = await giftRepo.markRefunding(gift.id, from);
     return updated ?? (await giftRepo.getById(gift.id)) ?? gift;
   }
+  // Captured: the id is proven present here so the transaction closure below
+  // sees a definite string.
+  const razorpayPaymentId = payment.razorpay_payment_id;
   if (gift.refund_requested_at) {
     // Refund already submitted; awaiting webhook confirmation. CAS again so a
     // gift that moved out of the expected state is not forced back.
@@ -291,27 +306,34 @@ export async function submitGiftRefund(
 
   if (isRazorpayMockMode()) {
     // No refund webhook will ever arrive in mock/preview mode: resolve now.
-    // If the local resolution fails, clear the reservation so the sweep can
-    // retry — otherwise the gift would be stuck REFUNDING with no webhook
-    // ever coming.
+    // EVT-B2B-PAY-B3 (G1): payment -> REFUNDED, the gift markRefunded CAS and
+    // the single GiftRefunded outbox row commit as ONE unit. If the local tail
+    // fails, clear the reservation so the sweep can retry — otherwise the gift
+    // would be stuck REFUNDING with no webhook ever coming. The reservation and
+    // the gateway call above stay OUTSIDE this transaction.
+    const port =
+      txPort ?? getPaymentTransactionPort(paymentRepo, sharedOrderRepo, giftRepo);
     try {
-      await paymentRepo.updateWebhookResult(payment.id, {
-        razorpay_payment_id: payment.razorpay_payment_id,
-        status: "REFUNDED",
-        method: payment.method ?? "unknown",
-        webhook_event: "refund.processed",
-        webhook_raw: null,
+      const refunded = await port.runInTransaction(async ({ payments, gifts, outbox }) => {
+        await payments.updateWebhookResult(payment.id, {
+          razorpay_payment_id: razorpayPaymentId,
+          status: "REFUNDED",
+          method: payment.method ?? "unknown",
+          webhook_event: "refund.processed",
+          webhook_raw: null,
+        });
+        const marked = await gifts.markRefunded(gift.id);
+        if (marked) {
+          await outbox.enqueue(
+            createEventEnvelope("GiftRefunded", gift.id, {
+              gift_id: gift.id,
+              sender_id: gift.sender_id,
+              amount: gift.price_paid,
+            }),
+          );
+        }
+        return marked;
       });
-      const refunded = await giftRepo.markRefunded(gift.id);
-      if (refunded) {
-        await emit(
-          createEventEnvelope("GiftRefunded", gift.id, {
-            gift_id: gift.id,
-            sender_id: gift.sender_id,
-            amount: gift.price_paid,
-          }),
-        );
-      }
       return refunded ?? reserved;
     } catch {
       await giftRepo.clearRefundSubmitted(gift.id);

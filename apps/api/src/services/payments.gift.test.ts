@@ -1,10 +1,23 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
+import { onEvent } from "../lib/eventBus";
 import { MemoryPaymentRepository } from "../repositories/paymentRepository";
 import { MemoryOrderRepository } from "../repositories/orderRepository";
 import { MemoryGiftRepository } from "../repositories/giftRepository";
+import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 import { PaymentService } from "./payments";
 import { submitGiftRefund } from "./gift";
 import { razorpayService } from "./razorpay";
+
+// EVT-B2B-PAY-B3 (G1): GiftRefunded is now persisted to event_outbox in the same
+// transaction as the refund tail. The former direct emit() is gone, so the
+// in-process EventBus must never observe it.
+const directEmits: string[] = [];
+onEvent("GiftRefunded", async (event) => {
+  directEmits.push(event.event_name);
+});
+
+const giftRefundedRows = () =>
+  memoryEventOutbox._all().filter((r) => r.event_name === "GiftRefunded");
 
 describe("PaymentService gift path", () => {
   let paymentRepo: MemoryPaymentRepository;
@@ -20,6 +33,8 @@ describe("PaymentService gift path", () => {
     paymentRepo._reset();
     orderRepo._reset();
     giftRepo._reset();
+    memoryEventOutbox._reset();
+    directEmits.length = 0;
   });
 
   it("creates a gift payment and activates the gift on captured webhook", async () => {
@@ -264,6 +279,9 @@ describe("PaymentService gift path", () => {
     expect(after?.refund_requested_at).toBeNull();
     // If the expected-state CAS loses, no external refund is ever attempted.
     expect(refundSpy).not.toHaveBeenCalled();
+    // G1: a CAS loser commits zero GiftRefunded rows and never direct-emits.
+    expect(giftRefundedRows()).toHaveLength(0);
+    expect(directEmits).toHaveLength(0);
   });
 
   it("reserves the refund before calling the gateway on a legitimate ACTIVE cancel", async () => {
@@ -283,5 +301,12 @@ describe("PaymentService gift path", () => {
     expect(reserveSpy.mock.invocationCallOrder[0]!).toBeLessThan(
       refundSpy.mock.invocationCallOrder[0]!,
     );
+    // G1: resolution persists exactly one GiftRefunded outbox row, keyed by the
+    // gift, and never direct-emits.
+    const rows = giftRefundedRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.aggregate_id).toBe(giftId);
+    expect(rows[0]?.payload).toMatchObject({ gift_id: giftId, amount: 30 });
+    expect(directEmits).toHaveLength(0);
   });
 });
