@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseEventOutboxRelayIntervalMs } from "../config";
 import {
   EVENT_OUTBOX_RELAY_INTERVAL_MS,
@@ -18,8 +18,16 @@ import {
 // ticks, and stop awaits an in-flight tick. Delivery semantics (AT_LEAST_ONCE,
 // stable event_id) are unchanged and covered by eventOutboxRelay.test.ts.
 //
-// Real timers with short intervals are used so the tests exercise the actual
-// setInterval/clearInterval wiring deterministically.
+// Determinism: the lifecycle contract is a timer contract, so it is driven by
+// VITEST FAKE TIMERS with explicit advancement. There are deliberately NO
+// wall-clock sleeps, so CI CPU scheduling cannot change the outcome.
+//
+// Isolation: the relay bootstrap exposes module-global lifecycle state
+// (relayInstance / relayTimer / inFlightTick). Every test starts from a known
+// stopped relay and leaves it stopped. Deliberately-blocked (deferred) ticks are
+// tracked in `pending` and ALWAYS settled in afterEach before stop(), so no
+// unresolved promise can escape a test and afterEach never blocks on a tick the
+// test intentionally suspended.
 // ============================================
 
 const EMPTY: EventOutboxRelayTickResult = {
@@ -29,9 +37,6 @@ const EMPTY: EventOutboxRelayTickResult = {
   deadLettered: 0,
 };
 
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
-
 function stubRelay(
   tick: () => Promise<EventOutboxRelayTickResult>,
 ): EventOutboxRelay {
@@ -39,18 +44,36 @@ function stubRelay(
 }
 
 describe("startEventOutboxRelay lifecycle (EVT-RELAY-BOOTSTRAP)", () => {
+  // Resolver queue for deliberately-blocked deferred ticks. Tracked at describe
+  // scope so afterEach can settle every one of them, regardless of test outcome.
+  const pending: Array<(result: EventOutboxRelayTickResult) => void> = [];
+
+  const deferredTick = (): (() => Promise<EventOutboxRelayTickResult>) =>
+    () =>
+      new Promise<EventOutboxRelayTickResult>((resolve) => pending.push(resolve));
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    await stopEventOutboxRelay(); // guarantee a known stopped relay state
+  });
+
   afterEach(async () => {
+    // Settle any tick the test deliberately left blocked BEFORE stopping, so the
+    // stop-await can never hang on an unresolved deferred promise.
+    while (pending.length > 0) pending.pop()?.(EMPTY);
     await stopEventOutboxRelay();
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   it("R-BOOT-1 boots immediately then ticks on the interval", async () => {
     const tick = vi.fn(async () => EMPTY);
-    startEventOutboxRelay({ relay: stubRelay(tick), intervalMs: 15 });
+    startEventOutboxRelay({ relay: stubRelay(tick), intervalMs: 1_000 });
 
     // Boot tick is synchronous with start().
     expect(tick).toHaveBeenCalledTimes(1);
 
-    await sleep(70);
+    await vi.advanceTimersByTimeAsync(3_000);
     expect(tick.mock.calls.length).toBeGreaterThanOrEqual(3);
   });
 
@@ -58,66 +81,60 @@ describe("startEventOutboxRelay lifecycle (EVT-RELAY-BOOTSTRAP)", () => {
     const first = vi.fn(async () => EMPTY);
     const second = vi.fn(async () => EMPTY);
 
-    startEventOutboxRelay({ relay: stubRelay(first), intervalMs: 15 });
-    startEventOutboxRelay({ relay: stubRelay(second), intervalMs: 15 });
-
-    await sleep(50);
+    startEventOutboxRelay({ relay: stubRelay(first), intervalMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(3_000);
     expect(first.mock.calls.length).toBeGreaterThanOrEqual(3);
+
+    // A second start while running is ignored; the original relay keeps ticking.
+    startEventOutboxRelay({ relay: stubRelay(second), intervalMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(3_000);
     expect(second).not.toHaveBeenCalled();
+    expect(first.mock.calls.length).toBeGreaterThanOrEqual(6);
   });
 
   it("R-BOOT-3 suppresses overlapping ticks while one is in flight", async () => {
-    let resolveTick!: (result: EventOutboxRelayTickResult) => void;
-    const tick = vi.fn(
-      () => new Promise<EventOutboxRelayTickResult>((r) => (resolveTick = r)),
-    );
+    const tick = vi.fn(deferredTick());
+    startEventOutboxRelay({ relay: stubRelay(tick), intervalMs: 1_000 });
+    expect(tick).toHaveBeenCalledTimes(1); // boot tick is in flight
 
-    startEventOutboxRelay({ relay: stubRelay(tick), intervalMs: 10 });
+    // Many intervals elapse while the first tick is still unsettled.
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(tick).toHaveBeenCalledTimes(1);
 
-    // Several intervals elapse while the first tick is still in flight.
-    await sleep(60);
-    expect(tick).toHaveBeenCalledTimes(1);
-
-    resolveTick(EMPTY);
-    await sleep(25);
+    pending.shift()?.(EMPTY); // settle the boot tick
+    await vi.advanceTimersByTimeAsync(1_000); // next interval now invokes tick
     expect(tick).toHaveBeenCalledTimes(2);
 
-    // Settle the second (now in-flight) tick so stop() can complete.
-    resolveTick(EMPTY);
-    await sleep(5);
+    pending.shift()?.(EMPTY); // settle the second tick
+    await vi.advanceTimersByTimeAsync(0);
   });
 
   it("R-BOOT-4 stop prevents further ticks", async () => {
     const tick = vi.fn(async () => EMPTY);
-    startEventOutboxRelay({ relay: stubRelay(tick), intervalMs: 10 });
-    await sleep(30);
+    startEventOutboxRelay({ relay: stubRelay(tick), intervalMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(isEventOutboxRelayRunning()).toBe(true);
 
     await stopEventOutboxRelay();
     expect(isEventOutboxRelayRunning()).toBe(false);
     const afterStop = tick.mock.calls.length;
 
-    await sleep(40);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(tick.mock.calls.length).toBe(afterStop);
   });
 
   it("R-BOOT-5 stop awaits an in-flight tick", async () => {
-    let resolveTick!: (result: EventOutboxRelayTickResult) => void;
-    const tick = vi.fn(
-      () => new Promise<EventOutboxRelayTickResult>((r) => (resolveTick = r)),
-    );
-
-    startEventOutboxRelay({ relay: stubRelay(tick), intervalMs: 10 });
-    await sleep(15);
+    const tick = vi.fn(deferredTick());
+    startEventOutboxRelay({ relay: stubRelay(tick), intervalMs: 1_000 });
 
     let settled = false;
     const stopping = stopEventOutboxRelay().then(() => {
       settled = true;
     });
-    await sleep(20);
-    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false); // stop is blocked on the in-flight tick
 
-    resolveTick(EMPTY);
+    pending.shift()?.(EMPTY);
     await stopping;
     expect(settled).toBe(true);
   });
@@ -126,14 +143,14 @@ describe("startEventOutboxRelay lifecycle (EVT-RELAY-BOOTSTRAP)", () => {
     const tick = vi.fn(async () => EMPTY);
     const relay = stubRelay(tick);
 
-    startEventOutboxRelay({ relay, intervalMs: 10 });
-    await sleep(30);
+    startEventOutboxRelay({ relay, intervalMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(3_000);
     const afterFirst = tick.mock.calls.length;
     expect(afterFirst).toBeGreaterThanOrEqual(2);
     await stopEventOutboxRelay();
 
-    startEventOutboxRelay({ relay, intervalMs: 10 });
-    await sleep(30);
+    startEventOutboxRelay({ relay, intervalMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(3_000);
     expect(tick.mock.calls.length).toBeGreaterThan(afterFirst);
   });
 
