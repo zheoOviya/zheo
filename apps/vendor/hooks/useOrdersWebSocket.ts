@@ -2,13 +2,13 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { getWsUrl } from "@snakzap/config/ws";
-import { getAccessToken } from "@/lib/auth";
 
 const WS_URL = getWsUrl("/api/v1/ws");
 
 const BASE_RETRY_MS = 500;
 const MAX_RETRY_MS = 30_000;
 const MAX_RETRIES = 10;
+const POLICY_CLOSE_CODE = 1008;
 
 export interface OrderStatusUpdate {
   event: "ORDER_STATUS_UPDATE";
@@ -31,14 +31,7 @@ export function useOrdersWebSocket(restaurantId: string | null) {
   const connect = useCallback(() => {
     if (!restaurantId || wsRef.current) return;
 
-    // Authenticate the socket. Same-origin connections carry the httpOnly
-    // access cookie automatically; cross-origin dev connections fall back to
-    // the in-memory token as a query parameter.
-    const token = getAccessToken();
-    const sep = WS_URL.includes("?") ? "&" : "?";
-    const url = token ? `${WS_URL}${sep}token=${encodeURIComponent(token)}` : WS_URL;
-
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -63,11 +56,12 @@ export function useOrdersWebSocket(restaurantId: string | null) {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       setConnected(false);
       wsRef.current = null;
 
-      // Exponential backoff reconnect with a cap on attempts.
+      if (event?.code === POLICY_CLOSE_CODE) return;
+
       if (retryRef.current < MAX_RETRIES) {
         const delay = Math.min(
           BASE_RETRY_MS * 2 ** retryRef.current,

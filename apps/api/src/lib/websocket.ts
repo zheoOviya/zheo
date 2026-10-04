@@ -6,7 +6,7 @@ import { config } from "../config";
 import { getRedis } from "./redis";
 import { logger } from "./logger";
 import { jwtService } from "../services/jwt";
-import { sharedOrderRepo } from "../repositories/shared";
+import { sharedIdentityRepo, sharedOrderRepo } from "../repositories/shared";
 import { assertRestaurantAccess } from "../middleware/vendorAccess";
 
 // ============================================
@@ -15,8 +15,12 @@ import { assertRestaurantAccess } from "../middleware/vendorAccess";
 // Redis PubSub for cross-instance broadcasting.
 // Contract: { event: "ORDER_STATUS_UPDATE", data: { order_id, sql_status, ui_status } }
 //
-// Security: connections are authenticated (httpOnly access cookie, `?token=`
-// query, or Authorization header) and subscriptions are authorized:
+// Security: connections are authenticated (httpOnly access cookie or
+// Authorization: Bearer). Query-string `?token=` is never accepted.
+// After cryptographic access-token validation, the durable identity
+// repository is the authorization source (current role, suspension,
+// deletion). Subscriptions and protected deliveries revalidate identity
+// and resource authorization on this instance before any payload is sent.
 //   - subscribe_restaurant  -> vendor of that restaurant, or platform ops
 //   - subscribe (order)     -> the order's owner, vendor of its restaurant,
 //                              or platform ops
@@ -50,7 +54,7 @@ const VENDOR_ROLES = new Set(["VENDOR_OWNER", "VENDOR_STAFF"]);
 
 let wss: WebSocketServer | null = null;
 
-interface WsClaims {
+interface WsPrincipal {
   sub: string;
   role: string;
 }
@@ -58,10 +62,9 @@ interface WsClaims {
 interface ClientInfo {
   ws: WebSocket;
   subscriptions: Set<string>;
-  claims: WsClaims;
+  userId: string;
 }
 
-// All connected clients with their subscriptions
 const clients = new Map<string, ClientInfo>();
 
 function parseCookieHeader(header: string | undefined): Record<string, string> {
@@ -77,55 +80,50 @@ function parseCookieHeader(header: string | undefined): Record<string, string> {
   return out;
 }
 
-function authenticateConnection(req: IncomingMessage): WsClaims | null {
-  let token: string | null = null;
-
+function extractHandshakeToken(req: IncomingMessage): string | null {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
-    token = authHeader.slice(7);
+    return authHeader.slice(7);
   }
 
-  if (!token) {
-    try {
-      const url = new URL(req.url ?? "", "http://localhost");
-      token = url.searchParams.get("token");
-    } catch {
-      token = null;
-    }
-  }
+  const cookies = parseCookieHeader(req.headers.cookie);
+  return cookies[config.jwt.accessCookieName] ?? null;
+}
 
-  if (!token) {
-    const cookies = parseCookieHeader(req.headers.cookie);
-    token = cookies[config.jwt.accessCookieName] ?? null;
-  }
+async function resolveActivePrincipal(userId: string): Promise<WsPrincipal | null> {
+  const user = await sharedIdentityRepo.getById(userId).catch(() => null);
+  if (!user || user.is_suspended) return null;
+  return { sub: user.id, role: user.role };
+}
 
-  if (!token) return null;
-
-  try {
-    const claims = jwtService.verifyAccessToken(token);
-    return { sub: claims.sub, role: claims.role };
-  } catch {
-    return null;
+function revokeClient(clientId: string, info: ClientInfo): void {
+  info.subscriptions.clear();
+  clients.delete(clientId);
+  if (
+    info.ws.readyState === WebSocket.OPEN ||
+    info.ws.readyState === WebSocket.CONNECTING
+  ) {
+    info.ws.close(1008, "Unauthorized");
   }
 }
 
 async function canSubscribeOrder(
-  claims: WsClaims,
+  principal: WsPrincipal,
   orderId: string,
 ): Promise<boolean> {
-  if (PLATFORM_ROLES.has(claims.role)) return true;
+  if (PLATFORM_ROLES.has(principal.role)) return true;
 
   const order = await sharedOrderRepo.getById(orderId).catch(() => null);
   if (!order) return false;
 
-  if (claims.role === "CONSUMER") {
-    return order.user_id === claims.sub;
+  if (principal.role === "CONSUMER") {
+    return order.user_id === principal.sub;
   }
 
-  if (VENDOR_ROLES.has(claims.role)) {
+  if (VENDOR_ROLES.has(principal.role)) {
     try {
       await assertRestaurantAccess(
-        { locals: { userId: claims.sub, userRole: claims.role } },
+        { locals: { userId: principal.sub, userRole: principal.role } },
         order.restaurant_id,
       );
       return true;
@@ -138,15 +136,15 @@ async function canSubscribeOrder(
 }
 
 async function canSubscribeRestaurant(
-  claims: WsClaims,
+  principal: WsPrincipal,
   restaurantId: string,
 ): Promise<boolean> {
-  if (PLATFORM_ROLES.has(claims.role)) return true;
-  if (!VENDOR_ROLES.has(claims.role)) return false;
+  if (PLATFORM_ROLES.has(principal.role)) return true;
+  if (!VENDOR_ROLES.has(principal.role)) return false;
 
   try {
     await assertRestaurantAccess(
-      { locals: { userId: claims.sub, userRole: claims.role } },
+      { locals: { userId: principal.sub, userRole: principal.role } },
       restaurantId,
     );
     return true;
@@ -161,50 +159,85 @@ export function initWebSocketServer(httpServer: Server): WebSocketServer {
   wss = new WebSocketServer({ server: httpServer });
 
   wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
-    const claims = authenticateConnection(req);
-    if (!claims) {
+    const token = extractHandshakeToken(req);
+    if (!token) {
       logger.warn({ message: "ws_connection_rejected_unauthenticated" });
       ws.close(1008, "Unauthorized");
       return;
     }
 
-    const clientId = randomUUID();
-    const info: ClientInfo = { ws, subscriptions: new Set(), claims };
-    clients.set(clientId, info);
+    let claims: { sub: string };
+    try {
+      claims = jwtService.verifyAccessToken(token);
+    } catch {
+      logger.warn({ message: "ws_connection_rejected_unauthenticated" });
+      ws.close(1008, "Unauthorized");
+      return;
+    }
 
-    logger.info({
-      message: "ws_client_connected",
-      client_id: clientId,
-      role: claims.role,
-    });
-
-    ws.on("message", (raw) => {
-      let msg: { type?: string; order_id?: string; restaurant_id?: string };
-      try {
-        msg = JSON.parse(raw.toString());
-      } catch {
+    void (async () => {
+      const principal = await resolveActivePrincipal(claims.sub);
+      if (!principal) {
+        logger.warn({ message: "ws_connection_rejected_unauthenticated" });
+        ws.close(1008, "Unauthorized");
         return;
       }
 
-      if (msg.type === "subscribe" && msg.order_id) {
-        void canSubscribeOrder(claims, msg.order_id).then((allowed) => {
-          if (allowed) info.subscriptions.add(`order:${msg.order_id}`);
-        });
-      }
-      if (msg.type === "subscribe_restaurant" && msg.restaurant_id) {
-        void canSubscribeRestaurant(claims, msg.restaurant_id).then((allowed) => {
-          if (allowed) info.subscriptions.add(`restaurant:${msg.restaurant_id}`);
-        });
-      }
-    });
+      const clientId = randomUUID();
+      const info: ClientInfo = {
+        ws,
+        subscriptions: new Set(),
+        userId: principal.sub,
+      };
+      clients.set(clientId, info);
 
-    ws.on("close", () => {
-      clients.delete(clientId);
-      logger.info({ message: "ws_client_disconnected", client_id: clientId });
-    });
+      logger.info({
+        message: "ws_client_connected",
+        client_id: clientId,
+        role: principal.role,
+      });
+
+      ws.on("message", (raw) => {
+        let msg: { type?: string; order_id?: string; restaurant_id?: string };
+        try {
+          msg = JSON.parse(raw.toString());
+        } catch {
+          return;
+        }
+
+        if (msg.type === "subscribe" && msg.order_id) {
+          const orderId = msg.order_id;
+          void (async () => {
+            const current = await resolveActivePrincipal(info.userId);
+            if (!current) {
+              revokeClient(clientId, info);
+              return;
+            }
+            const allowed = await canSubscribeOrder(current, orderId);
+            if (allowed) info.subscriptions.add(`order:${orderId}`);
+          })();
+        }
+        if (msg.type === "subscribe_restaurant" && msg.restaurant_id) {
+          const restaurantId = msg.restaurant_id;
+          void (async () => {
+            const current = await resolveActivePrincipal(info.userId);
+            if (!current) {
+              revokeClient(clientId, info);
+              return;
+            }
+            const allowed = await canSubscribeRestaurant(current, restaurantId);
+            if (allowed) info.subscriptions.add(`restaurant:${restaurantId}`);
+          })();
+        }
+      });
+
+      ws.on("close", () => {
+        clients.delete(clientId);
+        logger.info({ message: "ws_client_disconnected", client_id: clientId });
+      });
+    })();
   });
 
-  // Subscribe to Redis PubSub for cross-instance broadcasting
   if (config.env !== "test") {
     const sub = getRedis().duplicate();
     sub.subscribe(PUBSUB_CHANNEL, () => {}).catch(() => {
@@ -213,7 +246,7 @@ export function initWebSocketServer(httpServer: Server): WebSocketServer {
     sub.on("message", (_channel, message) => {
       try {
         const update: OrderStatusUpdate = JSON.parse(String(message));
-        broadcast(update);
+        void broadcast(update);
       } catch {
         // ignore
       }
@@ -224,20 +257,37 @@ export function initWebSocketServer(httpServer: Server): WebSocketServer {
   return wss;
 }
 
-export function broadcast(update: OrderStatusUpdate): void {
+export async function broadcast(update: OrderStatusUpdate): Promise<void> {
   const payload = JSON.stringify(update);
 
-  for (const [, client] of clients) {
+  for (const [clientId, client] of [...clients]) {
     if (client.ws.readyState !== WebSocket.OPEN) continue;
 
     const matchesOrder = client.subscriptions.has(`order:${update.data.order_id}`);
     const matchesRestaurant = client.subscriptions.has(
       `restaurant:${update.data.restaurant_id}`,
     );
+    if (!matchesOrder && !matchesRestaurant) continue;
 
-    if (matchesOrder || matchesRestaurant) {
-      client.ws.send(payload);
+    const principal = await resolveActivePrincipal(client.userId);
+    if (!principal) {
+      revokeClient(clientId, client);
+      continue;
     }
+
+    let authorized = false;
+    if (matchesOrder) {
+      authorized = await canSubscribeOrder(principal, update.data.order_id);
+    }
+    if (!authorized && matchesRestaurant) {
+      authorized = await canSubscribeRestaurant(principal, update.data.restaurant_id);
+    }
+    if (!authorized) {
+      revokeClient(clientId, client);
+      continue;
+    }
+
+    client.ws.send(payload);
   }
 }
 
@@ -255,10 +305,8 @@ export async function publishStatusUpdate(
     },
   };
 
-  // Broadcast locally (single-instance)
-  broadcast(fullUpdate);
+  await broadcast(fullUpdate);
 
-  // Publish to Redis for other instances
   if (config.env !== "test") {
     try {
       const redis = getRedis();

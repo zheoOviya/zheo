@@ -20,12 +20,9 @@ const WS_URL = getWsUrl("/api/v1/ws");
 const BASE_RETRY_MS = 500;
 const MAX_RETRY_MS = 30_000;
 const MAX_RETRIES = 10;
+const POLICY_CLOSE_CODE = 1008;
 
 export function useWebSocket(orderId: string | null) {
-  // Subscribe reactively to the access token. The auth store rotates the token
-  // in memory (login / refresh / logout); a token change must recreate the
-  // socket so the authenticated handshake and the `?token=` fallback stay
-  // current. `store.ts` and `AuthGate.tsx` are intentionally untouched.
   const accessToken = useAuthStore((s) => s.accessToken);
   const [status, setStatus] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -33,10 +30,6 @@ export function useWebSocket(orderId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryRef = useRef<number>(0);
-  // Monotonic lifecycle generation. Every effect run (mount, orderId change,
-  // token change, StrictMode replay) increments this and supersedes all prior
-  // generations. A stale socket callback whose generation is no longer current
-  // is inert: it can neither mutate state nor schedule work.
   const generationRef = useRef(0);
 
   useEffect(() => {
@@ -52,8 +45,6 @@ export function useWebSocket(orderId: string | null) {
       }
     };
 
-    // Tear down the socket owned by this lifecycle and detach its callbacks so
-    // a late close/error cannot act on behalf of a superseded generation.
     const detachAndClose = () => {
       clearTimer();
       const socket = wsRef.current;
@@ -83,14 +74,10 @@ export function useWebSocket(orderId: string | null) {
     };
 
     function open() {
-      if (!isCurrent() || !orderId || accessToken === null) return;
+      if (!isCurrent() || !orderId) return;
       if (wsRef.current) return;
 
-      // Same-origin connections carry the httpOnly access cookie; cross-origin
-      // dev connections use the in-memory token as a query parameter.
-      const sep = WS_URL.includes("?") ? "&" : "?";
-      const url = `${WS_URL}${sep}token=${encodeURIComponent(accessToken)}`;
-      const ws = new WebSocket(url);
+      const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -115,10 +102,11 @@ export function useWebSocket(orderId: string | null) {
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (!isCurrent() || wsRef.current !== ws) return;
         wsRef.current = null;
         setConnected(false);
+        if (event?.code === POLICY_CLOSE_CODE) return;
         scheduleReconnect();
       };
 
@@ -128,13 +116,10 @@ export function useWebSocket(orderId: string | null) {
       };
     }
 
-    // Fresh retry budget per lifecycle, and never leak the previous
-    // lifecycle's pending reconnect.
     retryRef.current = 0;
     clearTimer();
 
-    if (!orderId || accessToken === null) {
-      // No authenticated connection path: close and do not open.
+    if (!orderId) {
       detachAndClose();
       setConnected(false);
     } else {
@@ -142,8 +127,6 @@ export function useWebSocket(orderId: string | null) {
     }
 
     return () => {
-      // Supersede this lifecycle first so any in-flight callback from its
-      // socket is already inert before teardown completes.
       generationRef.current += 1;
       detachAndClose();
       setConnected(false);

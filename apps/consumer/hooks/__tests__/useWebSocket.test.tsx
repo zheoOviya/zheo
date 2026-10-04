@@ -119,18 +119,22 @@ afterEach(() => {
 });
 
 describe("useWebSocket lifecycle + token reauth", () => {
-  it("1. null token creates no socket", () => {
+  it("1. CLIENT-4 JS accessToken absent + orderId present still attempts cookie-auth socket", () => {
     renderHook(() => useWebSocket("o1"));
-    expect(instances()).toHaveLength(0);
+    expect(instances()).toHaveLength(1);
+    expect(instances()[0]!.url).toContain("/api/v1/ws");
+    expect(instances()[0]!.url).not.toMatch(/[?&]token=/);
+    expect(instances()[0]!.url).not.toContain("token-A");
   });
 
-  it("2. valid token + orderId creates one socket and the URL carries the current token", () => {
+  it("2. CLIENT-1 valid token + orderId creates one socket and the URL has no token query", () => {
     useAuthStore.setState({ accessToken: "token-A" });
     renderHook(() => useWebSocket("o1"));
 
     expect(instances()).toHaveLength(1);
     expect(instances()[0]!.url).toContain("/api/v1/ws");
-    expect(instances()[0]!.url).toContain("token=token-A");
+    expect(instances()[0]!.url).not.toMatch(/[?&]token=/);
+    expect(instances()[0]!.url).not.toContain("token-A");
   });
 
   it("3. onopen sends exactly the subscribe frame for the order", () => {
@@ -184,7 +188,8 @@ describe("useWebSocket lifecycle + token reauth", () => {
     expect(a.closeCalls).toBe(1);
     expect(instances()).toHaveLength(2);
     const b = instances()[1]!;
-    expect(b.url).toContain("token=token-B");
+    expect(b.url).not.toMatch(/[?&]token=/);
+    expect(b.url).not.toContain("token-B");
     act(() => {
       b.onopen?.();
     });
@@ -193,7 +198,7 @@ describe("useWebSocket lifecycle + token reauth", () => {
     ]);
   });
 
-  it("7. logout (token -> null) closes the active socket and opens no replacement", () => {
+  it("7. logout (token -> null) closes the JS-token socket and opens a cookie-auth replacement", () => {
     useAuthStore.setState({ accessToken: "token-A" });
     renderHook(() => useWebSocket("o1"));
     const a = instances()[0]!;
@@ -204,7 +209,8 @@ describe("useWebSocket lifecycle + token reauth", () => {
     setToken(null);
 
     expect(a.closeCalls).toBe(1);
-    expect(instances()).toHaveLength(1);
+    expect(instances()).toHaveLength(2);
+    expect(instances()[1]!.url).not.toMatch(/[?&]token=/);
   });
 
   it("8. orderId o1 -> o2 closes the old socket and subscribes o2 on exactly one new socket", () => {
@@ -416,6 +422,16 @@ describe("useWebSocket lifecycle + token reauth", () => {
     useAuthStore.setState({ accessToken: "token-A" });
     renderHook(() => useWebSocket(null));
     expect(instances()).toHaveLength(0);
+  });
+
+  it("18. CLIENT-3 JWT literal never appears in the constructed WS URL", () => {
+    const jwt =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1MSJ9.signature";
+    useAuthStore.setState({ accessToken: jwt });
+    renderHook(() => useWebSocket("o1"));
+    expect(instances()[0]!.url).not.toContain(jwt);
+    expect(instances()[0]!.url).not.toContain(encodeURIComponent(jwt));
+    expect(instances()[0]!.url).not.toMatch(/[?&]token=/);
   });
 
   it("17. a malformed message is ignored without throwing", () => {
