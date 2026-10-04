@@ -93,15 +93,18 @@ describe("Vendor sign-in / sign-up", () => {
       expect(res.body.data.phoneMasked).toMatch(/\*\*\*\*/);
     });
 
-    it("returns 404 for an unknown phone", async () => {
+    it("returns a generic send-otp success for an unknown phone (ENUM-VENDOR)", async () => {
       const res = await request(app)
         .post("/api/v1/auth/vendor/send-otp")
         .send({ phone: PHONE })
-        .expect(404);
-      expect(res.body.error.code).toBe("VENDOR_NOT_FOUND");
+        .expect(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.phoneMasked).toMatch(/\*\*\*\*/);
+      expect(res.body.data.expiresInSeconds).toEqual(expect.any(Number));
+      expect(await sharedIdentityRepo.getByPhone(PHONE)).toBeNull();
     });
 
-    it("returns 404 for a consumer phone", async () => {
+    it("returns a generic send-otp success for a consumer phone (ENUM-VENDOR)", async () => {
       sharedIdentityRepo._seed({
         id: "u-consumer-00000000000002",
         phone: PHONE,
@@ -113,8 +116,11 @@ describe("Vendor sign-in / sign-up", () => {
       const res = await request(app)
         .post("/api/v1/auth/vendor/send-otp")
         .send({ phone: PHONE })
-        .expect(404);
-      expect(res.body.error.code).toBe("VENDOR_NOT_FOUND");
+        .expect(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.error).toBeNull();
+      const stillConsumer = await sharedIdentityRepo.getByPhone(PHONE);
+      expect(stillConsumer?.role).toBe("CONSUMER");
     });
 
     it("rejects a suspended vendor", async () => {

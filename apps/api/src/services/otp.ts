@@ -11,6 +11,28 @@ import { AppError } from "../middleware/envelope";
 // ============================================
 
 const OTP_PREFIX = "otp:";
+const OTP_ATTEMPTS_PREFIX = "otp:attempts:";
+const OTP_MAX_VERIFY_ATTEMPTS = 5;
+
+function otpKey(phone: string): string {
+  return `${OTP_PREFIX}${phone}`;
+}
+
+function attemptsKey(phone: string): string {
+  return `${OTP_ATTEMPTS_PREFIX}${phone}`;
+}
+
+function otpTtlMs(): number {
+  return config.msg91.otpTtlSeconds * 1000;
+}
+
+function redisUnavailable(): never {
+  throw new AppError(
+    "SERVICE_UNAVAILABLE",
+    "OTP service temporarily unavailable",
+    503,
+  );
+}
 
 // The dev/preview auth bypass (on-screen demo OTP + any-6-digit verify) is
 // ONLY active when explicitly opted in via ALLOW_DEV_AUTH_BYPASS=true, or in
@@ -87,11 +109,25 @@ export async function sendSms(
   }
 }
 
+export function opaqueOtpReceipt(phone = "+910000000000"): SendOtpResult {
+  return {
+    sent: true,
+    phoneMasked: maskPhone(phone),
+    expiresInSeconds: config.msg91.otpTtlSeconds,
+    ...(isDevBypassActive() ? { demoOtp: randomInt(100000, 1000000).toString() } : {}),
+  };
+}
+
 export async function sendOtp(phone: string): Promise<SendOtpResult> {
   const otp = randomInt(100000, 1000000).toString();
   const redis = getRedis();
 
-  await redis.set(`${OTP_PREFIX}${phone}`, otp, "PX", config.msg91.otpTtlSeconds * 1000);
+  try {
+    await redis.set(otpKey(phone), otp, "PX", otpTtlMs());
+    await redis.del(attemptsKey(phone));
+  } catch {
+    redisUnavailable();
+  }
   const sent = await sendSms(phone, otp);
 
   return {
@@ -111,7 +147,12 @@ export async function verifyOtp(
   otp: string,
 ): Promise<{ valid: boolean; userExists: boolean }> {
   const redis = getRedis();
-  const stored = await redis.get(`${OTP_PREFIX}${phone}`);
+  let stored: string | null;
+  try {
+    stored = await redis.get(otpKey(phone));
+  } catch {
+    redisUnavailable();
+  }
 
   // Development/preview builds: the generated code is shown automatically on
   // the login page, and ANY well-formed 6-digit code completes login. This
@@ -122,7 +163,13 @@ export async function verifyOtp(
     if (!/^\d{6}$/.test(otp)) {
       throw new AppError("OTP_INVALID", "Invalid OTP", 400);
     }
-    if (stored) await redis.del(`${OTP_PREFIX}${phone}`);
+    if (stored) {
+      try {
+        await redis.del(otpKey(phone), attemptsKey(phone));
+      } catch {
+        redisUnavailable();
+      }
+    }
     return { valid: true, userExists: false };
   }
 
@@ -137,9 +184,27 @@ export async function verifyOtp(
     timingSafeEqual(Buffer.from(stored), Buffer.from(otp));
 
   if (!matches) {
+    let attempts: number;
+    try {
+      attempts = await redis.incr(attemptsKey(phone));
+      await redis.pexpire(attemptsKey(phone), otpTtlMs());
+    } catch {
+      redisUnavailable();
+    }
+    if (attempts >= OTP_MAX_VERIFY_ATTEMPTS) {
+      try {
+        await redis.del(otpKey(phone));
+      } catch {
+        redisUnavailable();
+      }
+    }
     throw new AppError("OTP_INVALID", "Invalid OTP", 400);
   }
 
-  await redis.del(`${OTP_PREFIX}${phone}`);
+  try {
+    await redis.del(otpKey(phone), attemptsKey(phone));
+  } catch {
+    redisUnavailable();
+  }
   return { valid: true, userExists: false };
 }

@@ -87,6 +87,10 @@ const h = vi.hoisted(() => {
       return 0;
     }
 
+    async incr(_key: string): Promise<number> {
+      return 1;
+    }
+
     async zadd(_key: string, _score: number, _member: string): Promise<number> {
       return 0;
     }

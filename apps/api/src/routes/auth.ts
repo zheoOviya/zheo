@@ -11,7 +11,7 @@ import { requireRole } from "../middleware/requireRoles";
 import { sharedAuditRepo, sharedIdentityRepo } from "../repositories/shared";
 import type { IdentityUser } from "../repositories/identityRepository";
 import { jwtService } from "../services/jwt";
-import { sendOtp, verifyOtp, maskPhone, normalizePhone } from "../services/otp";
+import { sendOtp, verifyOtp, maskPhone, normalizePhone, opaqueOtpReceipt } from "../services/otp";
 import {
   buildOtpauthUrl,
   generateTotpSecret,
@@ -387,7 +387,14 @@ authRouter.post(
     if (!body.success) {
       throw new AppError("VALIDATION_ERROR", "Invalid request body", 400, body.error.flatten());
     }
-    const user = await resolveOperatorByEmail(body.data.email);
+    const user = await sharedIdentityRepo.getByEmail(body.data.email);
+    if (!user || !OPERATOR_ROLES.includes(user.role)) {
+      ok(res, opaqueOtpReceipt());
+      return;
+    }
+    if (user.is_suspended) {
+      throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended", 403);
+    }
     const result = await sendOtp(user.phone);
     logger.info({
       message: "admin_otp_sent",
@@ -510,7 +517,14 @@ authRouter.post(
     if (!body.success) {
       throw new AppError("VALIDATION_ERROR", "Invalid request body", 400, body.error.flatten());
     }
-    const user = await resolveVendorUser(body.data.phone);
+    const user = await sharedIdentityRepo.getByPhone(body.data.phone);
+    if (!user || !VENDOR_ROLES.includes(user.role)) {
+      ok(res, opaqueOtpReceipt(body.data.phone));
+      return;
+    }
+    if (user.is_suspended) {
+      throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended", 403);
+    }
     const result = await sendOtp(user.phone);
     logger.info({
       message: "vendor_otp_sent",

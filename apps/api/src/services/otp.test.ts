@@ -147,3 +147,149 @@ describe("OTP service", () => {
     }
   });
 });
+
+const G5_PHONE = "+919876543210";
+const G5_OTP = "123456";
+const G5_WRONG = "000000";
+const G5_ATTEMPTS_KEY = `otp:attempts:${G5_PHONE}`;
+const G5_OTP_KEY = `otp:${G5_PHONE}`;
+const G5_MAX_ATTEMPTS = 5;
+
+class FailingGetRedis extends MemoryRedis {
+  override async get(_key: string): Promise<string | null> {
+    throw new Error("redis_down");
+  }
+}
+
+class FailingAttemptsRedis extends MemoryRedis {
+  override async incr(key: string): Promise<number> {
+    if (key.startsWith("otp:attempts:")) {
+      throw new Error("redis_attempts_down");
+    }
+    return super.incr(key);
+  }
+}
+
+async function withProductionRedis<T>(
+  redis: MemoryRedis,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prevNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  setRedisForTests(redis);
+  try {
+    return await fn();
+  } finally {
+    process.env.NODE_ENV = prevNodeEnv;
+  }
+}
+
+async function seedProductionOtp(redis: MemoryRedis, otp = G5_OTP): Promise<void> {
+  await redis.set(G5_OTP_KEY, otp, "PX", 300_000);
+}
+
+async function wrongVerifies(times: number): Promise<void> {
+  for (let i = 0; i < times; i++) {
+    await expect(verifyOtp(G5_PHONE, G5_WRONG)).rejects.toMatchObject({
+      code: expect.stringMatching(/^OTP_/),
+    });
+  }
+}
+
+describe("AUTH-G5 OTP lockout", () => {
+  beforeEach(() => {
+    resetRedisForTests();
+  });
+
+  it("OTP-1: five wrong production verifies invalidate the OTP at threshold", async () => {
+    const mem = new MemoryRedis();
+    await withProductionRedis(mem, async () => {
+      await seedProductionOtp(mem);
+      await wrongVerifies(G5_MAX_ATTEMPTS);
+      expect(await mem.get(G5_OTP_KEY)).toBeNull();
+    });
+  });
+
+  it("OTP-2: the correct code MUST NOT authenticate after the lockout threshold", async () => {
+    const mem = new MemoryRedis();
+    await withProductionRedis(mem, async () => {
+      await seedProductionOtp(mem);
+      await wrongVerifies(G5_MAX_ATTEMPTS);
+      await expect(verifyOtp(G5_PHONE, G5_OTP)).rejects.toMatchObject({
+        code: expect.stringMatching(/^OTP_/),
+      });
+    });
+  });
+
+  it("OTP-3: sendOtp resets the attempt counter so a new OTP can verify", async () => {
+    const mem = new MemoryRedis();
+    await withProductionRedis(mem, async () => {
+      await seedProductionOtp(mem);
+      await wrongVerifies(G5_MAX_ATTEMPTS);
+      expect(await mem.get(G5_ATTEMPTS_KEY)).toBe(String(G5_MAX_ATTEMPTS));
+      const sent = await sendOtp(G5_PHONE);
+      expect(sent.sent).toBe(true);
+      expect(await mem.get(G5_ATTEMPTS_KEY)).toBeNull();
+      const stored = await mem.get(G5_OTP_KEY);
+      expect(stored).toMatch(/^[0-9]{6}$/);
+      const result = await verifyOtp(G5_PHONE, stored as string);
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  it("OTP-4: successful verify consumes the OTP and clears the attempt counter", async () => {
+    const mem = new MemoryRedis();
+    await withProductionRedis(mem, async () => {
+      await seedProductionOtp(mem);
+      await wrongVerifies(1);
+      expect(await mem.get(G5_ATTEMPTS_KEY)).toBe("1");
+      const result = await verifyOtp(G5_PHONE, G5_OTP);
+      expect(result.valid).toBe(true);
+      expect(await mem.get(G5_OTP_KEY)).toBeNull();
+      expect(await mem.get(G5_ATTEMPTS_KEY)).toBeNull();
+    });
+  });
+
+  it("OTP-5: expired or missing OTP still fails as OTP_EXPIRED", async () => {
+    const mem = new MemoryRedis();
+    await withProductionRedis(mem, async () => {
+      await expect(verifyOtp("+919999999999", G5_OTP)).rejects.toMatchObject({
+        code: "OTP_EXPIRED",
+      });
+    });
+  });
+
+  it("OTP-6: failed attempts are stored in Redis at otp:attempts:<canonical-phone>", async () => {
+    const mem = new MemoryRedis();
+    await withProductionRedis(mem, async () => {
+      await seedProductionOtp(mem);
+      await wrongVerifies(3);
+      const storedAttempts = await mem.get(G5_ATTEMPTS_KEY);
+      expect(storedAttempts).toBe("3");
+      await wrongVerifies(1);
+      expect(await mem.get(G5_ATTEMPTS_KEY)).toBe("4");
+    });
+  });
+
+  it("OTP-7: Redis failure on verify is fail-closed and does not authenticate", async () => {
+    const mem = new FailingGetRedis();
+    await withProductionRedis(mem, async () => {
+      await expect(verifyOtp(G5_PHONE, G5_OTP)).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        status: 503,
+      });
+    });
+  });
+
+  it("OTP-8: Redis failure while recording a failed attempt is fail-closed", async () => {
+    const mem = new FailingAttemptsRedis();
+    await withProductionRedis(mem, async () => {
+      await seedProductionOtp(mem);
+      await expect(verifyOtp(G5_PHONE, G5_WRONG)).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        status: 503,
+      });
+      expect(await mem.get(G5_OTP_KEY)).toBe(G5_OTP);
+    });
+  });
+});

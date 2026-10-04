@@ -497,7 +497,7 @@ describe("Admin email login (email -> mobile OTP)", () => {
     expect(res.body.data.demoOtp).toMatch(/^[0-9]{6}$/);
   });
 
-  it("rejects unknown or non-operator emails", async () => {
+  it("returns a generic send-otp success for unknown or non-operator emails (ENUM-ADMIN)", async () => {
     seedOperators();
     sharedIdentityRepo._seed({
       id: "u-consumer-email-00000001",
@@ -512,9 +512,14 @@ describe("Admin email login (email -> mobile OTP)", () => {
       const res = await request(app)
         .post("/api/v1/auth/admin/send-otp")
         .send({ email })
-        .expect(403);
-      expect(res.body.error.code).toBe("FORBIDDEN");
+        .expect(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.error).toBeNull();
+      expect(res.body.data.phoneMasked).toMatch(/\*\*\*\*/);
     }
+    expect(await sharedIdentityRepo.getByEmail("nobody@snakzap.dev")).toBeNull();
+    const buyer = await sharedIdentityRepo.getByEmail("buyer@snakzap.dev");
+    expect(buyer?.role).toBe("CONSUMER");
   });
 
   it("verify-otp completes admin login with the code from the linked mobile", async () => {

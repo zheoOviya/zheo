@@ -23,6 +23,7 @@ export interface RedisLike {
     ttl?: number,
   ): Promise<unknown>;
   del(...keys: string[]): Promise<number>;
+  incr(key: string): Promise<number>;
   zadd(key: string, score: number, member: string): Promise<number>;
   zremrangebyscore(key: string, min: number, max: number): Promise<number>;
   zcard(key: string): Promise<number>;
@@ -74,6 +75,16 @@ export class MemoryRedis implements RedisLike {
       if (this.zsets.delete(k)) n++;
     }
     return n;
+  }
+
+  async incr(key: string): Promise<number> {
+    const current = this.store.get(key);
+    const next = (current === undefined ? 0 : Number.parseInt(current, 10)) + 1;
+    if (!Number.isFinite(next)) {
+      throw new Error("ERR value is not an integer or out of range");
+    }
+    this.store.set(key, String(next));
+    return next;
   }
 
   async zadd(key: string, score: number, member: string): Promise<number> {
@@ -271,6 +282,11 @@ class ReadinessGatedRedis implements RedisLike {
   async del(...keys: string[]): Promise<number> {
     await this.ready();
     return this.raw.del(...keys);
+  }
+
+  async incr(key: string): Promise<number> {
+    await this.ready();
+    return this.raw.incr(key);
   }
 
   async zadd(key: string, score: number, member: string): Promise<number> {

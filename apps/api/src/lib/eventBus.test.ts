@@ -72,6 +72,10 @@ class FakeSubscriber implements RedisLike {
     return 0;
   }
 
+  async incr(_key: string): Promise<number> {
+    return 1;
+  }
+
   async zadd(_key: string, _score: number, _member: string): Promise<number> {
     return 0;
   }
@@ -162,6 +166,10 @@ class FakeCommand implements RedisLike {
 
   async del(..._keys: string[]): Promise<number> {
     return 0;
+  }
+
+  async incr(_key: string): Promise<number> {
+    return 1;
   }
 
   async zadd(_key: string, _score: number, _member: string): Promise<number> {
