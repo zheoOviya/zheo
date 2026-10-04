@@ -86,6 +86,10 @@ export interface AcknowledgeServiceRequestInput {
   readonly request_id: string;
   readonly caller_user_id: string;
   readonly correlation_id: string;
+  // AUTH-G1 IDOR. When true the caller must own the locked session; the
+  // consumer route sets it. Vendor/staff routes are authorized at the route
+  // boundary and omit it, so the frozen lifecycle stays actor-agnostic.
+  readonly require_owner?: boolean;
 }
 
 export interface AcknowledgeServiceRequestResult {
@@ -102,6 +106,8 @@ export interface CompleteServiceRequestInput {
   readonly request_id: string;
   readonly caller_user_id: string;
   readonly correlation_id: string;
+  // AUTH-G1 IDOR. See AcknowledgeServiceRequestInput.require_owner.
+  readonly require_owner?: boolean;
 }
 
 export interface CompleteServiceRequestResult {
@@ -118,6 +124,8 @@ export interface CancelServiceRequestInput {
   readonly request_id: string;
   readonly caller_user_id: string;
   readonly correlation_id: string;
+  // AUTH-G1 IDOR. See AcknowledgeServiceRequestInput.require_owner.
+  readonly require_owner?: boolean;
 }
 
 export interface CancelServiceRequestResult {
@@ -758,6 +766,12 @@ export class DiningSessionService {
           500,
         );
       }
+      // AUTH-G1 IDOR: enforce ownership on the LOCKED session before the
+      // ACKNOWLEDGED idempotent return, terminal 409, CAS, audit write or
+      // event enqueue. Foreign request -> SESSION_NOT_FOUND/404.
+      if (input.require_owner === true && session.owner_user_id !== input.caller_user_id) {
+        throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+      }
       // 4. Classification from the LOCKED status only:
       //    ACKNOWLEDGED -> idempotent retry (pre-CAS exit, no mutation, no
       //    audit rewrite); COMPLETED/CANCELLED -> terminal, 409. The only
@@ -872,6 +886,12 @@ export class DiningSessionService {
           "Service request does not belong to the locked session",
           500,
         );
+      }
+      // AUTH-G1 IDOR: enforce ownership on the LOCKED session before the
+      // COMPLETED idempotent return, terminal 409, CAS, audit write or event
+      // enqueue. Foreign request -> SESSION_NOT_FOUND/404.
+      if (input.require_owner === true && session.owner_user_id !== input.caller_user_id) {
+        throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
       }
       // 4. Classification from the LOCKED status only:
       //    COMPLETED -> idempotent retry (pre-CAS exit, no mutation, no audit
@@ -992,6 +1012,12 @@ export class DiningSessionService {
           "Service request does not belong to the locked session",
           500,
         );
+      }
+      // AUTH-G1 IDOR: enforce ownership on the LOCKED session before the
+      // BRING_BILL boundary, idempotent return, terminal 409, CAS, audit write
+      // or event enqueue. Foreign request -> SESSION_NOT_FOUND/404.
+      if (input.require_owner === true && session.owner_user_id !== input.caller_user_id) {
+        throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
       }
       // 4. BRING_BILL special boundary wins over every lifecycle state,
       //    including an already-CANCELLED BRING_BILL. The billing flow owns

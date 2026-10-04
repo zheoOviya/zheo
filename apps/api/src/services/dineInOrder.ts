@@ -111,6 +111,10 @@ export interface AdvanceOrderInput {
   readonly caller_user_id: string;
   readonly correlation_id: string;
   readonly target_status: DineInOrderAdvanceTarget;
+  // AUTH-G1 IDOR. When true the caller must own the locked session; the
+  // consumer route sets it. Vendor/staff routes are authorized at the route
+  // boundary and omit it, so the frozen transition stays actor-agnostic.
+  readonly require_owner?: boolean;
 }
 
 export interface AdvanceOrderResult {
@@ -127,6 +131,8 @@ export interface CancelOrderInput {
   readonly order_id: string;
   readonly caller_user_id: string;
   readonly correlation_id: string;
+  // AUTH-G1 IDOR. See AdvanceOrderInput.require_owner.
+  readonly require_owner?: boolean;
 }
 
 export interface CancelOrderResult {
@@ -315,6 +321,13 @@ export class DineInOrderService {
           500,
         );
       }
+      // AUTH-G1 IDOR: ownership is enforced on the LOCKED session, before any
+      // session-state or transition classification, idempotent return, CAS,
+      // audit write or event enqueue. Existence-hiding: a foreign order is
+      // indistinguishable from a missing session (same SESSION_NOT_FOUND/404).
+      if (input.require_owner === true && session.owner_user_id !== input.caller_user_id) {
+        throw new AppError("SESSION_NOT_FOUND", "Dine-in session not found", 404);
+      }
       // D6.2 session-state capability boundary. Non-monetary order
       // advancement may continue after bill freeze, so OPEN/ACTIVE/
       // BILL_REQUESTED/PAYMENT_PENDING all pass through to D6.3 evaluation.
@@ -449,6 +462,12 @@ export class DineInOrderService {
           "order does not belong to the locked session",
           500,
         );
+      }
+      // AUTH-G1 IDOR: enforce ownership on the LOCKED session before the
+      // cancellation precedence classification, idempotent return, CAS,
+      // audit write or event enqueue. Foreign order -> SESSION_NOT_FOUND/404.
+      if (input.require_owner === true && session.owner_user_id !== input.caller_user_id) {
+        throw new AppError("SESSION_NOT_FOUND", "Dine-in session not found", 404);
       }
       // D7.2 cancellation precedence classification. The LOCKED state is the
       // ONLY authority — discovery.status is never consulted. Pure

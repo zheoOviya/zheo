@@ -772,6 +772,42 @@ describe("Dine-In order routes (H3)", () => {
     expect(res.body.data.order.cancelled_at).not.toBe("2099-01-01T00:00:00.000Z");
   });
 
+  // AUTH-G1 IDOR: a foreign user cannot advance/cancel the owner's order.
+  // The consumer endpoints enforce ownership on the locked session and return
+  // an existence-hiding SESSION_NOT_FOUND/404 with zero mutation.
+  it("AUTH-G1 IDOR: foreign user cannot advance/cancel the owner's order", async () => {
+    seedOpenSession();
+    const orderId = await placeOrderOk(app, {
+      session_id: SESSION_ID,
+      items: [{ menu_item_id: MENU_ITEM_1, quantity: 1 }],
+    });
+
+    await request(app)
+      .post(`/api/v1/dine-in/orders/${orderId}/advance`)
+      .set(authHeaders(OTHER_USER_ID))
+      .send({ target_status: "PREPARING" })
+      .expect(404)
+      .expect((res) => {
+        expect(res.body.error.code).toBe("SESSION_NOT_FOUND");
+      });
+
+    await request(app)
+      .post(`/api/v1/dine-in/orders/${orderId}/cancel`)
+      .set(authHeaders(OTHER_USER_ID))
+      .expect(404)
+      .expect((res) => {
+        expect(res.body.error.code).toBe("SESSION_NOT_FOUND");
+      });
+
+    // Zero mutation leaked: the order is still PLACED and the owner can advance.
+    const ownerAdvance = await request(app)
+      .post(`/api/v1/dine-in/orders/${orderId}/advance`)
+      .set(authHeaders())
+      .send({ target_status: "PREPARING" })
+      .expect(200);
+    expect(ownerAdvance.body.data.order.status).toBe("PREPARING");
+  });
+
   it("P1. closed session placeOrder -> SESSION_CLOSED_FOR_ORDERING 409", async () => {
     seedOpenSession({ status: "CLOSED" });
     const res = await request(app)
@@ -1132,6 +1168,33 @@ describe("Dine-In service-request routes (H4)", () => {
       .expect(409);
 
     expect(res.body.error.code).toBe("BRING_BILL_MANAGED_BY_BILL_FLOW");
+  });
+
+  // AUTH-G1 IDOR: a foreign user cannot acknowledge/complete/cancel the owner's
+  // service request. All three consumer endpoints enforce ownership on the
+  // locked session before classification, returning SESSION_NOT_FOUND/404.
+  it("AUTH-G1 IDOR: foreign user cannot mutate the owner's service request", async () => {
+    seedOpenSession();
+    seedServiceRequest();
+
+    for (const action of ["acknowledge", "complete", "cancel"] as const) {
+      await request(app)
+        .post(`/api/v1/dine-in/service-requests/${REQUEST_ID}/${action}`)
+        .set(authHeaders(OTHER_USER_ID))
+        .send()
+        .expect(404)
+        .expect((res) => {
+          expect(res.body.error.code).toBe("SESSION_NOT_FOUND");
+        });
+    }
+
+    // Zero mutation leaked: still PENDING, owner can acknowledge.
+    const ownerAck = await request(app)
+      .post(`/api/v1/dine-in/service-requests/${REQUEST_ID}/acknowledge`)
+      .set(authHeaders())
+      .send()
+      .expect(200);
+    expect(ownerAck.body.data.request.status).toBe("ACKNOWLEDGED");
   });
 
   it("P. service AppErrors pass through unchanged (404/409)", async () => {

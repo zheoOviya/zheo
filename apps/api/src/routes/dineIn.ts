@@ -284,6 +284,9 @@ dineInRouter.post(
       caller_user_id: userId,
       correlation_id: res.locals.correlationId,
       target_status: body.data.target_status,
+      // AUTH-G1 IDOR: the consumer endpoint must act only on the caller's own
+      // session; the service enforces this on the locked session.
+      require_owner: true,
     });
 
     ok(res, { order: outcome.value.order });
@@ -315,6 +318,8 @@ dineInRouter.post(
       order_id: orderId.data,
       caller_user_id: userId,
       correlation_id: res.locals.correlationId,
+      // AUTH-G1 IDOR: see advance.
+      require_owner: true,
     });
 
     ok(res, { order: outcome.value.order });
@@ -390,6 +395,8 @@ dineInRouter.post(
       request_id: requestId.data,
       caller_user_id: userId,
       correlation_id: res.locals.correlationId,
+      // AUTH-G1 IDOR: consumer endpoint acts only on the caller's own session.
+      require_owner: true,
     });
 
     ok(res, { request: outcome.value.request });
@@ -420,6 +427,8 @@ dineInRouter.post(
       request_id: requestId.data,
       caller_user_id: userId,
       correlation_id: res.locals.correlationId,
+      // AUTH-G1 IDOR: consumer endpoint acts only on the caller's own session.
+      require_owner: true,
     });
 
     ok(res, { request: outcome.value.request });
@@ -452,6 +461,8 @@ dineInRouter.post(
       request_id: requestId.data,
       caller_user_id: userId,
       correlation_id: res.locals.correlationId,
+      // AUTH-G1 IDOR: consumer endpoint acts only on the caller's own session.
+      require_owner: true,
     });
 
     ok(res, { request: outcome.value.request });

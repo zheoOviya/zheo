@@ -230,6 +230,23 @@ describe("Ordering routes", () => {
     expect(res.body.error.code).toBe("ORDER_NOT_FOUND");
   });
 
+  // AUTH-G1 IDOR: a caller must not clone an order owned by a different user.
+  // Existence-hiding: identical ORDER_NOT_FOUND/404 as a missing order, and
+  // zero mutation (no clone is created for the caller).
+  it("POST /orders/reorder rejects an order owned by another user", async () => {
+    const OTHER_USER_ID = "u00000000-0000-4000-8000-0000000000aa";
+    const FOREIGN_ORDER_ID = "00000000-0000-4000-8000-0000000000aa";
+    seedOrder(FOREIGN_ORDER_ID, OTHER_USER_ID, REST_ID);
+
+    const res = await request(app)
+      .post("/api/v1/orders/reorder")
+      .set(authHeaders())
+      .send({ old_order_id: FOREIGN_ORDER_ID })
+      .expect(404);
+    expect(res.body.error.code).toBe("ORDER_NOT_FOUND");
+    expect(await orderRepo.getByUser(TEST_USER_ID)).toHaveLength(0);
+  });
+
   it("enqueues a durable OrderCreated event when order is placed", async () => {
     const res = await request(app)
       .post("/api/v1/orders")

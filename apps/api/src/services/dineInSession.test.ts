@@ -4258,3 +4258,55 @@ describe("DiningSessionService.resolveTable (UI1-A-R3)", () => {
     });
   });
 });
+
+// ------------------------------------------------------------
+// AUTH-G1 IDOR: with require_owner set (the consumer route), a caller that
+// does not own the locked session receives an existence-hiding 404 before any
+// lifecycle classification / idempotent return / CAS / audit write / event.
+// ------------------------------------------------------------
+describe("DiningSessionService AUTH-G1 IDOR ownership (require_owner)", () => {
+  it("acknowledgeServiceRequest: foreign session -> SESSION_NOT_FOUND, no CAS", async () => {
+    const { port, mocks } = makeAsrPort({
+      session: asrSession({ owner_user_id: "other-user" }),
+    });
+    const service = new DiningSessionService(port);
+    await expect(
+      service.acknowledgeServiceRequest({
+        ...asrInput(),
+        caller_user_id: "user-1",
+        require_owner: true,
+      }),
+    ).rejects.toMatchObject({ code: "SESSION_NOT_FOUND", status: 404 });
+    expect(mocks.acknowledge).not.toHaveBeenCalled();
+  });
+
+  it("completeServiceRequest: foreign session -> SESSION_NOT_FOUND, no CAS", async () => {
+    const { port, mocks } = makeCmrPort({
+      session: cmrSession({ owner_user_id: "other-user" }),
+    });
+    const service = new DiningSessionService(port);
+    await expect(
+      service.completeServiceRequest({
+        ...cmrInput(),
+        caller_user_id: "user-1",
+        require_owner: true,
+      }),
+    ).rejects.toMatchObject({ code: "SESSION_NOT_FOUND", status: 404 });
+    expect(mocks.complete).not.toHaveBeenCalled();
+  });
+
+  it("cancelServiceRequest: foreign session -> SESSION_NOT_FOUND, no CAS", async () => {
+    const { port, mocks } = makeCnrPort({
+      session: cnrSession({ owner_user_id: "other-user" }),
+    });
+    const service = new DiningSessionService(port);
+    await expect(
+      service.cancelServiceRequest({
+        ...cnrInput(),
+        caller_user_id: "user-1",
+        require_owner: true,
+      }),
+    ).rejects.toMatchObject({ code: "SESSION_NOT_FOUND", status: 404 });
+    expect(mocks.cancel).not.toHaveBeenCalled();
+  });
+});

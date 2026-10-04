@@ -483,6 +483,12 @@ export class OrderingService {
     if (!oldOrder) {
       throw new AppError("ORDER_NOT_FOUND", "Original order not found", 404);
     }
+    // AUTH-G1 IDOR: a reorder may only copy an order owned by the caller.
+    // Existence-hiding: a foreign order is indistinguishable from a missing
+    // one (same ORDER_NOT_FOUND/404), and no item copy or placeOrder runs.
+    if (oldOrder.user_id !== userId) {
+      throw new AppError("ORDER_NOT_FOUND", "Original order not found", 404);
+    }
 
     const items = oldOrder.items.map((item) => ({
       menu_item_id: item.menu_item_id,

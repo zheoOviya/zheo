@@ -312,6 +312,25 @@ describe("DineInOrderService (D2.5D1 skeleton)", () => {
     expect(outcome.kind).toBe("NEW_MUTATION");
     expect(fake.runInTransaction).toHaveBeenCalledTimes(1);
   });
+
+  // AUTH-G1 IDOR: with require_owner set (the consumer route), a caller that
+  // does not own the locked session gets an existence-hiding 404 before any
+  // transition classification/CAS, and no order transition is attempted.
+  it("AUTH-G1 IDOR: require_owner rejects a foreign session for advance/cancel", async () => {
+    const fake = makeFakeTxPort(makeSession("OPEN", { owner_user_id: "other-user" }));
+    fake.orderGetById.mockResolvedValue(makeOrder());
+    fake.orderLockById.mockResolvedValue(makeOrder());
+    const svc = new DineInOrderService(fake.port, makeFakeCatalog().catalog);
+
+    await expect(
+      svc.advanceOrder({ ...baseAdvanceInput, require_owner: true }),
+    ).rejects.toMatchObject({ code: "SESSION_NOT_FOUND", status: 404 });
+    await expect(
+      svc.cancelOrder({ ...baseCancelInput, require_owner: true }),
+    ).rejects.toMatchObject({ code: "SESSION_NOT_FOUND", status: 404 });
+
+    expect(fake.orderTransition).not.toHaveBeenCalled();
+  });
 });
 
 describe("DineInOrderService.placeOrder (D2.5D2 validation/read shell)", () => {
