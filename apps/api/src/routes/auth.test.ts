@@ -79,6 +79,7 @@ describe("Auth routes (integration)", () => {
 
     const refreshRes = await agent
       .post("/api/v1/auth/refresh")
+      .set("Origin", "http://localhost:3000")
       .send({ device_fingerprint: FP_A })
       .expect(200);
 
@@ -97,6 +98,7 @@ describe("Auth routes (integration)", () => {
     // Refresh again with the rotated cookie works
     const refresh2 = await agent
       .post("/api/v1/auth/refresh")
+      .set("Origin", "http://localhost:3000")
       .send({ device_fingerprint: FP_A })
       .expect(200);
     expect(refresh2.body.data.access_token).toBeTruthy();
@@ -117,6 +119,7 @@ describe("Auth routes (integration)", () => {
 
     const logoutRes = await agent
       .post("/api/v1/auth/logout")
+      .set("Origin", "http://localhost:3000")
       .expect(200);
     expect(logoutRes.body.success).toBe(true);
     expect(logoutRes.body.data.logged_out).toBe(true);
@@ -160,6 +163,7 @@ describe("Auth routes (integration)", () => {
 
     const res = await agent
       .post("/api/v1/auth/refresh")
+      .set("Origin", "http://localhost:3000")
       .send({ device_fingerprint: FP_B })
       .expect(401);
     expect(res.body.error.code).toBe("DEVICE_MISMATCH");

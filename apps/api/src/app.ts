@@ -3,9 +3,10 @@ import compression from "compression";
 import cors from "cors";
 import express, { type Express } from "express";
 import helmet from "helmet";
-import { config } from "./config";
+import { config, exactCorsOrigins } from "./config";
 import { correlationIdMiddleware } from "./lib/correlation";
 import { logger } from "./lib/logger";
+import { csrfOriginGate } from "./middleware/csrf";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { rateLimiter } from "./middleware/rateLimiter";
 import { authRouter } from "./routes/auth";
@@ -66,35 +67,12 @@ export function createApp(): Express {
   app.use(helmet());
   app.use(
     cors({
-      // Exact-match allowlist plus wildcard dev/preview hosts so the hosted
-      // preview origins (e.g. *.monkeycode-ai.live) can call the API directly.
       origin: (origin, cb) => {
         if (!origin) {
           cb(null, true);
           return;
         }
-        const exact = config.cors.origins
-          .split(",")
-          .map((o) => o.trim())
-          .filter(Boolean);
-        if (exact.includes(origin)) {
-          cb(null, true);
-          return;
-        }
-        try {
-          const host = new URL(origin).hostname;
-          const wildcards = config.cors.wildcardHosts
-            .split(",")
-            .map((w) => w.trim())
-            .filter(Boolean);
-          const allowed = wildcards.some((suffix) => {
-            const s = suffix.startsWith(".") ? suffix : `.${suffix}`;
-            return host === s.slice(1) || host.endsWith(s);
-          });
-          cb(null, allowed);
-        } catch {
-          cb(null, false);
-        }
+        cb(null, exactCorsOrigins().includes(origin));
       },
       credentials: true,
     }),
@@ -109,6 +87,7 @@ export function createApp(): Express {
     }),
   );
   app.use(cookieParser());
+  app.use(csrfOriginGate);
   app.use(correlationIdMiddleware);
 
   // Request logging + RED metrics capture

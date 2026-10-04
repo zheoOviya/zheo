@@ -129,6 +129,7 @@ describe("Consumer sign-in / sign-up", () => {
       // The issued refresh cookie rotates into a fresh access token.
       const refresh = await agent
         .post("/api/v1/auth/refresh")
+        .set("Origin", "http://localhost:3000")
         .send({ device_fingerprint: FP })
         .expect(200);
       expect(refresh.body.data.access_token).toBeTruthy();

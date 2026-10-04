@@ -166,16 +166,21 @@ export const config = {
   },
 
   cors: {
-    // Comma-separated allowlist of origins. When CORS_ORIGINS is empty,
-    // the dev fallback (localhost frontend ports) is used.
+    // Comma-separated allowlist of exact origins. Credentialed CORS and
+    // cookie-authenticated CSRF both require an exact match. When CORS_ORIGINS
+    // is empty, the dev fallback (localhost frontend ports) is used.
     origins: optional(
       "CORS_ORIGINS",
       "http://localhost:3000,http://localhost:3002,http://localhost:3003",
     ),
-    // Host suffixes accepted via wildcard (subdomains of these hosts are
-    // allowed). Used for the hosted preview origins.
-    wildcardHosts: optional("CORS_WILDCARD_HOSTS", "monkeycode-ai.live"),
   },
 } as const;
+
+export function exactCorsOrigins(): string[] {
+  return config.cors.origins
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
 
 export type AppConfig = typeof config;
