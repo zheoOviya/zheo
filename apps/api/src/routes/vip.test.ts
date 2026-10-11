@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import {
   sharedAuditRepo,
   sharedOrderRepo,
@@ -21,6 +22,11 @@ const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const USER = "00000000-0000-4000-8000-0000000000f1";
 
 function auth(userId: string) {
+  seedAuthIdentity({
+    sub: userId,
+    phone: "+919876543210",
+    role: "CONSUMER",
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
       sub: userId,

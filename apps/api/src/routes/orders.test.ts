@@ -5,6 +5,7 @@ import { ApiEnvelopeSchema } from "@snakzap/types";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import type { OrderDTO } from "../repositories/orderRepository";
 import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 import { SEED_RESTAURANTS } from "../seed/catalogData";
@@ -55,6 +56,11 @@ function seedOrder(
 }
 
 function authToken(userId = TEST_USER_ID): string {
+  seedAuthIdentity({
+    sub: userId,
+    phone: "+919876543210",
+    role: "CONSUMER",
+  });
   return jwtService.signAccessToken({
     sub: userId,
     phone: "+919876543210",

@@ -6,6 +6,7 @@ import { createApp } from "../app";
 import { onEvent } from "../lib/eventBus";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import {
   sharedCheckoutIdempotencyRepo,
   sharedGroupCartRepo,
@@ -49,6 +50,11 @@ const POS_ORDER_ID = "pp-np1-order-001";
 const FUTURE = "2099-09-01T10:30:00+05:30";
 
 function auth(userId: string, suffix = "0") {
+  seedAuthIdentity({
+    sub: userId,
+    phone: `+9198765432${suffix}`,
+    role: "CONSUMER",
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
       sub: userId,
@@ -60,6 +66,11 @@ function auth(userId: string, suffix = "0") {
 }
 
 function vendorAuth() {
+  seedAuthIdentity({
+    sub: VENDOR,
+    phone: "+919876543210",
+    role: "VENDOR_OWNER",
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
       sub: VENDOR,

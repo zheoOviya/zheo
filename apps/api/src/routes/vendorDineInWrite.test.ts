@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import { resetCatalogRepository } from "./catalog";
 import {
   getDineInOrderReadRepository,
@@ -44,11 +45,18 @@ const ORDER_B = "aaaaaaaa-aaaa-4aaa-8aaa-000000000002"; // Biryani House order
 const ORDER_UNKNOWN = "11111111-1111-4111-8111-111111111111";
 
 function authHeaders(userId?: string, role?: string) {
+  const sub = userId ?? OWNER_ID;
+  const resolvedRole = role ?? "VENDOR_OWNER";
+  seedAuthIdentity({
+    sub,
+    phone: "+919876543210",
+    role: resolvedRole,
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? OWNER_ID,
+      sub,
       phone: "+919876543210",
-      role: role ?? "VENDOR_OWNER",
+      role: resolvedRole,
       device_fingerprint: "fp_test_device_abc1234",
     })}`,
   };

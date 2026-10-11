@@ -6,6 +6,7 @@ import { config } from "../config";
 import { getRedis } from "./redis";
 import { logger } from "./logger";
 import { jwtService } from "../services/jwt";
+import { assertSessionEpoch, parseEpochClaim } from "./sessionEpoch";
 import { sharedIdentityRepo, sharedOrderRepo } from "../repositories/shared";
 import { assertRestaurantAccess } from "../middleware/vendorAccess";
 
@@ -63,6 +64,7 @@ interface ClientInfo {
   ws: WebSocket;
   subscriptions: Set<string>;
   userId: string;
+  sessionEpoch: number;
 }
 
 const clients = new Map<string, ClientInfo>();
@@ -90,7 +92,17 @@ function extractHandshakeToken(req: IncomingMessage): string | null {
   return cookies[config.jwt.accessCookieName] ?? null;
 }
 
-async function resolveActivePrincipal(userId: string): Promise<WsPrincipal | null> {
+async function resolveActivePrincipal(
+  userId: string,
+  tokenEpoch?: number,
+): Promise<WsPrincipal | null> {
+  if (tokenEpoch !== undefined) {
+    try {
+      await assertSessionEpoch(userId, tokenEpoch);
+    } catch {
+      return null;
+    }
+  }
   const user = await sharedIdentityRepo.getById(userId).catch(() => null);
   if (!user || user.is_suspended) return null;
   return { sub: user.id, role: user.role };
@@ -166,7 +178,7 @@ export function initWebSocketServer(httpServer: Server): WebSocketServer {
       return;
     }
 
-    let claims: { sub: string };
+    let claims: { sub: string; session_epoch?: number };
     try {
       claims = jwtService.verifyAccessToken(token);
     } catch {
@@ -176,7 +188,15 @@ export function initWebSocketServer(httpServer: Server): WebSocketServer {
     }
 
     void (async () => {
-      const principal = await resolveActivePrincipal(claims.sub);
+      let tokenEpoch: number;
+      try {
+        tokenEpoch = parseEpochClaim(claims.session_epoch);
+      } catch {
+        logger.warn({ message: "ws_connection_rejected_unauthenticated" });
+        ws.close(1008, "Unauthorized");
+        return;
+      }
+      const principal = await resolveActivePrincipal(claims.sub, tokenEpoch);
       if (!principal) {
         logger.warn({ message: "ws_connection_rejected_unauthenticated" });
         ws.close(1008, "Unauthorized");
@@ -188,6 +208,7 @@ export function initWebSocketServer(httpServer: Server): WebSocketServer {
         ws,
         subscriptions: new Set(),
         userId: principal.sub,
+        sessionEpoch: tokenEpoch,
       };
       clients.set(clientId, info);
 
@@ -208,7 +229,7 @@ export function initWebSocketServer(httpServer: Server): WebSocketServer {
         if (msg.type === "subscribe" && msg.order_id) {
           const orderId = msg.order_id;
           void (async () => {
-            const current = await resolveActivePrincipal(info.userId);
+            const current = await resolveActivePrincipal(info.userId, info.sessionEpoch);
             if (!current) {
               revokeClient(clientId, info);
               return;
@@ -220,7 +241,7 @@ export function initWebSocketServer(httpServer: Server): WebSocketServer {
         if (msg.type === "subscribe_restaurant" && msg.restaurant_id) {
           const restaurantId = msg.restaurant_id;
           void (async () => {
-            const current = await resolveActivePrincipal(info.userId);
+            const current = await resolveActivePrincipal(info.userId, info.sessionEpoch);
             if (!current) {
               revokeClient(clientId, info);
               return;
@@ -269,7 +290,7 @@ export async function broadcast(update: OrderStatusUpdate): Promise<void> {
     );
     if (!matchesOrder && !matchesRestaurant) continue;
 
-    const principal = await resolveActivePrincipal(client.userId);
+    const principal = await resolveActivePrincipal(client.userId, client.sessionEpoch);
     if (!principal) {
       revokeClient(clientId, client);
       continue;

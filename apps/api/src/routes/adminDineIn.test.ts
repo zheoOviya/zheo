@@ -19,6 +19,7 @@ import type {
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import { resetCatalogRepository } from "./catalog";
 import {
   getDineInTableBoardReadRepository,
@@ -111,11 +112,18 @@ function assertResponseClean(payload: unknown): void {
 }
 
 function authHeaders(userId?: string, role?: string) {
+  const sub = userId ?? "00000000-0000-4000-8000-0000000000aa";
+  const resolvedRole = role ?? "ADMIN";
+  seedAuthIdentity({
+    sub,
+    phone: "+919876543210",
+    role: resolvedRole,
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? "00000000-0000-4000-8000-0000000000aa",
+      sub,
       phone: "+919876543210",
-      role: role ?? "ADMIN",
+      role: resolvedRole,
       device_fingerprint: "fp_test_device_abc1234",
     })}`,
   };

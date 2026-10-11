@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 
 describe("Auth middleware", () => {
   let app: Express;
@@ -119,6 +120,7 @@ describe("Auth middleware", () => {
   });
 
   it("allows order creation with a valid access token and uses JWT user_id", async () => {
+    seedAuthIdentity(claims);
     const token = jwtService.signAccessToken(claims);
 
     const res = await request(app)

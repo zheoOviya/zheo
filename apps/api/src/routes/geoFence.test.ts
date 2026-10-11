@@ -5,6 +5,7 @@ import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { onEvent } from "../lib/eventBus";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import { sharedOrderRepo } from "../repositories/shared";
 import { resetCatalogRepository, getCatalogRepository } from "./catalog";
 import { haversineKm } from "../services/discovery";
@@ -24,9 +25,15 @@ type CapturedEvent = { event_name: string; payload: Record<string, unknown> };
 const captured: CapturedEvent[] = [];
 
 function authHeaders(userId?: string) {
+  const sub = userId ?? USER_ID;
+  seedAuthIdentity({
+    sub,
+    phone: "+919876543210",
+    role: "CONSUMER",
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? USER_ID,
+      sub,
       phone: "+919876543210",
       role: "CONSUMER",
       device_fingerprint: "fp_test_device_abc1234",
@@ -35,11 +42,18 @@ function authHeaders(userId?: string) {
 }
 
 function vendorAuthHeaders(userId?: string, role?: string) {
+  const sub = userId ?? OWNER_ID;
+  const resolvedRole = role ?? "VENDOR_OWNER";
+  seedAuthIdentity({
+    sub,
+    phone: "+919876543210",
+    role: resolvedRole,
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? OWNER_ID,
+      sub,
       phone: "+919876543210",
-      role: role ?? "VENDOR_OWNER",
+      role: resolvedRole,
       device_fingerprint: "fp_test_device_abc1234",
     })}`,
   };

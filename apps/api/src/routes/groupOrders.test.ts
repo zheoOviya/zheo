@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import {
   sharedGroupCartRepo,
   sharedIdentityRepo,
@@ -31,6 +32,11 @@ const CONTRIBUTOR_A = "00000000-0000-4000-8000-0000000000f2";
 const CONTRIBUTOR_B = "00000000-0000-4000-8000-0000000000f3";
 
 function auth(userId: string, suffix = "0") {
+  seedAuthIdentity({
+    sub: userId,
+    phone: `+9198765432${suffix}`,
+    role: "CONSUMER",
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
       sub: userId,

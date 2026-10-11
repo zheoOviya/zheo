@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import jwt, { type JwtPayload } from "jsonwebtoken";
 import { config } from "../config";
 import { getRedis } from "../lib/redis";
+import {
+  assertSessionEpoch,
+  getSessionEpoch,
+  parseEpochClaim,
+} from "../lib/sessionEpoch";
 import { AppError } from "../middleware/envelope";
 
 // ============================================
@@ -19,13 +24,16 @@ export interface AuthClaims {
   device_fingerprint: string;
   type: "access" | "refresh" | "totp_ticket";
   jti?: string;
+  session_epoch?: number;
 }
+
+export type SignableClaims = Omit<AuthClaims, "type" | "jti">;
 
 const REFRESH_BLACKLIST_PREFIX = "jwt:blacklist:";
 const TOTP_TICKET_TTL_SECONDS = 300;
 
 function toAuthClaims(payload: JwtPayload): AuthClaims {
-  const { sub, phone, role, device_fingerprint, type, jti } = payload;
+  const { sub, phone, role, device_fingerprint, type, jti, session_epoch } = payload;
   if (
     typeof sub !== "string" ||
     sub.length === 0 ||
@@ -45,7 +53,7 @@ function toAuthClaims(payload: JwtPayload): AuthClaims {
   if (type !== "access" && type !== "refresh" && type !== "totp_ticket") {
     throw new AppError("INVALID_TOKEN", "Invalid token type claim", 401);
   }
-  return {
+  const claims: AuthClaims = {
     sub,
     phone,
     role,
@@ -53,13 +61,26 @@ function toAuthClaims(payload: JwtPayload): AuthClaims {
     type,
     jti: typeof jti === "string" ? jti : undefined,
   };
+  if (type === "access" || type === "refresh") {
+    claims.session_epoch = parseEpochClaim(session_epoch);
+  }
+  return claims;
+}
+
+function withSessionEpoch(claims: SignableClaims, session_epoch: number): SignableClaims {
+  return { ...claims, session_epoch };
 }
 
 export class JwtService {
-  signAccessToken(claims: Omit<AuthClaims, "type" | "jti">): string {
-    const { sub, ...rest } = claims;
+  signAccessToken(claims: SignableClaims): string {
+    const { sub, session_epoch, ...rest } = claims;
     return jwt.sign(
-      { ...rest, type: "access", jti: randomUUID() },
+      {
+        ...rest,
+        type: "access",
+        jti: randomUUID(),
+        session_epoch: session_epoch ?? 0,
+      },
       config.jwt.accessSecret,
       {
         subject: sub,
@@ -69,14 +90,19 @@ export class JwtService {
     );
   }
 
-  signRefreshToken(claims: Omit<AuthClaims, "type" | "jti">): {
+  signRefreshToken(claims: SignableClaims): {
     token: string;
     jti: string;
   } {
     const jti = randomUUID();
-    const { sub, ...rest } = claims;
+    const { sub, session_epoch, ...rest } = claims;
     const token = jwt.sign(
-      { ...rest, type: "refresh", jti },
+      {
+        ...rest,
+        type: "refresh",
+        jti,
+        session_epoch: session_epoch ?? 0,
+      },
       config.jwt.refreshSecret,
       {
         subject: sub,
@@ -125,7 +151,7 @@ export class JwtService {
    * 2FA step-up: short-lived single-purpose ticket minted after OTP passes,
    * consumed by the TOTP verify endpoint to prove the authenticator factor.
    */
-  signTotpTicket(claims: Omit<AuthClaims, "type" | "jti">): string {
+  signTotpTicket(claims: SignableClaims): string {
     const { sub, ...rest } = claims;
     return jwt.sign(
       { ...rest, type: "totp_ticket", jti: randomUUID() },
@@ -178,13 +204,18 @@ export class JwtService {
     return (await redis.get(`${REFRESH_BLACKLIST_PREFIX}${jti}`)) !== null;
   }
 
-  issuePair(claims: Omit<AuthClaims, "type" | "jti">): {
+  async issuePair(claims: SignableClaims): Promise<{
     accessToken: string;
     refreshToken: string;
     refreshJti: string;
-  } {
-    const accessToken = this.signAccessToken(claims);
-    const { token: refreshToken, jti } = this.signRefreshToken(claims);
+  }> {
+    const session_epoch =
+      claims.session_epoch !== undefined
+        ? parseEpochClaim(claims.session_epoch)
+        : await getSessionEpoch(claims.sub);
+    const stamped = withSessionEpoch(claims, session_epoch);
+    const accessToken = this.signAccessToken(stamped);
+    const { token: refreshToken, jti } = this.signRefreshToken(stamped);
     return { accessToken, refreshToken, refreshJti: jti };
   }
 
@@ -217,6 +248,8 @@ export class JwtService {
       );
     }
 
+    await assertSessionEpoch(claims.sub, parseEpochClaim(claims.session_epoch));
+
     await this.blacklistRefreshToken(claims.jti!);
 
     return this.issuePair({
@@ -224,6 +257,7 @@ export class JwtService {
       phone: claims.phone,
       role: claims.role,
       device_fingerprint,
+      session_epoch: claims.session_epoch,
     });
   }
 }

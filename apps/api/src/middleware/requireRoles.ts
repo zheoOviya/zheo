@@ -1,5 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { jwtService } from "../services/jwt";
+import { assertSessionEpoch, parseEpochClaim } from "../lib/sessionEpoch";
+import { sharedIdentityRepo } from "../repositories/shared";
 import { resolveAccessToken } from "./auth";
 import { AppError } from "./envelope";
 
@@ -16,46 +18,66 @@ import { AppError } from "./envelope";
 
 export function requireRole(...allowedRoles: string[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const token = resolveAccessToken(req);
-    if (!token) {
-      next(
-        new AppError(
-          "UNAUTHORIZED",
-          "Missing or malformed access token",
-          401,
-        ),
-      );
-      return;
-    }
-
-    let role: string;
-    try {
-      const claims = jwtService.verifyAccessToken(token);
-      role = claims.role;
-      res.locals.userId = claims.sub;
-      res.locals.userRole = role;
-    } catch (err) {
-      if (err instanceof AppError) {
-        next(err);
-        return;
-      }
-      next(new AppError("UNAUTHORIZED", "Invalid access token", 401));
-      return;
-    }
-
-    if (!allowedRoles.includes(role)) {
-      next(
-        new AppError(
-          "FORBIDDEN",
-          `Role '${role}' is not authorized for this operation`,
-          403,
-        ),
-      );
-      return;
-    }
-
-    next();
+    void authorizeRole(allowedRoles, req, res, next);
   };
+}
+
+async function authorizeRole(
+  allowedRoles: string[],
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const token = resolveAccessToken(req);
+  if (!token) {
+    next(
+      new AppError(
+        "UNAUTHORIZED",
+        "Missing or malformed access token",
+        401,
+      ),
+    );
+    return;
+  }
+
+  let userId: string;
+  try {
+    const claims = jwtService.verifyAccessToken(token);
+    await assertSessionEpoch(claims.sub, parseEpochClaim(claims.session_epoch));
+    userId = claims.sub;
+  } catch (err) {
+    if (err instanceof AppError) {
+      next(err);
+      return;
+    }
+    next(new AppError("UNAUTHORIZED", "Invalid access token", 401));
+    return;
+  }
+
+  const user = await sharedIdentityRepo.getById(userId);
+  if (!user) {
+    next(new AppError("UNAUTHORIZED", "User no longer exists", 401));
+    return;
+  }
+  if (user.is_suspended) {
+    next(new AppError("ACCOUNT_SUSPENDED", "This account is suspended", 403));
+    return;
+  }
+
+  if (!allowedRoles.includes(user.role)) {
+    next(
+      new AppError(
+        "FORBIDDEN",
+        `Role '${user.role}' is not authorized for this operation`,
+        403,
+      ),
+    );
+    return;
+  }
+
+  res.locals.userId = user.id;
+  res.locals.userRole = user.role;
+  next();
 }
 
 /** ADMIN, SUPER_ADMIN, or OPS_AGENT — read-only dashboard access. */

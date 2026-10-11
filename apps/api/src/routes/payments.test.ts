@@ -5,6 +5,7 @@ import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { onEvent } from "../lib/eventBus";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import { razorpayService } from "../services/razorpay";
 import { PaymentService } from "../services/payments";
 import { sharedOrderRefundService } from "../services/orderRefund";
@@ -16,9 +17,15 @@ const REST_ID = "a0000000-0000-4000-8000-000000000001";
 const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001";
 
 function authHeaders(userId?: string) {
+  const sub = userId ?? "u00000000-0000-4000-8000-000000000001";
+  seedAuthIdentity({
+    sub,
+    phone: "+919876543210",
+    role: "CONSUMER",
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? "u00000000-0000-4000-8000-000000000001",
+      sub,
       phone: "+919876543210",
       role: "CONSUMER",
       device_fingerprint: "fp_test_device_abc1234",

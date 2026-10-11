@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import {
   sharedAuditRepo,
   sharedIdentityRepo,
@@ -32,9 +33,15 @@ const USER_ID = "00000000-0000-4000-8000-0000000000e1";
 const OWNER_ID = "e0000000-0000-4000-a000-000000000001"; // Biryani House owner
 
 function authHeaders(userId?: string) {
+  const sub = userId ?? USER_ID;
+  seedAuthIdentity({
+    sub,
+    phone: "+919876543210",
+    role: "CONSUMER",
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? USER_ID,
+      sub,
       phone: "+919876543210",
       role: "CONSUMER",
       device_fingerprint: "fp_test_device_abc1234",
@@ -43,11 +50,18 @@ function authHeaders(userId?: string) {
 }
 
 function vendorAuthHeaders(userId?: string, role?: string) {
+  const sub = userId ?? OWNER_ID;
+  const resolvedRole = role ?? "VENDOR_OWNER";
+  seedAuthIdentity({
+    sub,
+    phone: "+919876543210",
+    role: resolvedRole,
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? OWNER_ID,
+      sub,
       phone: "+919876543210",
-      role: role ?? "VENDOR_OWNER",
+      role: resolvedRole,
       device_fingerprint: "fp_test_device_abc1234",
     })}`,
   };

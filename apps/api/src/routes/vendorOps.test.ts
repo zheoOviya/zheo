@@ -5,6 +5,7 @@ import { createApp } from "../app";
 import { AppError } from "../middleware/envelope";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import { getCatalogRepository, resetCatalogRepository } from "./catalog";
 import {
   sharedAuditRepo,
@@ -56,11 +57,18 @@ const OWNER_ID = "e0000000-0000-4000-a000-000000000001"; // Biryani House owner
 const STAFF_ID = "e0000000-0000-4000-a000-000000000099"; // scoped staff member
 
 function vendorAuthHeaders(userId?: string, role?: string) {
+  const sub = userId ?? OWNER_ID;
+  const resolvedRole = role ?? "VENDOR_OWNER";
+  seedAuthIdentity({
+    sub,
+    phone: "+919876543210",
+    role: resolvedRole,
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? OWNER_ID,
+      sub,
       phone: "+919876543210",
-      role: role ?? "VENDOR_OWNER",
+      role: resolvedRole,
       device_fingerprint: "fp_test_device_abc1234",
     })}`,
   };

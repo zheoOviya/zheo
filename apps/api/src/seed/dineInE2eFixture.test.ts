@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { correlationIdMiddleware } from "../lib/correlation";
 import { logger } from "../lib/logger";
 import { errorHandler, notFoundHandler } from "../middleware/errorHandler";
-import { jwtService } from "../services/jwt";import type { DineInTransactionRepos } from "../repositories/dineInContracts";
+import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
+import type { DineInTransactionRepos } from "../repositories/dineInContracts";
 import * as dineInComposition from "../repositories/dineInComposition";
 import {
   getDineInE2eSeedRepos,
@@ -55,6 +57,11 @@ function buildApp(): Express {
 }
 
 function authHeaders(): Record<string, string> {
+  seedAuthIdentity({
+    sub: TEST_USER_ID,
+    phone: "+919876543210",
+    role: "CONSUMER",
+  });
   const token = jwtService.signAccessToken({
     sub: TEST_USER_ID,
     phone: "+919876543210",
@@ -326,6 +333,11 @@ describe("UI8-A-R2 multi-table isolation", () => {
       .send({ table_token: DINE_IN_FIXTURE_TABLE_TOKEN });
     expect(first.status).toBe(200);
 
+    seedAuthIdentity({
+      sub: "u00000000-0000-4000-8000-000000000099",
+      phone: "+919876543299",
+      role: "CONSUMER",
+    });
     const secondOwner = jwtService.signAccessToken({
       sub: "u00000000-0000-4000-8000-000000000099",
       phone: "+919876543299",

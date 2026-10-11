@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import {
   sharedAuditRepo,
   sharedIdentityRepo,
@@ -15,6 +16,7 @@ import { resetRedisForTests } from "../lib/redis";
 import { memoryEventOutbox } from "../repositories/memoryEventOutbox";
 
 function tokenFor(sub: string, role: string) {
+  seedAuthIdentity({ sub, phone: "+9100000000", role });
   return `Bearer ${jwtService.signAccessToken({
     sub,
     phone: "+9100000000",

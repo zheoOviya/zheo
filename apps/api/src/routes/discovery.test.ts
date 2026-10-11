@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import { sharedOrderRepo } from "../repositories/shared";
 import { resetCatalogRepository, getCatalogRepository } from "./catalog";
 
@@ -25,6 +26,11 @@ const NON_VEG_USER = "00000000-0000-4000-8000-0000000000d1";
 const EARLY_USER = "00000000-0000-4000-8000-0000000000d2";
 
 function auth(userId: string) {
+  seedAuthIdentity({
+    sub: userId,
+    phone: "+919876543211",
+    role: "CONSUMER",
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
       sub: userId,

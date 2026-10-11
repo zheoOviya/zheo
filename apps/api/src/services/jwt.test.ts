@@ -38,7 +38,7 @@ describe("JwtService", () => {
   });
 
   it("rotates a refresh token and blacklists the old one", async () => {
-    const pair = svc.issuePair(claims);
+    const pair = await svc.issuePair(claims);
 
     const rotated = await svc.rotateRefreshToken(
       pair.refreshToken,
@@ -54,7 +54,7 @@ describe("JwtService", () => {
   });
 
   it("rejects rotation on device fingerprint mismatch (step-up auth)", async () => {
-    const pair = svc.issuePair(claims);
+    const pair = await svc.issuePair(claims);
     await expect(
       svc.rotateRefreshToken(pair.refreshToken, "fp-different-device"),
     ).rejects.toMatchObject({ code: "DEVICE_MISMATCH" });

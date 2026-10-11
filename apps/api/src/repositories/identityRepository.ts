@@ -67,6 +67,8 @@ export interface IdentityRepository {
   /** Test helper: seeds a user with a known id/phone pair. */
   _seed(user: IdentityUser): void;
   _reset(): void;
+  /** Test helper: synchronous id lookup for JWT fixture seeding. */
+  _getSync?(id: string): IdentityUser | null;
 }
 
 export class MemoryIdentityRepository implements IdentityRepository {
@@ -173,6 +175,10 @@ export class MemoryIdentityRepository implements IdentityRepository {
 
   _seed(user: IdentityUser): void {
     this.indexUser(user);
+  }
+
+  _getSync(id: string): IdentityUser | null {
+    return this.usersById.get(id) ?? null;
   }
 
   async updateSpiceTolerance(

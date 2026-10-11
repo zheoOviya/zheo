@@ -9,6 +9,7 @@ import type { OrderDTO } from "../repositories/orderRepository";
 import type { OrderStatus } from "@snakzap/types";
 import { MemoryRedis, resetRedisForTests, setRedisForTests } from "../lib/redis";
 import { computeSettlementLine } from "../services/settlement";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 
 // Deterministic seams for the admin /health dependency truth table. The
 // storage mode and the live Postgres probe are the only two inputs the route
@@ -38,9 +39,14 @@ function redisMock(ping: () => Promise<string>): MemoryRedis {
   return mock;
 }
 
-function adminToken(role: string) {
+function adminToken(role: string, sub = "admin-test-id") {
+  seedAuthIdentity({
+    sub,
+    phone: "+919999999999",
+    role,
+  });
   return `Bearer ${jwtService.signAccessToken({
-    sub: "admin-test-id",
+    sub,
     phone: "+919999999999",
     role,
     device_fingerprint: "fp_test_admin",
@@ -48,6 +54,11 @@ function adminToken(role: string) {
 }
 
 function consumerToken() {
+  seedAuthIdentity({
+    sub: "consumer-test-id",
+    phone: "+918888888888",
+    role: "CONSUMER",
+  });
   return `Bearer ${jwtService.signAccessToken({
     sub: "consumer-test-id",
     phone: "+918888888888",
@@ -1701,12 +1712,12 @@ describe("Admin RBAC (A-01, A-11)", () => {
     it("cannot demote the last active SUPER_ADMIN", async () => {
       await request(app)
         .put("/api/v1/admin/users/u-hierarchy-super-b/role")
-        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .set("Authorization", adminToken("SUPER_ADMIN", "u-hierarchy-super-a"))
         .send({ role: "ADMIN" })
         .expect(200);
       const res = await request(app)
         .put("/api/v1/admin/users/u-hierarchy-super-a/role")
-        .set("Authorization", adminToken("SUPER_ADMIN"))
+        .set("Authorization", adminToken("SUPER_ADMIN", "u-hierarchy-super-a"))
         .send({ role: "CONSUMER" });
       expect(res.status).toBe(403);
     });

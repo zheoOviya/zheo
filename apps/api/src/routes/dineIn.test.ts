@@ -8,6 +8,7 @@ import { DineInOrderService } from "../services/dineInOrder";
 import { DiningSessionService } from "../services/dineInSession";
 import type { DineInEventFactEmitter } from "../services/dineInEventEmitter";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import {
   getDineInTransactionPort,
   resetDineInState,
@@ -47,6 +48,11 @@ const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001"; // Chicken Biryani R
 const noopEmitter: DineInEventFactEmitter = async () => {};
 
 function authToken(userId = TEST_USER_ID): string {
+  seedAuthIdentity({
+    sub: userId,
+    phone: "+919876543210",
+    role: "CONSUMER",
+  });
   return jwtService.signAccessToken({
     sub: userId,
     phone: "+919876543210",

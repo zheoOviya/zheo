@@ -6,6 +6,7 @@ import { config } from "../config";
 import { resetRedisForTests } from "../lib/redis";
 import { sharedOrderRepo } from "../repositories/shared";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 
 const ALLOWED_ORIGIN = "http://localhost:3000";
 const HOSTILE_ORIGIN = "https://evil.example.com";
@@ -42,6 +43,7 @@ describe("Origin CSRF gate (cookie-authenticated unsafe methods)", () => {
     resetRedisForTests();
     sharedOrderRepo._reset();
     app = createApp();
+    seedAuthIdentity(claims);
     token = jwtService.signAccessToken(claims);
   });
 

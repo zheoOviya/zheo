@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 import type { RestaurantEligibilityDTO, RestaurantTableDTO } from "../repositories/dineInContracts";
 import { getDineInTransactionPort, resetDineInState } from "../repositories/dineInComposition";
 import { resetCatalogRepository } from "../routes/catalog";
@@ -23,6 +24,11 @@ const RESTAURANT_ID = "a0000000-0000-4000-8000-000000000001";
 const MENU_ITEM_1 = "b0000000-0000-4000-8000-000000000001"; // Chicken Biryani Rs 220
 
 function authToken(userId = TEST_USER_ID): string {
+  seedAuthIdentity({
+    sub: userId,
+    phone: "+919876543210",
+    role: "CONSUMER",
+  });
   return jwtService.signAccessToken({
     sub: userId,
     phone: "+919876543210",

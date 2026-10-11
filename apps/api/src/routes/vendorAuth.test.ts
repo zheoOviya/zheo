@@ -5,6 +5,7 @@ import { createApp } from "../app";
 import { getRedis, resetRedisForTests } from "../lib/redis";
 import { sharedIdentityRepo } from "../repositories/shared";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 
 // ============================================
 // Vendor sign-in / sign-up (phone + OTP)
@@ -14,6 +15,7 @@ const PHONE = "+919876500001";
 const FP = "vendor-test-fp-00000001";
 
 function vendorToken(role: string, sub = "u-vendor-00000000000001"): string {
+  seedAuthIdentity({ sub, phone: PHONE, role });
   return jwtService.signAccessToken({
     sub,
     phone: PHONE,

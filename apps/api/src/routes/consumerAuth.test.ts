@@ -5,6 +5,7 @@ import { createApp } from "../app";
 import { getRedis, resetRedisForTests } from "../lib/redis";
 import { sharedIdentityRepo } from "../repositories/shared";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 
 // ============================================
 // Consumer sign-in / sign-up (phone + OTP)
@@ -14,6 +15,7 @@ const PHONE = "+919876500002";
 const FP = "consumer-test-fp-00000001";
 
 function consumerToken(role: string, sub = "u-consumer-00000000000001"): string {
+  seedAuthIdentity({ sub, phone: PHONE, role });
   return jwtService.signAccessToken({
     sub,
     phone: PHONE,

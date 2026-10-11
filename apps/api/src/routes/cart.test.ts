@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import { resetRedisForTests } from "../lib/redis";
 import { jwtService } from "../services/jwt";
+import { seedAuthIdentity } from "../test/support/authIdentity";
 
 // ============================================
 // O09 Cart Persistence routes (POST/GET/DELETE /api/v1/cart)
@@ -14,9 +15,15 @@ const MENU_ITEM = "b0000000-0000-4000-8000-000000000001";
 const REST_ID = "a0000000-0000-4000-8000-000000000001";
 
 function authHeaders(userId?: string) {
+  const sub = userId ?? USER_ID;
+  seedAuthIdentity({
+    sub,
+    phone: "+919876543210",
+    role: "CONSUMER",
+  });
   return {
     Authorization: `Bearer ${jwtService.signAccessToken({
-      sub: userId ?? USER_ID,
+      sub,
       phone: "+919876543210",
       role: "CONSUMER",
       device_fingerprint: "fp_test_device_abc1234",

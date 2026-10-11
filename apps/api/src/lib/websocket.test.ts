@@ -7,6 +7,8 @@ import { sharedIdentityRepo, sharedOrderRepo, sharedUserRoleRepo } from "../repo
 import type { IdentityUser } from "../repositories/identityRepository";
 import type { OrderDTO } from "../repositories/orderRepository";
 import { jwtService } from "../services/jwt";
+import { incrementSessionEpoch } from "./sessionEpoch";
+import { resetRedisForTests } from "./redis";
 import { broadcast, initWebSocketServer } from "./websocket";
 import type { OrderStatusUpdate } from "./websocket";
 
@@ -172,6 +174,7 @@ describe("AUTH-G4 WebSocket handshake, subscribe, delivery revocation", () => {
   });
 
   beforeEach(() => {
+    resetRedisForTests();
     sharedIdentityRepo._reset();
     sharedOrderRepo._reset();
     sharedUserRoleRepo._reset();
@@ -258,6 +261,7 @@ describe("AUTH-G4 WebSocket handshake, subscribe, delivery revocation", () => {
 
   it("WS-7 stale JWT role → durable current role governs authorization", async () => {
     const token = accessToken(CONSUMER_ID, "VENDOR_OWNER");
+    await sharedIdentityRepo.updateRole(CONSUMER_ID, "CONSUMER");
     const h = await connect({ bearer: token });
     expect(h.opened).toBe(true);
     h.ws.send(
@@ -428,5 +432,30 @@ describe("AUTH-G4 WebSocket handshake, subscribe, delivery revocation", () => {
     await broadcast(statusUpdate());
     await waitUntil(() => h.messages.length > 0);
     expect(h.messages).toHaveLength(1);
+  });
+
+  it("WS-G2-1 logout epoch bump rejects a later handshake", async () => {
+    const token = accessToken(CONSUMER_ID, "CONSUMER");
+    await incrementSessionEpoch(CONSUMER_ID);
+    const h = await connect({ bearer: token });
+    if (h.closeCode === null) await waitForClose(h);
+    expect(h.opened).toBe(false);
+    expect(h.closeCode).toBe(1008);
+  });
+
+  it("WS-G2-2 connected client is revoked on delivery after epoch bump", async () => {
+    const token = accessToken(CONSUMER_ID, "CONSUMER");
+    const h = await connect({ bearer: token });
+    expect(h.opened).toBe(true);
+    h.ws.send(JSON.stringify({ type: "subscribe", order_id: ORDER_ID }));
+    await new Promise((r) => setTimeout(r, 50));
+    await incrementSessionEpoch(CONSUMER_ID);
+    await broadcast(statusUpdate());
+    await new Promise((r) => setTimeout(r, 80));
+    expect(h.messages).toEqual([]);
+    if (h.closeCode === null) {
+      await waitForClose(h).catch(() => undefined);
+    }
+    expect(h.closeCode).toBe(1008);
   });
 });

@@ -449,12 +449,13 @@ describe("EVT-B2B-NP2 remaining producer transactional outbox", () => {
       expect(rows[0]?.payload).toMatchObject({ user_id: UID, spice_tolerance: 4 });
     });
 
-    it("NP2-U2 an unknown user returns 404 and enqueues nothing", async () => {
-      await request(app)
+    it("NP2-U2 an unknown user returns 401 and enqueues nothing", async () => {
+      const res = await request(app)
         .put("/api/v1/users/profile")
         .set(auth(UID))
         .send({ spice_tolerance: 4 })
-        .expect(404);
+        .expect(401);
+      expect(res.body.error.code).toBe("UNAUTHORIZED");
       expect(rowsFor("SpiceProfileUpdated")).toHaveLength(0);
     });
   });

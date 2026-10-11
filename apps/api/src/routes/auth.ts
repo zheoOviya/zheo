@@ -5,7 +5,13 @@ import { config } from "../config";
 import { generateEventMetadata } from "../lib/correlation";
 import { logger } from "../lib/logger";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
-import { authenticate } from "../middleware/auth";
+import { authenticate, resolveAccessToken } from "../middleware/auth";
+import {
+  assertSessionEpoch,
+  getSessionEpoch,
+  incrementSessionEpoch,
+  parseEpochClaim,
+} from "../lib/sessionEpoch";
 import { rateLimiter } from "../middleware/rateLimiter";
 import { requireRole } from "../middleware/requireRoles";
 import { sharedAuditRepo, sharedIdentityRepo } from "../repositories/shared";
@@ -234,7 +240,7 @@ authRouter.post(
       return;
     }
 
-    const pair = jwtService.issuePair(claims);
+    const pair = await jwtService.issuePair(claims);
 
     setAuthCookies(res, pair);
 
@@ -295,15 +301,26 @@ async function rotateRefreshWithCurrentRole(
     throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended", 403);
   }
 
+  const tokenEpoch = parseEpochClaim(claims.session_epoch);
+  await assertSessionEpoch(claims.sub, tokenEpoch);
+  if (process.env.NODE_ENV === "test") {
+    await _authG2TestHooks.afterRefreshEpochValidated(claims.sub);
+  }
+
   await jwtService.blacklistRefreshToken(claims.jti!);
 
-  return jwtService.issuePair({
+  return await jwtService.issuePair({
     sub: user.id,
     phone: user.phone,
     role: user.role,
     device_fingerprint: deviceFingerprint,
+    session_epoch: tokenEpoch,
   });
 }
+
+export const _authG2TestHooks = {
+  afterRefreshEpochValidated: async (_userId: string): Promise<void> => {},
+};
 
 authRouter.post(
   "/refresh",
@@ -336,14 +353,43 @@ authRouter.post(
   "/logout",
   asyncHandler(async (req, res) => {
     const refresh = req.cookies?.[config.jwt.refreshCookieName] as string | undefined;
+    const access = resolveAccessToken(req);
+
+    let bumpUserId: string | null = null;
+    let refreshJti: string | undefined;
+
     if (refresh) {
       try {
         const claims = jwtService.verifyRefreshToken(refresh);
-        if (claims.jti) await jwtService.blacklistRefreshToken(claims.jti);
+        refreshJti = claims.jti;
+        const current = await getSessionEpoch(claims.sub);
+        if (parseEpochClaim(claims.session_epoch) === current) {
+          bumpUserId = claims.sub;
+        }
       } catch {
         // invalid token is fine for logout
       }
     }
+
+    if (access) {
+      try {
+        const claims = jwtService.verifyAccessToken(access);
+        const current = await getSessionEpoch(claims.sub);
+        if (parseEpochClaim(claims.session_epoch) === current) {
+          bumpUserId = bumpUserId ?? claims.sub;
+        }
+      } catch {
+        // invalid token is fine for logout
+      }
+    }
+
+    if (refreshJti) {
+      await jwtService.blacklistRefreshToken(refreshJti);
+    }
+    if (bumpUserId) {
+      await incrementSessionEpoch(bumpUserId);
+    }
+
     res.clearCookie(config.jwt.refreshCookieName, { path: "/" });
     res.clearCookie(config.jwt.accessCookieName, { path: "/" });
     ok(res, { logged_out: true });
@@ -440,7 +486,7 @@ authRouter.post(
       return;
     }
 
-    const pair = jwtService.issuePair(claims);
+    const pair = await jwtService.issuePair(claims);
 
     setAuthCookies(res, pair);
 
@@ -554,7 +600,7 @@ authRouter.post(
       device_fingerprint: body.data.device_fingerprint,
     };
 
-    const pair = jwtService.issuePair(claims);
+    const pair = await jwtService.issuePair(claims);
 
     setAuthCookies(res, pair);
 
@@ -664,7 +710,7 @@ authRouter.post(
       device_fingerprint: body.data.device_fingerprint,
     };
 
-    const pair = jwtService.issuePair(claims);
+    const pair = await jwtService.issuePair(claims);
 
     setAuthCookies(res, pair);
 
@@ -715,7 +761,7 @@ authRouter.post(
       throw new AppError("INVALID_TOTP", "Invalid authenticator code", 401);
     }
 
-    const pair = jwtService.issuePair({
+    const pair = await jwtService.issuePair({
       sub: user.id,
       phone: user.phone,
       role: user.role,
