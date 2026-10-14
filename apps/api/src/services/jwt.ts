@@ -3,7 +3,6 @@ import jwt, { type JwtPayload } from "jsonwebtoken";
 import { config } from "../config";
 import { getRedis } from "../lib/redis";
 import {
-  assertSessionEpoch,
   getSessionEpoch,
   parseEpochClaim,
 } from "../lib/sessionEpoch";
@@ -14,7 +13,9 @@ import { AppError } from "../middleware/envelope";
 // Access  : 15 min TTL (JWT_SECRET)
 // Refresh : 7 day TTL  (JWT_REFRESH_SECRET), HttpOnly cookie
 // Rotation: old refresh blacklisted by jti before issuing new pair
-// Device  : device_fingerprint claim; mismatch -> step-up auth required
+// Device  : server-generated, non-secret device_id claim; proof of possession
+//           is the signed httpOnly `snakzap_device` cookie (AUTH-G6), verified
+//           in the auth route. No device decision lives in this service.
 // ============================================
 
 export interface AuthClaims {
@@ -22,6 +23,10 @@ export interface AuthClaims {
   phone: string;
   role: string;
   device_fingerprint: string;
+  // AUTH-G6: non-secret server-generated device binding id. The matching
+  // proof-of-possession secret lives only in the httpOnly device cookie,
+  // never in the token.
+  device_id?: string;
   type: "access" | "refresh" | "totp_ticket";
   jti?: string;
   session_epoch?: number;
@@ -33,7 +38,7 @@ const REFRESH_BLACKLIST_PREFIX = "jwt:blacklist:";
 const TOTP_TICKET_TTL_SECONDS = 300;
 
 function toAuthClaims(payload: JwtPayload): AuthClaims {
-  const { sub, phone, role, device_fingerprint, type, jti, session_epoch } = payload;
+  const { sub, phone, role, device_fingerprint, device_id, type, jti, session_epoch } = payload;
   if (
     typeof sub !== "string" ||
     sub.length === 0 ||
@@ -58,6 +63,7 @@ function toAuthClaims(payload: JwtPayload): AuthClaims {
     phone,
     role,
     device_fingerprint,
+    device_id: typeof device_id === "string" ? device_id : undefined,
     type,
     jti: typeof jti === "string" ? jti : undefined,
   };
@@ -217,48 +223,6 @@ export class JwtService {
     const accessToken = this.signAccessToken(stamped);
     const { token: refreshToken, jti } = this.signRefreshToken(stamped);
     return { accessToken, refreshToken, refreshJti: jti };
-  }
-
-  /**
-   * Refresh rotation:
-   * 1. verify old refresh token
-   * 2. reject if already blacklisted (reuse detection)
-   * 3. enforce device binding - mismatched device requires step-up auth
-   * 4. blacklist old jti, issue new pair
-   */
-  async rotateRefreshToken(
-    oldToken: string,
-    device_fingerprint: string,
-  ): Promise<{ accessToken: string; refreshToken: string; refreshJti: string }> {
-    const claims = this.verifyRefreshToken(oldToken);
-
-    if (await this.isRefreshTokenBlacklisted(claims.jti!)) {
-      throw new AppError(
-        "REFRESH_TOKEN_REUSED",
-        "Refresh token reuse detected. Re-authentication required.",
-        401,
-      );
-    }
-
-    if (claims.device_fingerprint !== device_fingerprint) {
-      throw new AppError(
-        "DEVICE_MISMATCH",
-        "New device detected. Step-up authentication (OTP) required.",
-        401,
-      );
-    }
-
-    await assertSessionEpoch(claims.sub, parseEpochClaim(claims.session_epoch));
-
-    await this.blacklistRefreshToken(claims.jti!);
-
-    return this.issuePair({
-      sub: claims.sub,
-      phone: claims.phone,
-      role: claims.role,
-      device_fingerprint,
-      session_epoch: claims.session_epoch,
-    });
   }
 }
 

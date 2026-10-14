@@ -57,6 +57,9 @@ export function parseEventOutboxRelayIntervalMs(
   return parsed;
 }
 
+export const DEVICE_BINDING_SECRET_DEV_DEFAULT =
+  "dev-device-binding-secret-change-in-production";
+
 export const config = {
   env: optional("NODE_ENV", "development"),
   port: optionalInt("PORT", 3001),
@@ -76,6 +79,15 @@ export const config = {
     refreshTtlSeconds: optionalInt("JWT_REFRESH_TTL_SECONDS", 7 * 24 * 60 * 60),
     refreshCookieName: optional("JWT_REFRESH_COOKIE_NAME", "snakzap_refresh"),
     accessCookieName: optional("JWT_ACCESS_COOKIE_NAME", "snakzap_access"),
+  },
+
+  // AUTH-G6 device binding. Dedicated HMAC secret for the httpOnly
+  // `snakzap_device` binding cookie. Deliberately separate from the JWT
+  // signing secrets so it is never silently reused as a token key.
+  // Production must supply a strong value (see env.ts); dev/test get a
+  // fixed deterministic default so local runs and CI need no extra secret.
+  deviceBinding: {
+    secret: optional("DEVICE_BINDING_SECRET", DEVICE_BINDING_SECRET_DEV_DEFAULT),
   },
 
   // Explicit opt-in for the dev/preview auth bypass (on-screen demo OTP +

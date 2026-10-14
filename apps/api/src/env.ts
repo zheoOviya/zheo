@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { config } from "./config";
+import { config, DEVICE_BINDING_SECRET_DEV_DEFAULT } from "./config";
 
 // ============================================
 // Fail-fast production config validation.
@@ -17,6 +17,7 @@ import { config } from "./config";
 const DEV_SECRETS = new Set([
   "dev-access-secret-change-in-production",
   "dev-refresh-secret-change-in-production",
+  DEVICE_BINDING_SECRET_DEV_DEFAULT,
 ]);
 
 const StrongSecret = z
@@ -27,6 +28,7 @@ const StrongSecret = z
 const ProductionSecretsSchema = z.object({
   JWT_SECRET: StrongSecret,
   JWT_REFRESH_SECRET: StrongSecret,
+  DEVICE_BINDING_SECRET: StrongSecret,
 });
 
 export function assertSecureConfig(): void {
@@ -35,6 +37,7 @@ export function assertSecureConfig(): void {
   const secrets = ProductionSecretsSchema.safeParse({
     JWT_SECRET: process.env.JWT_SECRET,
     JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
+    DEVICE_BINDING_SECRET: process.env.DEVICE_BINDING_SECRET,
   });
 
   if (!secrets.success) {
@@ -43,7 +46,7 @@ export function assertSecureConfig(): void {
       .join("; ");
     throw new Error(
       `Refusing to start in production: invalid JWT configuration (${issues}). ` +
-        "Set JWT_SECRET and JWT_REFRESH_SECRET to strong, unique values.",
+        "Set JWT_SECRET, JWT_REFRESH_SECRET and DEVICE_BINDING_SECRET to strong, unique values.",
     );
   }
 

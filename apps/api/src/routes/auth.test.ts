@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { ApiEnvelopeSchema } from "@snakzap/types";
 import { createApp } from "../app";
+import { issueDeviceBindingCookie } from "../lib/deviceBinding";
 import { getRedis, resetRedisForTests } from "../lib/redis";
 import { sharedIdentityRepo } from "../repositories/shared";
 import { jwtService } from "../services/jwt";
@@ -11,7 +12,6 @@ import { generateTotpCode } from "../services/totp";
 const PHONE = "+919876543210";
 const LOGOUT_PHONE = "+919876000099";
 const FP_A = "fp-device-a-1234567890";
-const FP_B = "fp-device-b-1234567890";
 
 // RFC 6238 Appendix B test secret (ASCII "12345678901234567890").
 const RFC_SECRET_BASE32 = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
@@ -151,20 +151,26 @@ describe("Auth routes (integration)", () => {
     expect(res.body.data.logged_out).toBe(true);
   });
 
-  it("rejects refresh on device mismatch (step-up auth required)", async () => {
+  it("rejects refresh when the device binding cookie is missing (step-up auth required)", async () => {
     await requestOtp(PHONE);
     const otp = await readStoredOtp(PHONE);
 
-    const agent = request.agent(app);
-    await agent
+    const verifyRes = await request(app)
       .post("/api/v1/auth/verify-otp")
       .send({ phone: PHONE, otp, device_fingerprint: FP_A })
       .expect(200);
 
-    const res = await agent
+    const setCookie = verifyRes.headers["set-cookie"] as string[] | undefined;
+    const refreshHeader = (setCookie ?? []).find((c) => c.startsWith("snakzap_refresh="));
+    expect(refreshHeader).toBeDefined();
+    const refreshCookie = refreshHeader!.split(";")[0]!;
+
+    // Present only the refresh cookie; the signed device cookie is absent, so
+    // decoding the refresh token is not enough to rotate it.
+    const res = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Origin", "http://localhost:3000")
-      .send({ device_fingerprint: FP_B })
+      .set("Cookie", refreshCookie)
+      .send({ device_fingerprint: FP_A })
       .expect(401);
     expect(res.body.error.code).toBe("DEVICE_MISMATCH");
   });
@@ -259,28 +265,31 @@ describe("TOTP 2FA (2-step login)", () => {
     });
   }
 
-  async function getTotpTicket(phone: string): Promise<string> {
+  async function getTotpTicket(
+    phone: string,
+  ): Promise<{ ticket: string; agent: ReturnType<typeof request.agent> }> {
+    const agent = request.agent(app);
     const otp = await requestOtp(phone);
-    const res = await request(app)
+    const res = await agent
       .post("/api/v1/auth/verify-otp")
       .send({ phone, otp, device_fingerprint: FP_A })
       .expect(202);
     expect(res.body.data.totp_required).toBe(true);
-    return res.body.data.totp_ticket as string;
+    return { ticket: res.body.data.totp_ticket as string, agent };
   }
 
   it("verify-otp returns a 2FA ticket instead of tokens when TOTP is enabled", async () => {
     seedTotpEnabledUser();
-    const ticket = await getTotpTicket(TOTP_PHONE);
+    const { ticket } = await getTotpTicket(TOTP_PHONE);
     expect(ticket.length).toBeGreaterThan(20);
   });
 
   it("totp/verify completes login with a valid code and sets the refresh cookie", async () => {
     seedTotpEnabledUser();
-    const ticket = await getTotpTicket(TOTP_PHONE);
+    const { ticket, agent } = await getTotpTicket(TOTP_PHONE);
     const code = generateTotpCode(RFC_SECRET_BASE32);
 
-    const res = await request(app)
+    const res = await agent
       .post("/api/v1/auth/totp/verify")
       .send({
         totp_ticket: ticket,
@@ -298,8 +307,8 @@ describe("TOTP 2FA (2-step login)", () => {
 
   it("totp/verify rejects an invalid code", async () => {
     seedTotpEnabledUser();
-    const ticket = await getTotpTicket(TOTP_PHONE);
-    const res = await request(app)
+    const { ticket, agent } = await getTotpTicket(TOTP_PHONE);
+    const res = await agent
       .post("/api/v1/auth/totp/verify")
       .send({
         totp_ticket: ticket,
@@ -313,14 +322,34 @@ describe("TOTP 2FA (2-step login)", () => {
 
   it("totp/verify rejects a ticket presented from another device", async () => {
     seedTotpEnabledUser();
-    const ticket = await getTotpTicket(TOTP_PHONE);
+    const { ticket } = await getTotpTicket(TOTP_PHONE);
+    const code = generateTotpCode(RFC_SECRET_BASE32);
+    // A valid, server-signed device cookie for the SAME user but a different
+    // device id must not satisfy the ticket's device binding.
+    const foreign = issueDeviceBindingCookie(TOTP_USER_ID, "did-foreign-device-0001");
+    const res = await request(app)
+      .post("/api/v1/auth/totp/verify")
+      .set("Cookie", `snakzap_device=${foreign}`)
+      .send({
+        totp_ticket: ticket,
+        code,
+        device_fingerprint: FP_A,
+        phone: TOTP_PHONE,
+      })
+      .expect(401);
+    expect(res.body.error.code).toBe("DEVICE_MISMATCH");
+  });
+
+  it("totp/verify rejects a stolen ticket presented with no device cookie", async () => {
+    seedTotpEnabledUser();
+    const { ticket } = await getTotpTicket(TOTP_PHONE);
     const code = generateTotpCode(RFC_SECRET_BASE32);
     const res = await request(app)
       .post("/api/v1/auth/totp/verify")
       .send({
         totp_ticket: ticket,
         code,
-        device_fingerprint: FP_B,
+        device_fingerprint: FP_A,
         phone: TOTP_PHONE,
       })
       .expect(401);
@@ -406,16 +435,12 @@ describe("TOTP 2FA (2-step login)", () => {
 
   it("re-enrolling an already-enabled account is rejected", async () => {
     seedTotpEnabledUser();
-    const otp = await requestOtp(TOTP_PHONE);
-    const ticket = await request(app)
-      .post("/api/v1/auth/verify-otp")
-      .send({ phone: TOTP_PHONE, otp, device_fingerprint: FP_A })
-      .expect(202);
+    const { ticket, agent } = await getTotpTicket(TOTP_PHONE);
     const code = generateTotpCode(RFC_SECRET_BASE32);
-    const loginRes = await request(app)
+    const loginRes = await agent
       .post("/api/v1/auth/totp/verify")
       .send({
-        totp_ticket: ticket.body.data.totp_ticket,
+        totp_ticket: ticket,
         code,
         device_fingerprint: FP_A,
         phone: TOTP_PHONE,
@@ -593,13 +618,23 @@ describe("Refresh re-reads current account state (AUTH-P0)", () => {
     return header!.split(";")[0]!.replace("snakzap_refresh=", "");
   }
 
+  function readDeviceCookie(setCookie: string[] | undefined): string {
+    const header = (setCookie ?? []).find((c) => c.startsWith("snakzap_device="));
+    expect(header).toBeDefined();
+    return header!.split(";")[0]!.replace("snakzap_device=", "");
+  }
+
+  function refreshCookieHeader(refresh: string, device: string): string {
+    return `snakzap_refresh=${refresh}; snakzap_device=${device}`;
+  }
+
   function accessRole(accessToken: string): string {
     return jwtService.verifyAccessToken(accessToken).role;
   }
 
   async function loginConsumer(
     phone: string,
-  ): Promise<{ cookie: string; userId: string }> {
+  ): Promise<{ cookie: string; deviceCookie: string; userId: string }> {
     const otpRes = await request(app)
       .post("/api/v1/auth/send-otp")
       .send({ phone })
@@ -611,13 +646,15 @@ describe("Refresh re-reads current account state (AUTH-P0)", () => {
       .expect(200);
     const user = await sharedIdentityRepo.getByPhone(phone);
     expect(user).not.toBeNull();
+    const setCookie = res.headers["set-cookie"] as string[] | undefined;
     return {
-      cookie: readRefreshCookie(res.headers["set-cookie"] as string[] | undefined),
+      cookie: readRefreshCookie(setCookie),
+      deviceCookie: readDeviceCookie(setCookie),
       userId: user!.id,
     };
   }
 
-  async function loginOperator(): Promise<string> {
+  async function loginOperator(): Promise<{ cookie: string; deviceCookie: string }> {
     sharedIdentityRepo._seed({
       id: ADMIN_ID,
       phone: ADMIN_PHONE,
@@ -639,26 +676,30 @@ describe("Refresh re-reads current account state (AUTH-P0)", () => {
       .send({ email: ADMIN_EMAIL, otp, device_fingerprint: FP })
       .expect(200);
     expect(res.body.data.user.role).toBe("ADMIN");
-    return readRefreshCookie(res.headers["set-cookie"] as string[] | undefined);
+    const setCookie = res.headers["set-cookie"] as string[] | undefined;
+    return {
+      cookie: readRefreshCookie(setCookie),
+      deviceCookie: readDeviceCookie(setCookie),
+    };
   }
 
   it("R1: an unchanged account rotates and keeps its current role", async () => {
-    const { cookie } = await loginConsumer(CONSUMER_PHONE);
+    const { cookie, deviceCookie } = await loginConsumer(CONSUMER_PHONE);
     const res = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .set("Cookie", refreshCookieHeader(cookie, deviceCookie))
       .send({ device_fingerprint: FP })
       .expect(200);
     expect(accessRole(res.body.data.access_token)).toBe("CONSUMER");
   });
 
   it("R2: a demoted operator cannot mint an ADMIN token from the old refresh token", async () => {
-    const cookie = await loginOperator();
+    const { cookie, deviceCookie } = await loginOperator();
     await sharedIdentityRepo.updateRole(ADMIN_ID, "CONSUMER");
 
     const res = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .set("Cookie", refreshCookieHeader(cookie, deviceCookie))
       .send({ device_fingerprint: FP })
       .expect(200);
     expect(accessRole(res.body.data.access_token)).toBe("CONSUMER");
@@ -683,27 +724,27 @@ describe("Refresh re-reads current account state (AUTH-P0)", () => {
       .send({ phone: VENDOR_PHONE, otp, device_fingerprint: FP })
       .expect(200);
     expect(login.body.data.user.role).toBe("PENDING_VENDOR");
-    const cookie = readRefreshCookie(
-      login.headers["set-cookie"] as string[] | undefined,
-    );
+    const loginSetCookie = login.headers["set-cookie"] as string[] | undefined;
+    const cookie = readRefreshCookie(loginSetCookie);
+    const deviceCookie = readDeviceCookie(loginSetCookie);
 
     await sharedIdentityRepo.updateRole(VENDOR_ID, "VENDOR_OWNER");
     const res = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .set("Cookie", refreshCookieHeader(cookie, deviceCookie))
       .send({ device_fingerprint: FP })
       .expect(200);
     expect(accessRole(res.body.data.access_token)).toBe("VENDOR_OWNER");
   });
 
   it("R4: a suspended account is denied without consuming the token; reactivation restores it", async () => {
-    const { cookie, userId } = await loginConsumer(CONSUMER_PHONE);
+    const { cookie, deviceCookie, userId } = await loginConsumer(CONSUMER_PHONE);
     const jti = jwtService.verifyRefreshToken(cookie).jti!;
 
     await sharedIdentityRepo.suspend(userId, "test suspension");
     const denied = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .set("Cookie", refreshCookieHeader(cookie, deviceCookie))
       .send({ device_fingerprint: FP })
       .expect(403);
     expect(denied.body.error.code).toBe("ACCOUNT_SUSPENDED");
@@ -714,20 +755,20 @@ describe("Refresh re-reads current account state (AUTH-P0)", () => {
     await sharedIdentityRepo.reactivate(userId);
     const recovered = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .set("Cookie", refreshCookieHeader(cookie, deviceCookie))
       .send({ device_fingerprint: FP })
       .expect(200);
     expect(accessRole(recovered.body.data.access_token)).toBe("CONSUMER");
   });
 
   it("R5: a deleted account is denied without consuming the token", async () => {
-    const { cookie } = await loginConsumer(CONSUMER_PHONE);
+    const { cookie, deviceCookie } = await loginConsumer(CONSUMER_PHONE);
     const jti = jwtService.verifyRefreshToken(cookie).jti!;
 
     sharedIdentityRepo._reset();
     const res = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .set("Cookie", refreshCookieHeader(cookie, deviceCookie))
       .send({ device_fingerprint: FP })
       .expect(401);
     expect(res.body.error.code).toBe("UNAUTHORIZED");
@@ -735,19 +776,19 @@ describe("Refresh re-reads current account state (AUTH-P0)", () => {
   });
 
   it("R6: a successful rotation still blacklists the old jti (reuse rejected)", async () => {
-    const { cookie } = await loginConsumer(CONSUMER_PHONE);
+    const { cookie, deviceCookie } = await loginConsumer(CONSUMER_PHONE);
     const jti = jwtService.verifyRefreshToken(cookie).jti!;
 
     await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .set("Cookie", refreshCookieHeader(cookie, deviceCookie))
       .send({ device_fingerprint: FP })
       .expect(200);
     expect(await getRedis().get(`jwt:blacklist:${jti}`)).not.toBeNull();
 
     const reused = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `snakzap_refresh=${cookie}`)
+      .set("Cookie", refreshCookieHeader(cookie, deviceCookie))
       .send({ device_fingerprint: FP })
       .expect(401);
     expect(reused.body.error.code).toBe("REFRESH_TOKEN_REUSED");

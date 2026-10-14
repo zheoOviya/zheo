@@ -21,6 +21,7 @@ const PHONE = "+919876000080";
 const FP = "fp-auth-g2-0000000001";
 const ACCESS_COOKIE = config.jwt.accessCookieName;
 const REFRESH_COOKIE = config.jwt.refreshCookieName;
+const DEVICE_COOKIE = "snakzap_device";
 const ACCESS_SECRET =
   process.env.JWT_SECRET ?? "test-access-secret-at-least-32-characters-long";
 
@@ -40,7 +41,7 @@ describe("AUTH-G2 session epoch, logout, refresh race", () => {
 
   async function login(
     phone = PHONE,
-  ): Promise<{ access: string; refresh: string; userId: string }> {
+  ): Promise<{ access: string; refresh: string; device: string; userId: string }> {
     const otpRes = await request(app)
       .post("/api/v1/auth/send-otp")
       .send({ phone })
@@ -53,14 +54,21 @@ describe("AUTH-G2 session epoch, logout, refresh race", () => {
     const cookies = (res.headers["set-cookie"] as unknown as string[] | undefined) ?? [];
     const refreshHeader = cookies.find((c) => c.startsWith(`${REFRESH_COOKIE}=`));
     const accessHeader = cookies.find((c) => c.startsWith(`${ACCESS_COOKIE}=`));
+    const deviceHeader = cookies.find((c) => c.startsWith(`${DEVICE_COOKIE}=`));
     expect(refreshHeader).toBeDefined();
+    expect(deviceHeader).toBeDefined();
     const refresh = refreshHeader!.split(";")[0]!.slice(`${REFRESH_COOKIE}=`.length);
+    const device = deviceHeader!.split(";")[0]!.slice(`${DEVICE_COOKIE}=`.length);
     const access =
       accessHeader?.split(";")[0]!.slice(`${ACCESS_COOKIE}=`.length) ??
       (res.body.data.access_token as string);
     const user = await sharedIdentityRepo.getByPhone(phone);
     expect(user).not.toBeNull();
-    return { access, refresh, userId: user!.id };
+    return { access, refresh, device, userId: user!.id };
+  }
+
+  function refreshCookieHeader(refresh: string, device: string): string {
+    return `${REFRESH_COOKIE}=${refresh}; ${DEVICE_COOKIE}=${device}`;
   }
 
   it("missing epoch key means zero", async () => {
@@ -270,10 +278,10 @@ describe("AUTH-G2 session epoch, logout, refresh race", () => {
   });
 
   it("refresh preserves the validated epoch on mint", async () => {
-    const { refresh, userId } = await login();
+    const { refresh, device, userId } = await login();
     const res = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `${REFRESH_COOKIE}=${refresh}`)
+      .set("Cookie", refreshCookieHeader(refresh, device))
       .send({ device_fingerprint: FP })
       .expect(200);
     expect(jwtService.verifyAccessToken(res.body.data.access_token).session_epoch).toBe(0);
@@ -281,14 +289,14 @@ describe("AUTH-G2 session epoch, logout, refresh race", () => {
   });
 
   it("refresh after logout is rejected as revoked", async () => {
-    const { refresh } = await login();
+    const { refresh, device } = await login();
     await request(app)
       .post("/api/v1/auth/logout")
       .set("Cookie", `${REFRESH_COOKIE}=${refresh}`)
       .expect(200);
     const res = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `${REFRESH_COOKIE}=${refresh}`)
+      .set("Cookie", refreshCookieHeader(refresh, device))
       .send({ device_fingerprint: FP })
       .expect(401);
     expect(["SESSION_REVOKED", "REFRESH_TOKEN_REUSED"]).toContain(res.body.error.code);
@@ -320,13 +328,13 @@ describe("AUTH-G2 session epoch, logout, refresh race", () => {
   });
 
   it("inflight refresh cannot inherit a post-logout epoch", async () => {
-    const { refresh, userId } = await login();
+    const { refresh, device, userId } = await login();
     _authG2TestHooks.afterRefreshEpochValidated = async (id) => {
       await incrementSessionEpoch(id);
     };
     const res = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `${REFRESH_COOKIE}=${refresh}`)
+      .set("Cookie", refreshCookieHeader(refresh, device))
       .send({ device_fingerprint: FP })
       .expect(200);
     expect(await getSessionEpoch(userId)).toBe(1);
@@ -340,7 +348,7 @@ describe("AUTH-G2 session epoch, logout, refresh race", () => {
   });
 
   it("concurrent logout makes the inflight refresh pair stale", async () => {
-    const { access, refresh, userId } = await login();
+    const { access, refresh, device, userId } = await login();
     let release!: () => void;
     const gate = new Promise<void>((r) => {
       release = r;
@@ -356,7 +364,7 @@ describe("AUTH-G2 session epoch, logout, refresh race", () => {
 
     const refreshP = request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `${REFRESH_COOKIE}=${refresh}`)
+      .set("Cookie", refreshCookieHeader(refresh, device))
       .send({ device_fingerprint: FP });
     const refreshResult = Promise.resolve(refreshP);
     await started;
@@ -390,28 +398,28 @@ describe("AUTH-G2 session epoch, logout, refresh race", () => {
 
     const refreshDenied = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `${REFRESH_COOKIE}=${mintedRefresh}`)
+      .set("Cookie", refreshCookieHeader(mintedRefresh, device))
       .send({ device_fingerprint: FP })
       .expect(401);
     expect(refreshDenied.body.error.code).toBe("SESSION_REVOKED");
   });
 
   it("refresh reuse detection is preserved", async () => {
-    const { refresh } = await login();
+    const { refresh, device } = await login();
     await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `${REFRESH_COOKIE}=${refresh}`)
+      .set("Cookie", refreshCookieHeader(refresh, device))
       .send({ device_fingerprint: FP })
       .expect(200);
     const reused = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `${REFRESH_COOKIE}=${refresh}`)
+      .set("Cookie", refreshCookieHeader(refresh, device))
       .send({ device_fingerprint: FP })
       .expect(401);
     expect(reused.body.error.code).toBe("REFRESH_TOKEN_REUSED");
   });
 
-  it("device binding is preserved on refresh", async () => {
+  it("refresh without the device binding cookie is DEVICE_MISMATCH", async () => {
     const { refresh } = await login();
     const res = await request(app)
       .post("/api/v1/auth/refresh")
@@ -422,11 +430,11 @@ describe("AUTH-G2 session epoch, logout, refresh race", () => {
   });
 
   it("refresh re-reads the current DB role", async () => {
-    const { refresh, userId } = await login();
+    const { refresh, device, userId } = await login();
     await sharedIdentityRepo.updateRole(userId, "VENDOR_OWNER");
     const res = await request(app)
       .post("/api/v1/auth/refresh")
-      .set("Cookie", `${REFRESH_COOKIE}=${refresh}`)
+      .set("Cookie", refreshCookieHeader(refresh, device))
       .send({ device_fingerprint: FP })
       .expect(200);
     expect(jwtService.verifyAccessToken(res.body.data.access_token).role).toBe(

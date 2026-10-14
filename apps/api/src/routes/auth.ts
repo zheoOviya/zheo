@@ -3,6 +3,13 @@ import type { Response } from "express";
 import { z } from "zod";
 import { config } from "../config";
 import { generateEventMetadata } from "../lib/correlation";
+import {
+  DEVICE_COOKIE_NAME,
+  deviceBindingCookieOptions,
+  issueDeviceBindingCookie,
+  newDeviceId,
+  verifyDeviceBindingCookie,
+} from "../lib/deviceBinding";
 import { logger } from "../lib/logger";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate, resolveAccessToken } from "../middleware/auth";
@@ -182,6 +189,17 @@ function setAuthCookies(
   });
 }
 
+// AUTH-G6: issue the signed device-binding cookie for the (user, device) pair
+// that the freshly minted tokens are bound to. The HMAC secret stays
+// server-side; the cookie value is not derivable from the JWT.
+function setDeviceCookie(res: Response, userId: string, deviceId: string): void {
+  res.cookie(
+    DEVICE_COOKIE_NAME,
+    issueDeviceBindingCookie(userId, deviceId),
+    deviceBindingCookieOptions(),
+  );
+}
+
 authRouter.post(
   "/send-otp",
   otpLimiter,
@@ -212,7 +230,7 @@ authRouter.post(
     await verifyOtp(body.data.phone, body.data.otp);
 
     const user = await resolveUser(body.data.phone);
-    const claims = {
+    const baseClaims = {
       sub: user.id,
       phone: user.phone,
       role: user.role,
@@ -222,7 +240,9 @@ authRouter.post(
     // 2FA: TOTP-enabled accounts pause after the OTP factor and get a
     // short-lived ticket instead of tokens; /totp/verify completes login.
     if (user.totp_enabled) {
-      const totpTicket = jwtService.signTotpTicket(claims);
+      const deviceId = newDeviceId();
+      const totpTicket = jwtService.signTotpTicket({ ...baseClaims, device_id: deviceId });
+      setDeviceCookie(res, user.id, deviceId);
       logger.info({
         message: "otp_verified_totp_required",
         user_id: user.id,
@@ -240,9 +260,11 @@ authRouter.post(
       return;
     }
 
-    const pair = await jwtService.issuePair(claims);
+    const deviceId = newDeviceId();
+    const pair = await jwtService.issuePair({ ...baseClaims, device_id: deviceId });
 
     setAuthCookies(res, pair);
+    setDeviceCookie(res, user.id, deviceId);
 
     logger.info({
       message: "otp_verified",
@@ -267,14 +289,20 @@ authRouter.post(
 // issued. A suspension, deletion, or role change that happened afterwards
 // must take effect at the next rotation instead of being silently inherited
 // from the token's stale claims. This orchestration (all public JwtService
-// methods) replaces rotateRefreshToken's claim-copying with an authoritative
+// methods) replaces the former claim-copying rotation with an authoritative
 // identity read, and runs the deny checks BEFORE the old jti is blacklisted
 // so a rejected rotation is not turned into an irreversible logout.
 // ============================================
 async function rotateRefreshWithCurrentRole(
   oldRefresh: string,
-  deviceFingerprint: string,
-): Promise<{ accessToken: string; refreshToken: string; refreshJti: string }> {
+  deviceCookie: string | undefined,
+): Promise<{
+  accessToken: string;
+  refreshToken: string;
+  refreshJti: string;
+  deviceId: string;
+  userId: string;
+}> {
   const claims = jwtService.verifyRefreshToken(oldRefresh);
 
   if (await jwtService.isRefreshTokenBlacklisted(claims.jti!)) {
@@ -285,10 +313,16 @@ async function rotateRefreshWithCurrentRole(
     );
   }
 
-  if (claims.device_fingerprint !== deviceFingerprint) {
+  // AUTH-G6: proof of possession is the signed, httpOnly device cookie - not
+  // the client-supplied fingerprint, which any holder of the refresh token
+  // could read out of the JWT. The cookie must carry a valid HMAC signature,
+  // be unexpired, and bind to BOTH this user and this token's device_id.
+  const deviceId = claims.device_id ?? "";
+  const binding = verifyDeviceBindingCookie(deviceCookie, claims.sub, deviceId);
+  if (!binding.ok) {
     throw new AppError(
       "DEVICE_MISMATCH",
-      "New device detected. Step-up authentication (OTP) required.",
+      "Device binding missing or invalid. Step-up authentication (OTP) required.",
       401,
     );
   }
@@ -309,13 +343,15 @@ async function rotateRefreshWithCurrentRole(
 
   await jwtService.blacklistRefreshToken(claims.jti!);
 
-  return await jwtService.issuePair({
+  const pair = await jwtService.issuePair({
     sub: user.id,
     phone: user.phone,
     role: user.role,
-    device_fingerprint: deviceFingerprint,
+    device_fingerprint: claims.device_fingerprint,
+    device_id: deviceId,
     session_epoch: tokenEpoch,
   });
+  return { ...pair, deviceId, userId: user.id };
 }
 
 export const _authG2TestHooks = {
@@ -335,12 +371,13 @@ authRouter.post(
       throw new AppError("REFRESH_TOKEN_MISSING", "No refresh token cookie", 401);
     }
 
-    const pair = await rotateRefreshWithCurrentRole(
-      oldRefresh,
-      body.data.device_fingerprint,
-    );
+    const deviceCookie = req.cookies?.[DEVICE_COOKIE_NAME] as string | undefined;
+    const pair = await rotateRefreshWithCurrentRole(oldRefresh, deviceCookie);
 
     setAuthCookies(res, pair);
+    // Re-issue the binding cookie for the same device so a sliding session
+    // keeps its proof of possession for the full refresh-token lifetime.
+    setDeviceCookie(res, pair.userId, pair.deviceId);
 
     ok(res, {
       access_token: pair.accessToken,
@@ -392,6 +429,7 @@ authRouter.post(
 
     res.clearCookie(config.jwt.refreshCookieName, { path: "/" });
     res.clearCookie(config.jwt.accessCookieName, { path: "/" });
+    res.clearCookie(DEVICE_COOKIE_NAME, { path: "/" });
     ok(res, { logged_out: true });
   }),
 );
@@ -464,7 +502,7 @@ authRouter.post(
     const user = await resolveOperatorByEmail(body.data.email);
     await verifyOtp(user.phone, body.data.otp);
 
-    const claims = {
+    const baseClaims = {
       sub: user.id,
       phone: user.phone,
       role: user.role,
@@ -473,7 +511,9 @@ authRouter.post(
 
     // 2FA: TOTP-enabled operators get a ticket + phone to finish login.
     if (user.totp_enabled) {
-      const totpTicket = jwtService.signTotpTicket(claims);
+      const deviceId = newDeviceId();
+      const totpTicket = jwtService.signTotpTicket({ ...baseClaims, device_id: deviceId });
+      setDeviceCookie(res, user.id, deviceId);
       await sharedAuditRepo.log(user.id, "totp_step_required", {
         event: "AdminOtpVerified",
         correlation_id: res.locals.correlationId,
@@ -486,9 +526,11 @@ authRouter.post(
       return;
     }
 
-    const pair = await jwtService.issuePair(claims);
+    const deviceId = newDeviceId();
+    const pair = await jwtService.issuePair({ ...baseClaims, device_id: deviceId });
 
     setAuthCookies(res, pair);
+    setDeviceCookie(res, user.id, deviceId);
 
     logger.info({
       message: "admin_otp_verified",
@@ -593,16 +635,17 @@ authRouter.post(
     const user = await resolveVendorUser(body.data.phone);
     await verifyOtp(user.phone, body.data.otp);
 
-    const claims = {
+    const deviceId = newDeviceId();
+    const pair = await jwtService.issuePair({
       sub: user.id,
       phone: user.phone,
       role: user.role,
       device_fingerprint: body.data.device_fingerprint,
-    };
-
-    const pair = await jwtService.issuePair(claims);
+      device_id: deviceId,
+    });
 
     setAuthCookies(res, pair);
+    setDeviceCookie(res, user.id, deviceId);
 
     logger.info({
       message: "vendor_otp_verified",
@@ -703,16 +746,17 @@ authRouter.post(
     const user = await resolveConsumerUser(body.data.phone);
     await verifyOtp(user.phone, body.data.otp);
 
-    const claims = {
+    const deviceId = newDeviceId();
+    const pair = await jwtService.issuePair({
       sub: user.id,
       phone: user.phone,
       role: user.role,
       device_fingerprint: body.data.device_fingerprint,
-    };
-
-    const pair = await jwtService.issuePair(claims);
+      device_id: deviceId,
+    });
 
     setAuthCookies(res, pair);
+    setDeviceCookie(res, user.id, deviceId);
 
     logger.info({
       message: "consumer_otp_verified",
@@ -743,7 +787,17 @@ authRouter.post(
     }
 
     const ticket = jwtService.verifyTotpTicket(body.data.totp_ticket);
-    if (ticket.device_fingerprint !== body.data.device_fingerprint) {
+    // AUTH-G6: the step-up ticket is bound to the server-generated device_id
+    // minted at the OTP step. Require the signed, httpOnly device cookie to
+    // prove possession of that same device; the client-supplied
+    // device_fingerprint is accepted for compatibility but never decides.
+    const deviceCookie = req.cookies?.[DEVICE_COOKIE_NAME] as string | undefined;
+    const binding = verifyDeviceBindingCookie(
+      deviceCookie,
+      ticket.sub,
+      ticket.device_id ?? "",
+    );
+    if (!binding.ok) {
       throw new AppError("DEVICE_MISMATCH", "2FA ticket device mismatch", 401);
     }
 
@@ -761,14 +815,17 @@ authRouter.post(
       throw new AppError("INVALID_TOTP", "Invalid authenticator code", 401);
     }
 
+    const deviceId = binding.deviceId ?? newDeviceId();
     const pair = await jwtService.issuePair({
       sub: user.id,
       phone: user.phone,
       role: user.role,
-      device_fingerprint: body.data.device_fingerprint,
+      device_fingerprint: ticket.device_fingerprint,
+      device_id: deviceId,
     });
 
     setAuthCookies(res, pair);
+    setDeviceCookie(res, user.id, deviceId);
 
     logger.info({
       message: "totp_verified_login",
