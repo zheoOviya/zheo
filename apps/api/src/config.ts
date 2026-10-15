@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { parseTrustedProxies } from "./lib/clientIp";
 
 // ============================================
 // Config Module - simulates a Central Configuration Registry
@@ -185,6 +186,16 @@ export const config = {
       "CORS_ORIGINS",
       "http://localhost:3000,http://localhost:3002,http://localhost:3003",
     ),
+  },
+
+  // AUTH-G7 trusted client-IP. TRUSTED_PROXIES is an explicit proxy
+  // IP/CIDR allowlist, or "none" when the API is directly reachable.
+  // There is deliberately NO implicit one-hop trust: production must
+  // declare this explicitly (see env.ts, which refuses to boot when it
+  // is missing/blank/malformed or a wildcard). Non-production treats
+  // missing/blank as "none".
+  proxy: {
+    trustedProxies: parseTrustedProxies(process.env.TRUSTED_PROXIES),
   },
 } as const;
 

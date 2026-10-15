@@ -3,6 +3,7 @@ import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { adminReadOnly, adminWrite, superAdminOnly } from "../middleware/requireRoles";
 import { rateLimiter } from "../middleware/rateLimiter";
+import { clientIp } from "../lib/clientIp";
 import {
   sharedAuditRepo,
   sharedOrderRepo,
@@ -51,7 +52,7 @@ const adminWriteLimiter = rateLimiter({
   prefix: "admin-write",
   max: 30,
   windowMs: 60_000,
-  identifier: (req) => req.ip ?? "unknown",
+  identifier: (req) => clientIp(req),
   failClosed: true,
 });
 

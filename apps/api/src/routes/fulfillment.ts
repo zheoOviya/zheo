@@ -4,6 +4,7 @@ import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
 import { assertRestaurantAccess } from "../middleware/vendorAccess";
 import { rateLimiter } from "../middleware/rateLimiter";
+import { clientIp } from "../lib/clientIp";
 import {
   sharedAuditRepo,
   sharedOrderRepo,
@@ -47,7 +48,8 @@ const pickupLimiter = rateLimiter({
   windowMs: 60_000,
   identifier: (req) => {
     const id = orderId(req.params.id);
-    return id ? `${id}|${req.ip ?? "unknown"}` : (req.ip ?? "unknown");
+    const ip = clientIp(req);
+    return id ? `${id}|${ip}` : ip;
   },
   failClosed: true,
 });

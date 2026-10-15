@@ -20,6 +20,7 @@ import {
   parseEpochClaim,
 } from "../lib/sessionEpoch";
 import { rateLimiter } from "../middleware/rateLimiter";
+import { clientIp } from "../lib/clientIp";
 import { requireRole } from "../middleware/requireRoles";
 import { sharedAuditRepo, sharedIdentityRepo } from "../repositories/shared";
 import type { IdentityUser } from "../repositories/identityRepository";
@@ -59,7 +60,7 @@ const otpLimiter = rateLimiter({
   prefix: "otp",
   max: config.rateLimit.otpMaxPerMinute,
   windowMs: 60_000,
-  identifier: (req) => req.body?.phone ?? req.ip ?? "unknown",
+  identifier: (req) => String(req.body?.phone ?? clientIp(req)),
   failClosed: true,
 });
 
@@ -67,7 +68,7 @@ const totpLimiter = rateLimiter({
   prefix: "totp",
   max: 5,
   windowMs: 60_000,
-  identifier: (req) => String(req.body?.phone ?? req.ip ?? "unknown"),
+  identifier: (req) => String(req.body?.phone ?? clientIp(req)),
   failClosed: true,
 });
 
@@ -110,7 +111,7 @@ const adminOtpLimiter = rateLimiter({
   prefix: "otp-admin",
   max: config.rateLimit.otpMaxPerMinute,
   windowMs: 60_000,
-  identifier: (req) => String(req.body?.email ?? req.ip ?? "unknown").toLowerCase(),
+  identifier: (req) => String(req.body?.email ?? clientIp(req)).toLowerCase(),
   failClosed: true,
 });
 
@@ -118,7 +119,7 @@ const vendorOtpLimiter = rateLimiter({
   prefix: "otp-vendor",
   max: config.rateLimit.otpMaxPerMinute,
   windowMs: 60_000,
-  identifier: (req) => String(req.body?.phone ?? req.ip ?? "unknown"),
+  identifier: (req) => String(req.body?.phone ?? clientIp(req)),
   failClosed: true,
 });
 
@@ -130,7 +131,7 @@ const vendorVerifyOtpLimiter = rateLimiter({
   prefix: "otp-vendor-verify",
   max: config.rateLimit.otpMaxPerMinute,
   windowMs: 60_000,
-  identifier: (req) => String(req.body?.phone ?? req.ip ?? "unknown"),
+  identifier: (req) => String(req.body?.phone ?? clientIp(req)),
   failClosed: true,
 });
 
@@ -138,7 +139,7 @@ const consumerOtpLimiter = rateLimiter({
   prefix: "otp-consumer",
   max: config.rateLimit.otpMaxPerMinute,
   windowMs: 60_000,
-  identifier: (req) => String(req.body?.phone ?? req.ip ?? "unknown"),
+  identifier: (req) => String(req.body?.phone ?? clientIp(req)),
   failClosed: true,
 });
 

@@ -45,6 +45,9 @@ services:
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET in .env}
+      # AUTH-G7: the compose API is published directly (no proxy), so trust no
+      # forwarded header. Override with an IP/CIDR allowlist when behind a proxy.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-none}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:3002,http://localhost:3003}
       # The API refuses to boot in NODE_ENV=production without real payment
       # credentials (see apps/api/src/services/{razorpay,posPetpooja}.ts).

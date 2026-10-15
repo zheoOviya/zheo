@@ -5,6 +5,7 @@ import { authenticate } from "../middleware/auth";
 import { getLoyaltyService } from "../services/loyalty";
 import { getRetentionService } from "../services/retention";
 import { etaService } from "../services/etaService";
+import { clientIp } from "../lib/clientIp";
 
 // ============================================
 // Loyalty context routes - /api/v1/loyalty
@@ -29,19 +30,12 @@ const EtaQuerySchema = z.object({
 
 const loyaltyService = getLoyaltyService();
 
-/** Client IP for fraud screening: x-forwarded-for (trust proxy) then req.ip. */
+/** Canonical trusted client IP (AUTH-G7): resolved by Express trust proxy, never raw headers. */
 function clientIpOf(req: {
-  headers: Record<string, unknown>;
   ip?: string;
   socket?: { remoteAddress?: string };
 }): string {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded.length > 0) {
-    return forwarded.split(",")[0]!.trim();
-  }
-  const real = req.headers["x-real-ip"];
-  if (typeof real === "string" && real.length > 0) return real;
-  return (req.ip ?? req.socket?.remoteAddress ?? "unknown").replace(/^::ffff:/, "");
+  return clientIp(req);
 }
 
 function deviceFingerprintOf(req: {

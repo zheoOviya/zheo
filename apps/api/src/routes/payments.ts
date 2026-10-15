@@ -3,6 +3,7 @@ import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
 import { rateLimiter } from "../middleware/rateLimiter";
+import { clientIp } from "../lib/clientIp";
 import { sharedGiftRepo, sharedOrderRepo, sharedPaymentRepo } from "../repositories/shared";
 import { PaymentService, type PaymentMethod } from "../services/payments";
 
@@ -30,7 +31,7 @@ const paymentsLimiter = rateLimiter({
   prefix: "payments",
   max: 20,
   windowMs: 60_000,
-  identifier: (req) => req.ip ?? "unknown",
+  identifier: (req) => clientIp(req),
   failClosed: true,
 });
 

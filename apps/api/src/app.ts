@@ -4,6 +4,7 @@ import cors from "cors";
 import express, { type Express } from "express";
 import helmet from "helmet";
 import { config, exactCorsOrigins } from "./config";
+import { clientIp, trustProxyValue } from "./lib/clientIp";
 import { correlationIdMiddleware } from "./lib/correlation";
 import { logger } from "./lib/logger";
 import { csrfOriginGate } from "./middleware/csrf";
@@ -57,13 +58,13 @@ const apiLimiter = rateLimiter({
   prefix: "api",
   max: config.rateLimit.apiMaxPerMinute,
   windowMs: 60_000,
-  identifier: (req) => req.ip ?? "unknown",
+  identifier: (req) => clientIp(req),
 });
 
 export function createApp(): Express {
   const app = express();
 
-  app.set("trust proxy", 1);
+  app.set("trust proxy", trustProxyValue(config.proxy.trustedProxies));
   app.use(helmet());
   app.use(
     cors({

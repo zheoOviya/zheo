@@ -3,6 +3,7 @@ import { z } from "zod";
 import { asyncHandler, AppError, ok } from "../middleware/envelope";
 import { authenticate } from "../middleware/auth";
 import { rateLimiter } from "../middleware/rateLimiter";
+import { clientIp } from "../lib/clientIp";
 import { getCatalogRepository } from "./catalog";
 import { sharedGiftRepo, sharedOrderRepo, sharedPaymentRepo } from "../repositories/shared";
 import { GiftService } from "../services/gift";
@@ -40,7 +41,7 @@ const giftsLimiter = rateLimiter({
   prefix: "gifts",
   max: 60,
   windowMs: 60_000,
-  identifier: (req) => req.ip ?? "unknown",
+  identifier: (req) => clientIp(req),
   failClosed: true,
 });
 

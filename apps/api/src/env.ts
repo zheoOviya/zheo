@@ -32,7 +32,27 @@ const ProductionSecretsSchema = z.object({
 });
 
 export function assertSecureConfig(): void {
+  // AUTH-G7: client-IP trust must be explicit. A malformed allowlist is a
+  // configuration error in every environment (never silently dropped); in
+  // production the variable must also be declared, though "none" is a valid,
+  // fail-safe choice when the API is directly reachable.
+  const proxies = config.proxy.trustedProxies;
+  if (proxies.error) {
+    throw new Error(
+      `Refusing to start: invalid TRUSTED_PROXIES (${proxies.error}). ` +
+        "Provide proxy IPs/CIDRs, or the literal 'none' when directly reachable.",
+    );
+  }
+
   if (config.env !== "production") return;
+
+  if (!proxies.declared) {
+    throw new Error(
+      "Refusing to start in production: TRUSTED_PROXIES must be explicitly " +
+        "configured. Set it to the trusted proxy IP/CIDR allowlist, or to " +
+        "'none' when the API is not behind a trusted proxy.",
+    );
+  }
 
   const secrets = ProductionSecretsSchema.safeParse({
     JWT_SECRET: process.env.JWT_SECRET,

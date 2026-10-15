@@ -164,18 +164,21 @@ describe("Loyalty routes", () => {
     it("FRAUD: claiming twice from the same device returns 403 FRAUD_DETECTED", async () => {
       const code = await sharedLoyaltyRepo.getReferralCode(REFERRER_ID);
 
-      await request(app)
-        .post("/api/v1/loyalty/apply-referral")
-        .set(auth(CLAIMANT_A))
-        .set("x-forwarded-for", "203.0.113.50")
-        .set("x-device-fingerprint", "fp_shared")
-        .send({ referral_code: code })
-        .expect(201);
+      // Seed a prior claim from a different network IP but the same device.
+      // The client IP is now the (untrusted) socket peer, so the IP gate stays
+      // clean and the device gate is what fires.
+      await sharedLoyaltyRepo.recordClaim({
+        claimant_user_id: "seed-device-owner",
+        referrer_user_id: REFERRER_ID,
+        referral_code: code,
+        bonus_amount: 0,
+        ip_address: "203.0.113.99",
+        device_fingerprint: "fp_shared",
+      });
 
       const second = await request(app)
         .post("/api/v1/loyalty/apply-referral")
         .set(auth(CLAIMANT_B))
-        .set("x-forwarded-for", "203.0.113.51")
         .set("x-device-fingerprint", "fp_shared")
         .send({ referral_code: code })
         .expect(403);
@@ -185,6 +188,26 @@ describe("Loyalty routes", () => {
       const audits = await sharedAuditRepo.all();
       const blocked = audits.find((a) => a.action === "referral_fraud_blocked");
       expect(blocked?.metadata).toMatchObject({ dimension: "device" });
+    });
+
+    it("AUTH-G7: ignores client-supplied X-Forwarded-For / X-Real-IP", async () => {
+      const code = await sharedLoyaltyRepo.getReferralCode(REFERRER_ID);
+
+      await request(app)
+        .post("/api/v1/loyalty/apply-referral")
+        .set(auth(CLAIMANT_A))
+        .set("x-forwarded-for", "1.2.3.4")
+        .set("x-real-ip", "5.6.7.8")
+        .set("x-device-fingerprint", "fp_spoof")
+        .send({ referral_code: code })
+        .expect(201);
+
+      const audits = await sharedAuditRepo.all();
+      const applied = audits.find((a) => a.action === "referral_applied");
+      const ip = (applied?.metadata as { ip_address?: string } | undefined)?.ip_address;
+      expect(ip).not.toBe("1.2.3.4");
+      expect(ip).not.toBe("5.6.7.8");
+      expect(ip).toMatch(/^(127\.0\.0\.1|::1)$/);
     });
   });
 
