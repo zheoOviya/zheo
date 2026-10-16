@@ -39,8 +39,8 @@ import {
 } from "../services/settlement";
 import { InsightsService, parseInsightsDays } from "../services/insights";
 import {
-  MenuSyncService,
-  MockPosMenuClient,
+  createMenuSyncService,
+  type MenuSyncService,
 } from "../services/menuSync";
 import { PetpoojaPosService } from "../services/posPetpooja";
 import {
@@ -151,10 +151,26 @@ const PromotionCreateSchema = z
 export const vendorOpsRouter: Router = Router();
 
 // Shared POS integration services (same repos as the webhook route).
-const menuSyncService = new MenuSyncService(
-  getCatalogRepository(),
-  new MockPosMenuClient(),
-);
+// POS-MOCK-PROD-ISOLATION: production wires NO service (see menuSync.ts), so
+// these routes fail closed before any catalog/outbox/order write.
+const menuSyncService = createMenuSyncService(getCatalogRepository());
+
+/**
+ * Fail-closed gate: production has no POS menu provider, so there is no
+ * service to call. Thrown at the route boundary so the mock catalog can never
+ * reach persisted data. POS sync is an optional integration, so this is a
+ * request-level 503 - not a boot failure.
+ */
+function requireMenuSyncService(): MenuSyncService {
+  if (!menuSyncService) {
+    throw new AppError(
+      "POS_PROVIDER_UNCONFIGURED",
+      "POS menu integration is not configured",
+      503,
+    );
+  }
+  return menuSyncService;
+}
 const insightsService = new InsightsService(sharedOrderRepo);
 const petpoojaPosService = new PetpoojaPosService(
   sharedOrderRepo,
@@ -458,7 +474,7 @@ vendorOpsRouter.post(
   asyncHandler(async (req, res) => {
     const restaurantId = restaurantIdOf(req);
     await assertRestaurantAccess(res, restaurantId);
-    const result = await menuSyncService.syncMenu(restaurantId);
+    const result = await requireMenuSyncService().syncMenu(restaurantId);
 
     await sharedAuditRepo.log(actorId(res), "pos_menu_synced", {
       restaurant_id: restaurantId,
@@ -476,7 +492,9 @@ vendorOpsRouter.post(
     await assertRestaurantAccess(res, restaurantId);
 
     // One-click demo: sync first so the POS items exist, then push an order.
-    const synced = await menuSyncService.syncMenu(restaurantId);
+    // POS-MOCK-PROD-ISOLATION: the fail-closed gate runs BEFORE any sync or
+    // order creation, so production never mutates the catalog or orders here.
+    const synced = await requireMenuSyncService().syncMenu(restaurantId);
 
     const payload = {
       pos_order_id: `pos_${randomUUID().slice(0, 12)}`,

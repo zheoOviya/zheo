@@ -146,6 +146,22 @@ describe("Vendor Ops routes", () => {
     storageOverride.current = null;
   });
 
+  it("TEST_SYNC_MENU_MOCK_STILL_WORKS: POST /pos/sync-menu syncs the canned POS menu", async () => {
+    const res = await request(app)
+      .post(`/api/vendor/pos/sync-menu?restaurant_id=${REST_ID}`)
+      .set(vendorAuthHeaders())
+      .expect(200);
+
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.synced).toBe(4);
+
+    const posIds = (await getCatalogRepository().getMenuAll(REST_ID))
+      .map((menuItem) => menuItem.pos_item_id ?? "")
+      .filter((posItemId) => posItemId.startsWith("pp-"));
+    expect(posIds).toHaveLength(4);
+    expect(posIds).toContain("pp-3001");
+  });
+
   it("GET /settlements/summary only counts PICKED_UP orders from the previous day", async () => {
     const yesterday = utcDayOffset(1);
     const twoDaysAgo = utcDayOffset(2);

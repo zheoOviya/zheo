@@ -1,3 +1,4 @@
+import { config } from "../config";
 import { createEventEnvelope } from "../lib/eventBus";
 import { logger } from "../lib/logger";
 import { AppError } from "../middleware/envelope";
@@ -124,4 +125,32 @@ export class MenuSyncService {
 
     return { synced: items.length, items };
   }
+}
+
+// ============================================
+// POS-MOCK-PROD-ISOLATION
+//
+// Production has no wired POS menu provider: the real Petpooja menu REST
+// contract is not documented anywhere in this repo (only the inbound order
+// webhook is), so production must NOT fabricate catalog data from the canned
+// mock catalog. `createMenuSyncService` therefore returns `null` in production
+// and the route layer fails closed (503 POS_PROVIDER_UNCONFIGURED) BEFORE any
+// catalog mutation, outbox enqueue or order creation. The mock client is never
+// constructed in production.
+//
+// Dev/test keep the mock so the vendor POS demo flow still works. Swapping in
+// a real client is a later, separately-gated change - no outbound contract is
+// invented here.
+// ============================================
+
+/**
+ * Composition root for the vendor POS menu-sync surface.
+ * - production       => null (fail closed; no mock client construction)
+ * - test/development => mock-backed MenuSyncService (dev/test only)
+ */
+export function createMenuSyncService(
+  catalogRepo: CatalogRepository,
+): MenuSyncService | null {
+  if (config.env === "production") return null;
+  return new MenuSyncService(catalogRepo, new MockPosMenuClient());
 }
