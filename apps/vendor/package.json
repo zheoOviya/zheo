@@ -16,7 +16,7 @@
     "@snakzap/types": "workspace:*",
     "@snakzap/ui": "workspace:*",
     "framer-motion": "^13.0.0",
-    "next": "^15.1.0",
+    "next": "^15.5.24",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^3.23.0",
