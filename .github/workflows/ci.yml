@@ -36,6 +36,42 @@ jobs:
       - name: Production build (gate)
         run: pnpm build
 
+      - name: Build API container image (SEC-P0-2)
+        run: docker build --tag snakzap-api:sec-p0-2 .
+
+      - name: Verify API container runs as non-root (SEC-P0-2)
+        run: |
+          set -euo pipefail
+          configured_user="$(docker inspect --format '{{.Config.User}}' snakzap-api:sec-p0-2)"
+          echo "Configured container user: '$configured_user'"
+          if [ "$configured_user" != "node" ]; then
+            echo "Expected Config.User=node, got '$configured_user'"
+            exit 1
+          fi
+          runtime_uid="$(docker run --rm --entrypoint id snakzap-api:sec-p0-2 -u)"
+          echo "Runtime uid: '$runtime_uid'"
+          if [ "$runtime_uid" != "1000" ]; then
+            echo "Expected runtime uid 1000, got '$runtime_uid'"
+            exit 1
+          fi
+          docker run --rm --entrypoint id snakzap-api:sec-p0-2
+          docker run --rm --entrypoint node snakzap-api:sec-p0-2 \
+            -e 'process.exit(process.getuid() === 0 ? 1 : 0)'
+          docker run --rm --entrypoint sh snakzap-api:sec-p0-2 \
+            -c 'test -r /app/apps/api/dist/index.js'
+          set +e
+          docker run --rm --entrypoint sh snakzap-api:sec-p0-2 -c 'test -w /app'
+          write_check=$?
+          set -e
+          if [ "$write_check" -eq 0 ]; then
+            echo "Expected /app to be non-writable for the runtime user"
+            exit 1
+          fi
+          if [ "$write_check" -ne 1 ]; then
+            echo "Unexpected exit code from /app write check: $write_check"
+            exit 1
+          fi
+
       - name: Test (API + packages) with coverage gate
         run: pnpm exec vitest run --coverage
 

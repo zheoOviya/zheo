@@ -27,6 +27,7 @@ RUN pnpm install --frozen-lockfile
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY tsconfig.json ./
 COPY apps/api ./apps/api
 COPY packages ./packages
 RUN pnpm --filter @snakzap/api build
@@ -40,6 +41,7 @@ COPY --from=build /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml
 COPY --from=build /app/apps/api ./apps/api
 COPY --from=build /app/packages ./packages
 EXPOSE 3001
+USER node
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD wget -q -O - http://127.0.0.1:3001/health || exit 1
 CMD ["node", "apps/api/dist/index.js"]
