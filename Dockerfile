@@ -27,6 +27,7 @@ RUN pnpm install --frozen-lockfile
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY tsconfig.json ./
 COPY apps/api ./apps/api
 COPY packages ./packages
 RUN pnpm --filter @snakzap/api build
